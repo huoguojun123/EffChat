@@ -1,0 +1,86 @@
+# Environment files
+.env
+.env.docker
+.env.docker.local
+.env.local
+.env.*.local
+*.env
+
+# Secrets
+*secret*
+*password*
+*key*
+*.pem
+*.key
+*.crt
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+ui-baseline/node_modules/
+vendor/
+
+# Build artifacts
+dist/
+frontend/dist/
+ui-baseline/dist/
+build/
+bin/
+backend/bin/
+*.exe
+*.so
+*.dylib
+*.dll
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+.serena/
+.claude/
+.superpowers/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temp files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Uploaded files (development)
+uploads/
+backend/uploads/
+storage/
+backend/storage/
+data/
+backend/data/
+frontend/data/
+
+# Backend
+backend/.env
+backend/tmp/
+
+# Test coverage
+coverage/
+*.cover
+*.coverprofile
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db

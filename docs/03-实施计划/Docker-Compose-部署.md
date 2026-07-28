@@ -1,0 +1,234 @@
+# Docker Compose 部署
+
+本文档描述全量 Docker 部署路径：PostgreSQL 17 开新库，`migrate` 按 `backend/migrations/production/` 记录并执行生产迁移，后端和前端分别构建为镜像。Compose 会把 `web`、`backend`、`postgres` 放在同一个 Docker 网络里；浏览器访问前端容器，前端 Nginx 在内部网络把 `/api/` 转发给 `backend:8080`。默认数据写入发布目录下的 `./data`，方便整目录迁移、备份和服务器交付。
+
+## 组件
+
+- `postgres`：PostgreSQL 17，数据写入 `${DATA_DIR:-./data}/postgres`。
+- `migrate`：一次性迁移容器，等待数据库健康后执行尚未记录到 `schema_migrations` 的生产迁移。
+- `backend`：Go release 服务，受管文件写入 `${DATA_DIR:-./data}/storage`，默认只映射到宿主机 `127.0.0.1:18080`。
+- `web`：Nginx 静态前端，内置 `/api/` 到 `backend:8080` 的容器内转发，默认只映射到宿主机 `127.0.0.1:8088`。
+
+## 首次部署
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+### 需要改哪些环境变量
+
+**必须改，否则不建议对外发：**
+
+- `POSTGRES_PASSWORD`
+- `JWT_SECRET`
+
+**想让聊天功能真正可用：**
+
+- 启动后用首个管理员账号进入“管理后台 → 渠道”
+- 新建至少一个模型渠道，填写 `channel_key`、协议适配、Base URL 和 API key
+- 在“模型”页把模型绑定到该渠道并检测可用性
+
+**可直接沿用默认值：**
+
+- `COMPOSE_PROJECT_NAME`
+- `DOCKER_NETWORK`
+- `DATA_DIR`
+- `WEB_PORT`
+- `BACKEND_PORT`
+- `DOCKER_LOG_MAX_SIZE` / `DOCKER_LOG_MAX_FILE`（默认每个容器最多保留 `20m * 5`）
+- `SERVER_MODE`
+- `DB_HOST` / `DB_PORT` / `DB_NAME`
+- `CORS_EXTRA_ORIGINS`（同源公共反代一般不填；前后端不同域名才填）
+- `RUN_*` / `SSE_HEARTBEAT_INTERVAL`
+
+### 朋友拿源码后的最短启动流程
+
+1. 复制环境模板：
+
+   ```bash
+   cp .env.docker.example .env.docker
+   ```
+
+2. 修改 `.env.docker`：
+
+   - 把 `POSTGRES_PASSWORD` 改成新密码
+   - 把 `JWT_SECRET` 改成强随机串
+   - 模型渠道、API key、搜索 provider、网页提取服务和 MinerU OCR 不要写进 `.env.docker`，启动后在管理员网页配置
+
+3. 构建镜像：
+
+   ```bash
+   scripts/docker-build.sh build
+   ```
+
+4. 启动整套服务：
+
+   ```bash
+   scripts/docker-build.sh up
+   ```
+
+5. 打开浏览器：
+
+   ```text
+   http://127.0.0.1:8088
+   ```
+
+6. 进入管理后台配置渠道和模型。管理员保存配置后只影响新请求，正在进行的流式 run 不会中途切换凭据。
+
+启动后目录结构会变成：
+
+```text
+.
+├── .env.docker
+├── docker-compose.yml
+├── backend/
+├── frontend/
+└── data/
+    ├── postgres/
+    └── storage/
+        ├── attachments/
+        │   ├── originals/
+        │   ├── extracted/
+        │   └── ocr-staging/
+        ├── avatars/
+        ├── fonts/
+        └── skills/
+```
+
+等价的原生 Compose 命令：
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.yml up -d --build
+```
+
+默认 Web 入口：
+
+```text
+http://127.0.0.1:8088
+```
+
+可通过 `.env.docker` 的 `WEB_PORT` 修改宿主机端口。
+默认后端入口：
+
+```text
+http://127.0.0.1:18080
+```
+
+可通过 `.env.docker` 的 `BACKEND_PORT` 修改宿主机端口。
+
+### 只想先把系统跑起来
+
+如果朋友只是想确认“前后端 + 数据库 + 迁移”能否启动，不需要先配模型 key。此时服务可以起来，但聊天请求会因为没有可用模型渠道而失败。
+如果想完整体验对话，至少要在管理员后台配置一个渠道和一个模型。
+
+## 新库初始化
+
+Compose 启动时会先确保存在：
+
+```text
+schema_migrations(version, checksum, applied_at)
+```
+
+然后按文件名顺序执行：
+
+```text
+backend/migrations/production/*.sql
+```
+
+当前生产基线是 `backend/migrations/production/001_schema.sql`，它只引用 schema-only 的 `backend/migrations/init.sql`，用于创建表、索引、触发器和视图。生产迁移不写入模型、系统配置、用户组或测试数据；这些运行时默认值由 Go 代码兜底，管理员显式保存后才会落库。
+
+已有数据库再次 `up` 时，已有指纹的 `schema_migrations` 记录会先校验文件内容指纹，再跳过，不会重放初始化数据，也不会覆盖管理员改过的模型列表。旧库第一次接入指纹时只能一次性信任当前迁移文件并回填，之后任一不匹配都会失败。后端启动会要求当前生产迁移版本已经存在；`/health` 同时返回版本、构建标识和 schema 版本，便于确认实际运行的镜像与数据库一致。
+
+构建标识按来源自动生成：干净 Git 工作树使用短 commit SHA；有在制源码时使用 `SHA-dirty-内容指纹`；不包含 `.git` 的交付源码使用 `source-内容指纹`。内容指纹只覆盖实际源码和构建配置，排除环境变量、数据、上传、依赖及构建产物。可在构建前执行 `scripts/docker-build.sh build-ref` 查看将要注入的值；发布系统显式传入非空 `BUILD_REF` 时以调用方值为准。
+
+Compose 默认由内置 Nginx 覆盖并传递 `X-Real-IP`，Compose 内的 backend 固定信任这个头，认证限流按浏览器真实地址区分。后端端口只绑定回环地址；如在其他部署方式中绕开内置 Nginx，后端运行时保持默认的 `TRUST_PROXY_HEADERS=false`，或在入口处先清洗代理头。
+
+模型渠道、API key、搜索服务、网页提取服务和 MinerU OCR 不在 `.env.docker` 中填写；启动后由管理员在网页后台配置。后台使用步骤见 [管理员配置指南.md](管理员配置指南.md)。
+
+如果需要彻底重建新库：
+
+```bash
+CONFIRM_RESET=DELETE_FCHAT_DATA scripts/docker-build.sh reset-db
+```
+
+该命令会删除 `${DATA_DIR:-./data}/postgres`、`${DATA_DIR:-./data}/storage` 和遗留的 `${DATA_DIR:-./data}/uploads`，包括数据库与全部受管文件。
+
+## 常用命令
+
+```bash
+scripts/docker-build.sh build    # 构建 backend 和 web 镜像
+scripts/docker-build.sh up       # 构建并启动整套服务
+scripts/docker-build.sh config   # 渲染并校验 compose 配置
+scripts/docker-build.sh build-ref # 查看将注入 /health 的构建标识
+scripts/docker-build.sh logs     # 跟随日志
+scripts/docker-build.sh down     # 停止服务，不删除 ./data
+```
+
+## 数据目录
+
+默认使用：
+
+```env
+DATA_DIR=./data
+```
+
+这适合把 `docker-compose.yml`、`.env.docker`、源码和运行数据放在同一个发布目录里。备份时直接备份 `./data`；迁移服务器时复制整个发布目录即可。
+
+如果服务器数据盘另有路径，可以改成绝对路径：
+
+```env
+DATA_DIR=/srv/effchat/data
+```
+
+### 从旧 uploads 布局升级
+
+`scripts/docker-build.sh up` 会在启动新后端前自动执行一次存储迁移：停止旧 Web/Backend，把旧 `data/uploads` 复制到职责分离的 `data/storage`，校验复制结果，并在 PostgreSQL 事务中更新附件、头像、字体和 Skills 路径。迁移只会清理新 `storage` 中没有数据库引用的复制残留，不会改动旧 `uploads`；旧目录默认作为回滚副本保留。
+
+可单独检查和验证：
+
+```bash
+scripts/storage-layout.sh plan
+scripts/storage-layout.sh verify
+```
+
+只有迁移满 7 天、验证通过并显式确认后，才允许删除旧副本：
+
+```bash
+CONFIRM_STORAGE_FINALIZE=DELETE_LEGACY_UPLOADS scripts/storage-layout.sh finalize
+```
+
+迁移失败时工具会自动恢复数据库路径；需要人工回退时可执行 `scripts/storage-layout.sh rollback`，然后启动上一版本源码。不要手工移动单个文件或直接批量替换数据库路径。
+
+## 主机公共反代
+
+项目自身不提供生产反代配置。如果服务器已经有公共 Nginx/Caddy/网关，推荐把域名直接转发到宿主机的 Web 端口：
+
+```text
+https://chat.example.com -> http://127.0.0.1:8088
+```
+
+前端容器会继续在 Docker 网络内把 `/api/` 转给后端，不需要主机公共反代再单独配置后端路由。`BACKEND_PORT` 仍默认绑定在 `127.0.0.1:18080`，用于本机调试和健康检查，不会直接对公网开放。
+
+如果你有意让主机公共反代绕过前端容器、把 `/api/` 直接转到后端端口，则需要保留这些头：
+
+```nginx
+proxy_set_header Host $http_host;
+proxy_set_header X-Forwarded-Host $http_host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+SSE 请求需要关闭代理缓冲：
+
+```nginx
+proxy_buffering off;
+proxy_read_timeout 3600s;
+```
+
+如果前端和 API 是不同公网域名或不同端口，需要在 `.env.docker` 设置精确前端来源：
+
+```text
+CORS_EXTRA_ORIGINS=https://chat.example.com
+```
+
+常规推荐路径是公共反代只指向 `WEB_PORT`；这样浏览器看到的是同源请求，一般不需要额外 CORS 配置。

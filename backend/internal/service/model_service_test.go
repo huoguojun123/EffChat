@@ -1,0 +1,89 @@
+package service
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/effchat/internal/repository"
+)
+
+func TestValidateModelInput(t *testing.T) {
+	valid := func() *model.Model {
+		return &model.Model{
+			ID: "gpt-x", DisplayName: "GPT-X", Provider: "openai",
+			SearchImpl: "tool", ContextWindow: 1000, MaxOutput: 100,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*model.Model)
+		wantErr bool
+	}{
+		{"合法输入", func(m *model.Model) {}, false},
+		{"空 search_impl 合法", func(m *model.Model) { m.SearchImpl = "" }, false},
+		{"search_impl=internal 合法", func(m *model.Model) { m.SearchImpl = "internal" }, false},
+		{"search_impl=params 合法", func(m *model.Model) { m.SearchImpl = "params" }, false},
+		{"非法 search_impl", func(m *model.Model) { m.SearchImpl = "bogus" }, true},
+		{"thinking_format=auto 合法", func(m *model.Model) { m.ThinkingFormat = "auto" }, false},
+		{"thinking_format=deepseek_v4 合法", func(m *model.Model) { m.ThinkingFormat = "deepseek_v4" }, false},
+		{"thinking_format=volcengine_thinking 合法", func(m *model.Model) { m.ThinkingFormat = "volcengine_thinking" }, false},
+		{"非法 thinking_format", func(m *model.Model) { m.ThinkingFormat = "guess_by_provider" }, true},
+		{"空 id", func(m *model.Model) { m.ID = "" }, true},
+		{"空 display_name", func(m *model.Model) { m.DisplayName = "" }, true},
+		{"空 provider", func(m *model.Model) { m.Provider = "" }, true},
+		{"负 context_window", func(m *model.Model) { m.ContextWindow = -1 }, true},
+		{"负 max_output", func(m *model.Model) { m.MaxOutput = -1 }, true},
+		{"零 token 合法", func(m *model.Model) { m.ContextWindow = 0; m.MaxOutput = 0 }, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := valid()
+			tt.mutate(m)
+			err := validateModelInput(m)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateModelInput() err = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicModel(t *testing.T) {
+	db := setupMessageTestDB(t)
+	defer db.Close()
+	suffix := time.Now().UnixNano()
+	channelKey := fmt.Sprintf("model-default-channel-%d", suffix)
+	modelID := fmt.Sprintf("model-default-%d", suffix)
+
+	channelService := NewChannelService(repository.NewChannelRepository(db))
+	enabled := true
+	if _, err := channelService.SaveAIChannel(&AIChannelInput{Key: channelKey, DisplayName: "Default Channel", Adapter: AdapterOpenAICompatible, BaseURL: "https://example.test/v1", APIKey: "test-key", Enabled: &enabled}); err != nil {
+		t.Fatalf("save channel: %v", err)
+	}
+	modelRepo := repository.NewModelRepository(db)
+	if err := modelRepo.Upsert(&model.Model{ID: modelID, DisplayName: "Default", Provider: channelKey, ContextWindow: 1024, MaxOutput: 256, Enabled: true, MinGroupLevel: 0, ThinkingFormat: "auto"}); err != nil {
+		t.Fatalf("save model: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM models WHERE id = $1", modelID)
+		_, _ = db.Exec("DELETE FROM ai_channels WHERE channel_key = $1", channelKey)
+	})
+
+	svc := NewModelService(modelRepo, channelService)
+	if err := svc.ValidateDefaultModel(modelID); err != nil {
+		t.Fatalf("validate runnable public default: %v", err)
+	}
+	if err := svc.Delete(modelID); err != nil {
+		t.Fatalf("disable model: %v", err)
+	}
+	stored, err := modelRepo.Get(modelID)
+	if err != nil || stored == nil || stored.Enabled {
+		t.Fatalf("deleted model = %#v, err=%v; want retained disabled model", stored, err)
+	}
+	if err := svc.ValidateDefaultModel(modelID); err == nil {
+		t.Fatal("disabled model accepted as default")
+	}
+}

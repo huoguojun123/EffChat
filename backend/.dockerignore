@@ -1,0 +1,9 @@
+.env
+.env.*
+uploads/
+bin/
+tmp/
+*.test
+*.out
+coverage/
+.DS_Store

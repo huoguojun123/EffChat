@@ -1,0 +1,151 @@
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { promptsApi } from "@/api/prompts"
+import * as sessionsApi from "@/api/sessions"
+import { useChatStore } from "@/stores/chat"
+import type { Prompt } from "@/types"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { MotionView } from "@/components/ui/motion"
+import { Check, Search } from "lucide-react"
+
+interface Props {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+export function PromptPickerDialog({ open, onOpenChange }: Props) {
+  const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const sessions = useChatStore((s) => s.sessions)
+  const updateSessionLocal = useChatStore((s) => s.updateSessionLocal)
+  const [prompts, setPrompts] = useState<Prompt[]>([])
+  const [selected, setSelected] = useState<Prompt | null>(null)
+  const [query, setQuery] = useState("")
+  const [saving, setSaving] = useState(false)
+
+  const activeSession = sessions.find((item) => item.id === activeSessionId)
+  const filtered = useMemo(() => {
+    const keyword = query.trim().toLowerCase()
+    if (!keyword) return prompts
+    return prompts.filter((item) => `${item.group_name} ${item.title} ${item.content}`.toLowerCase().includes(keyword))
+  }, [prompts, query])
+  const grouped = useMemo(() => {
+    const map = new Map<string, Prompt[]>()
+    for (const prompt of filtered) {
+      const groupName = prompt.group_name || "默认分组"
+      const bucket = map.get(groupName) || []
+      bucket.push(prompt)
+      map.set(groupName, bucket)
+    }
+    return Array.from(map.entries()).map(([groupName, items]) => ({ groupName, items }))
+  }, [filtered])
+
+  const loadPrompts = useCallback(async () => {
+    const [mine, pub] = await Promise.all([
+      promptsApi.listMine(),
+      promptsApi.listPublic(),
+    ])
+    const map = new Map<number, Prompt>()
+    for (const item of [...(mine.prompts || []), ...(pub.prompts || [])]) {
+      map.set(item.id, item)
+    }
+    const list = Array.from(map.values())
+    setPrompts(list)
+    setSelected(list[0] || null)
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    void Promise.resolve().then(loadPrompts)
+  }, [open, loadPrompts])
+
+  async function applyPrompt(content: string | null) {
+    if (!activeSessionId) return
+    setSaving(true)
+    try {
+      await sessionsApi.updateSession(activeSessionId, { system_prompt: content || "" })
+      updateSessionLocal(activeSessionId, { system_prompt: content || undefined })
+      onOpenChange(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[880px] gap-0 overflow-hidden p-0 sm:rounded-lg">
+        <DialogHeader className="border-b border-border px-5 py-4">
+          <DialogTitle>选择系统提示词</DialogTitle>
+        </DialogHeader>
+        <div className="grid h-[560px] grid-cols-[260px_minmax(0,1fr)]">
+          <div className="min-h-0 border-r border-border">
+            <div className="border-b border-border p-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="搜索提示词"
+                  className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-foreground"
+                />
+              </div>
+            </div>
+            <div className="max-h-[498px] overflow-y-auto p-2">
+              <div className="space-y-2">
+                {grouped.map((group) => (
+                  <section key={group.groupName} className="border-b border-border/60 pb-1 last:border-b-0">
+                    <div className="px-1 py-1 text-xs font-medium text-muted-foreground">
+                      {group.groupName}
+                    </div>
+                    {group.items.map((prompt) => (
+                      <button
+                        key={prompt.id}
+                        onClick={() => setSelected(prompt)}
+                        className={`w-full rounded-md px-3 py-2 text-left transition-colors motion-control ${
+                          selected?.id === prompt.id ? "bg-muted text-foreground" : "hover:bg-muted"
+                        }`}
+                      >
+                        <div className="truncate text-sm font-medium">{prompt.title}</div>
+                        <div className="mt-1 truncate text-[11px] opacity-60">{prompt.is_public ? "系统提示词" : "我的提示词"}</div>
+                      </button>
+                    ))}
+                  </section>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+              <MotionView viewKey={selected?.id || "empty"} className="min-h-full">
+                {selected ? (
+                  <>
+                    <div className="mb-3 flex items-center gap-2">
+                      <h3 className="truncate text-base font-semibold">{selected.title}</h3>
+                      <span className="rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground">{selected.group_name || "默认分组"}</span>
+                      {activeSession?.system_prompt === selected.content && (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 px-2 py-0.5 text-xs text-emerald-600">
+                          <Check className="h-3 w-3" />
+                          已使用
+                        </span>
+                      )}
+                    </div>
+                    <pre className="whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-4 text-sm leading-7">{selected.content}</pre>
+                  </>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无提示词</div>
+                )}
+              </MotionView>
+            </div>
+            <div className="flex items-center justify-between border-t border-border px-5 py-4">
+              <Button variant="ghost" size="sm" onClick={() => applyPrompt(null)} disabled={saving || !activeSessionId}>
+                清空
+              </Button>
+              <Button size="sm" onClick={() => selected && applyPrompt(selected.content)} disabled={saving || !selected || !activeSessionId}>
+                {saving ? "应用中" : "应用"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}

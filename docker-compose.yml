@@ -1,0 +1,196 @@
+name: ${COMPOSE_PROJECT_NAME:-effchat}
+
+x-default-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: ${DOCKER_LOG_MAX_FILE:-5}
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-effchat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      POSTGRES_DB: ${POSTGRES_DB:-effchat}
+    volumes:
+      - ${DATA_DIR:-../data}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: postgres:17
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-effchat}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      PGDATABASE: ${POSTGRES_DB:-effchat}
+    volumes:
+      - ./backend/migrations/init.sql:/migrations/init.sql:ro
+      - ./backend/migrations/production:/migrations/production:ro
+    command:
+      - sh
+      - -ec
+      - |
+        cat > /tmp/apply-migrations.sql <<'SQL'
+        SELECT pg_advisory_lock(823764219);
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          version TEXT PRIMARY KEY,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          checksum TEXT NOT NULL DEFAULT ''
+        );
+        ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT '';
+        SQL
+        for file in /migrations/production/*.sql; do
+          [ -e "$$file" ] || continue
+          version="$$(basename "$$file")"
+          if [ "$$version" = "001_schema.sql" ]; then
+            # 001 is the legacy baseline. Its historical checksum included init.sql,
+            # which is intentionally allowed to evolve for fresh installs.
+            checksum="legacy-baseline-v1"
+            checksum_reconcile="TRUE"
+          else
+            checksum="$$(sha256sum "$$file" | awk '{print $$1}')"
+            checksum_reconcile="checksum = ''"
+          fi
+          cat >> /tmp/apply-migrations.sql <<SQL
+        UPDATE schema_migrations
+        SET checksum = '$$checksum'
+        WHERE version = '$$version' AND ($$checksum_reconcile);
+        SELECT NOT EXISTS (
+          SELECT 1 FROM schema_migrations
+          WHERE version = '$$version' AND checksum <> '$$checksum'
+        ) AS migration_checksum_matches \gset
+        \if :migration_checksum_matches
+        \else
+        \echo migration checksum mismatch: $$version
+        SELECT 1 / 0;
+        \endif
+        SELECT NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '$$version') AS apply_migration \gset
+        \if :apply_migration
+        \echo apply migration $$version
+        \i $$file
+        INSERT INTO schema_migrations (version, checksum) VALUES ('$$version', '$$checksum');
+        \else
+        \echo skip migration $$version
+        \endif
+        SQL
+        done
+        cat >> /tmp/apply-migrations.sql <<'SQL'
+        SELECT pg_advisory_unlock(823764219);
+        SQL
+        psql -v ON_ERROR_STOP=1 -f /tmp/apply-migrations.sql
+
+  py-extractor:
+    build:
+      context: ./py-extractor
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+    image: effchat-py-extractor:local
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${PY_EXTRACTOR_MEM_LIMIT:-512m}
+    environment:
+      EXTRACTOR_HOST: 0.0.0.0
+      EXTRACTOR_PORT: 8090
+      EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
+      EXTRACTOR_MAX_OUTPUT_BYTES: ${PY_EXTRACTOR_MAX_OUTPUT_BYTES:-5242880}
+      MINERU_UPLOAD_TIMEOUT_SECONDS: ${MINERU_UPLOAD_TIMEOUT_SECONDS:-300}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).read()\""]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://mirrors.aliyun.com/alpine}
+        BUILD_REF: ${BUILD_REF:-unknown}
+    image: effchat-backend:local
+    restart: unless-stopped
+    stop_grace_period: 70s
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      py-extractor:
+        condition: service_healthy
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      SERVER_MODE: ${SERVER_MODE:-release}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER:-effchat}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      DB_NAME: ${POSTGRES_DB:-effchat}
+      DB_SSLMODE: disable
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
+      CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
+      TRUST_PROXY_HEADERS: "true"
+      AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-600}
+      AUTH_RATE_LIMIT_BLOCK_SECONDS: ${AUTH_RATE_LIMIT_BLOCK_SECONDS:-900}
+      RUN_MAX_TOTAL_DURATION: ${RUN_MAX_TOTAL_DURATION:-0}
+      SSE_HEARTBEAT_INTERVAL: ${SSE_HEARTBEAT_INTERVAL:-12s}
+      COMPRESSION_MAX_TOKENS: ${COMPRESSION_MAX_TOKENS:-32000}
+      PY_EXTRACTOR_ENABLED: ${PY_EXTRACTOR_ENABLED:-true}
+      PY_EXTRACTOR_URL: ${PY_EXTRACTOR_URL:-http://py-extractor:8090}
+      PY_EXTRACTOR_TIMEOUT_SECONDS: ${PY_EXTRACTOR_TIMEOUT_SECONDS:-60}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+    volumes:
+      - ${DATA_DIR:-../data}/storage:/app/storage
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-18080}:8080"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+        ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+    image: effchat-web:local
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8088}:80"
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK:-effchat_net}

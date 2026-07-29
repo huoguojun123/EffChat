@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestConversationSearchRepositoryScopesVisibleContent(t *testing.T) {

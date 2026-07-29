@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+!.env.docker.example
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/dist
+**/coverage
+**/__pycache__
+**/.pytest_cache
+**/.DS_Store

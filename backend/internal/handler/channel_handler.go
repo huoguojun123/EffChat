@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/tool"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/tool"
 )
 
 type externalServiceOrderInput struct {

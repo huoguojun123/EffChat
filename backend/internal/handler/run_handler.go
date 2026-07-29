@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 func ActiveRunHandler(runHub *service.RunHub, sessionService *service.SessionService) gin.HandlerFunc {

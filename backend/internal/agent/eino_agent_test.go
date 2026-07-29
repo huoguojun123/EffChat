@@ -12,11 +12,11 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 // TestMessageToData_FieldNamesAlignWithDBColumns 验证序列化出的 JSON 字段名

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestMessageRepositoryConversationTurnsAndWindows(t *testing.T) {

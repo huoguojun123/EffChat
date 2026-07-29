@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/model"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 func (s *SkillService) PreviewZip(data []byte) (*SkillZipPreviewResult, error) {

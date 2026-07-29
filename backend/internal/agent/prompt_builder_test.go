@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func TestUserLocationUsesPreferenceAndStableFallback(t *testing.T) {
@@ -33,7 +33,7 @@ func TestUserLocationUsesPreferenceAndStableFallback(t *testing.T) {
 
 func TestBuildInstructionInjectsRuntimeContext(t *testing.T) {
 	req := &ChatRequest{
-		SystemName:      "fchat",
+		SystemName:      "effchat",
 		ModelID:         "gpt-4o",
 		Provider:        "openai",
 		SystemPrompt:    "本会话用简洁风格。",
@@ -55,7 +55,7 @@ func TestBuildInstructionInjectsRuntimeContext(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"You are fchat",
+		"You are effchat",
 		"Date:",
 		"Display name: Mock User",
 		"Language: 中文",
@@ -75,7 +75,7 @@ func TestBuildInstructionInjectsRuntimeContext(t *testing.T) {
 }
 
 func TestRenderPromptTemplateRejectsInvalidTemplate(t *testing.T) {
-	if _, err := renderPromptTemplate("{{ .SystemName ", PromptTemplateData{SystemName: "fchat"}); err == nil {
+	if _, err := renderPromptTemplate("{{ .SystemName ", PromptTemplateData{SystemName: "effchat"}); err == nil {
 		t.Fatal("expected invalid template to be rejected")
 	}
 }
@@ -98,7 +98,7 @@ func TestFormatCapabilityBlockReflectsModelCapabilities(t *testing.T) {
 
 func TestBuildInstructionInjectsCapabilityBlock(t *testing.T) {
 	req := &ChatRequest{
-		SystemName: "fchat",
+		SystemName: "effchat",
 		ModelID:    "gpt-4o",
 		Provider:   "openai",
 	}
@@ -139,7 +139,7 @@ func TestAppendMemoryInstruction(t *testing.T) {
 
 func TestBuildInstructionDeclaresOnlyMountedCapabilities(t *testing.T) {
 	req := &ChatRequest{
-		SystemName: "fchat",
+		SystemName: "effchat",
 		ModelID:    "gpt-4o",
 		Provider:   "openai",
 		EnabledSkills: []SkillInstruction{{
@@ -206,7 +206,7 @@ func TestAppendSkillWorkspaceInstructionBoundsMetadata(t *testing.T) {
 }
 
 func TestBuildInstructionAlwaysDeclaresPlainListMindMaps(t *testing.T) {
-	req := &ChatRequest{SystemName: "fchat", ModelID: "gpt-4o", Provider: "openai"}
+	req := &ChatRequest{SystemName: "effchat", ModelID: "gpt-4o", Provider: "openai"}
 
 	got, err := buildInstruction(nil, req, modelbank.SearchDecision{}, nil)
 	if err != nil {
@@ -261,7 +261,7 @@ Keep output rules.`
 }
 
 func TestBuildInstructionKeepsMemoryPolicyOnlyWhenMounted(t *testing.T) {
-	req := &ChatRequest{SystemName: "fchat", ModelID: "gpt-4o", Provider: "openai"}
+	req := &ChatRequest{SystemName: "effchat", ModelID: "gpt-4o", Provider: "openai"}
 
 	withoutMemory, err := buildInstruction(nil, req, modelbank.SearchDecision{}, nil)
 	if err != nil {

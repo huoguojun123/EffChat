@@ -17,11 +17,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func init() {

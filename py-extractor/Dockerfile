@@ -7,10 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY py-extractor/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY py-extractor/app ./app
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/effchat/
 
 EXPOSE 8090
 

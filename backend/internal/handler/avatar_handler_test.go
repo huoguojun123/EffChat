@@ -15,8 +15,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestAvatarServeOnlyAcceptsManagedFilename(t *testing.T) {

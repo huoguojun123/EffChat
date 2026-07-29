@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestResolveThinkingFormatPrefersModelIDOverProvider(t *testing.T) {

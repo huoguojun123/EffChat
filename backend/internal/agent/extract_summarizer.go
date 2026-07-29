@@ -8,9 +8,9 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/repository"
-	internaltool "github.com/huoguojun123/effchat/internal/tool"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	internaltool "github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 // extractSummarizer 用独立小模型把 web_extract 抓取的网页正文按 goal 提炼成要点，

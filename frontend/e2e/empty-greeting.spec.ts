@@ -8,7 +8,7 @@ async function mockEmptyAccount(page: Page) {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path === "/api/v1/users/me") return route.fulfill({ json: { id: 1, username: "member", role: "user", is_active: true } })
-    if (path === "/api/v1/system/info") return route.fulfill({ json: { system_name: "fchat" } })
+    if (path === "/api/v1/system/info") return route.fulfill({ json: { system_name: "effchat" } })
     if (path === "/api/v1/models") {
       return route.fulfill({ json: { models: [{ id: "demo-model", provider: "demo", display_name: "Demo", enabled: true, sort_order: 1 }], total: 1 } })
     }

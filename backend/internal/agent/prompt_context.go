@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 )
 
 func formatUserBlock(req *ChatRequest, userDisplayName string) string {

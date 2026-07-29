@@ -3,7 +3,7 @@ package repository
 import (
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // seedModel 插入一个测试模型并注册清理。

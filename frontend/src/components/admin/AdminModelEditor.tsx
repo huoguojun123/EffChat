@@ -109,10 +109,10 @@ export function AdminModelEditor({
               <div className="space-y-3">
                 {testResult ? <ModelTestStatus result={testResult} /> : null}
                 <Field label="模型 ID">
-                  <Input name="fchat-model-id" autoComplete="off" value={currentDraft.id} onChange={(e) => updateCurrentDraft({ id: e.target.value })} disabled={!creating} />
+                  <Input name="effchat-model-id" autoComplete="off" value={currentDraft.id} onChange={(e) => updateCurrentDraft({ id: e.target.value })} disabled={!creating} />
                 </Field>
                 <Field label="显示名称">
-                  <Input name="fchat-model-display-name" autoComplete="off" value={currentDraft.display_name} onChange={(e) => updateCurrentDraft({ display_name: e.target.value })} />
+                  <Input name="effchat-model-display-name" autoComplete="off" value={currentDraft.display_name} onChange={(e) => updateCurrentDraft({ display_name: e.target.value })} />
                 </Field>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="上下文">

@@ -89,8 +89,8 @@ func Load() *Config {
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
-			User:     getEnv("DB_USER", "postgres"),
-			Password: getEnv("DB_PASSWORD", "123456"),
+			User:     getEnv("DB_USER", "effchat"),
+			Password: getEnv("DB_PASSWORD", ""),
 			DBName:   getEnv("DB_NAME", "effchat"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},

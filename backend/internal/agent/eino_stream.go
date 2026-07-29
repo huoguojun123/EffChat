@@ -8,7 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 // consumeAssistantEvent 消费一个助手事件，逐帧发出 SSE delta，

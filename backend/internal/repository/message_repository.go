@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/lib/pq"
 )
 

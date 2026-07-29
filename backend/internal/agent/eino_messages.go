@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func convertToEinoMessages(messages []*model.Message, visionCapable bool) ([]*schema.Message, error) {

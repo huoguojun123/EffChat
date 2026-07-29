@@ -14,10 +14,10 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 type MemoryMaintenanceRequest struct {

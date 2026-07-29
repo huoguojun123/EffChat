@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 func ExportSessionMarkdownHandler(messageService *service.MessageService) gin.HandlerFunc {

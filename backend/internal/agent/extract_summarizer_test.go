@@ -9,11 +9,11 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/testutil"
-	internaltool "github.com/huoguojun123/effchat/internal/tool"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/testutil"
+	internaltool "github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 func TestExtractSummaryErrorMessageIsStable(t *testing.T) {

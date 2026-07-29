@@ -2,7 +2,12 @@
 
 EffChat 是一个面向小团队自托管的 AI agent workbench。目标是比重型聊天平台更轻、更快、更可控，同时保留多模型切换、Eino Agent、工具调用、文件工作区、Skills、流式输出和代码块工作区。
 
-## 0.3.2 预发布定位
+[GitHub 仓库](https://github.com/huoguojun123/EffChat)
+
+> [!WARNING]
+> EffChat 当前是 `pre-release 0.3.4`。数据迁移、配置兼容性和公开 API 仍可能变化，请在升级前备份 PostgreSQL 与受管存储。
+
+## pre-release 0.3.4 定位
 
 当前预发布版按“小团队自托管 agent workbench”收口：
 
@@ -27,13 +32,30 @@ Alpha 不包含代码执行沙盒、Shell 工具、浏览器自动化、完整 R
 
 ## 快速开始
 
-1. 复制 `.env.docker.example` 为 `.env.docker`，只填写基础设施配置。
-2. 启动 Docker Compose。
-3. 首个注册用户会自动成为管理员。
-4. 进入管理后台配置渠道、模型、联网服务、工具、用户组限额、字体和文件清理。
+```bash
+git clone https://github.com/huoguojun123/EffChat.git
+cd EffChat
+cp .env.docker.example .env.docker
+# 编辑 .env.docker，至少替换 POSTGRES_PASSWORD 和 JWT_SECRET
+scripts/docker-build.sh up
+```
+
+首次启动后，首个注册用户会自动成为管理员。进入管理后台配置渠道、模型、联网服务、工具、用户组限额、字体和文件清理。
 
 详细部署步骤见 [Docker-Compose-部署.md](docs/03-实施计划/Docker-Compose-部署.md)。
 管理员使用步骤见 [管理员配置指南.md](docs/03-实施计划/管理员配置指南.md)。
+
+## 安全与贡献
+
+- 安全漏洞请按 [SECURITY.md](SECURITY.md) 私下报告，不要公开创建 Issue。
+- 开发环境、验证命令和 PR 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 当前版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 许可证
+
+EffChat 自有源码采用 [Apache License 2.0](LICENSE)。第三方依赖与素材继续
+遵循各自许可证，主要依赖及非代码素材的声明见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [NOTICE](NOTICE)。
 
 ## 开源发布
 

@@ -10,9 +10,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/huoguojun123/effchat/internal/avatar"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/avatar"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 const avatarURLPrefix = "/api/v1/avatars/"

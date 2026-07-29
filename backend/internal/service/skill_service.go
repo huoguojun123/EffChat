@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 const (

@@ -22,13 +22,13 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/extractor"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/internal/extractor"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 	_ "golang.org/x/image/webp"
 )
 

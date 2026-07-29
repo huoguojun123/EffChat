@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 const runFinalizationTimeout = 5 * time.Second

@@ -332,7 +332,7 @@ function ProfileForm({ onDone }: { onDone: () => void }) {
       <Field label="邮箱">
         <input
           type="email"
-          name="fchat-profile-email"
+          name="effchat-profile-email"
           autoComplete="off"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
@@ -342,7 +342,7 @@ function ProfileForm({ onDone }: { onDone: () => void }) {
       </Field>
       <Field label="昵称">
         <input
-          name="fchat-profile-nickname"
+          name="effchat-profile-nickname"
           autoComplete="off"
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
@@ -407,13 +407,13 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
     >
       <input className="sr-only" type="text" name="username" autoComplete="username" value={username} readOnly tabIndex={-1} />
       <Field label="当前密码">
-        <input type="password" name="fchat-current-password" autoComplete="current-password" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} className="form-input" />
+        <input type="password" name="effchat-current-password" autoComplete="current-password" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} className="form-input" />
       </Field>
       <Field label="新密码">
-        <input type="password" name="fchat-new-password" autoComplete="new-password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="form-input" />
+        <input type="password" name="effchat-new-password" autoComplete="new-password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="form-input" />
       </Field>
       <Field label="确认密码">
-        <input type="password" name="fchat-confirm-password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="form-input" />
+        <input type="password" name="effchat-confirm-password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="form-input" />
       </Field>
 
       {feedback && <FeedbackLine {...feedback} />}

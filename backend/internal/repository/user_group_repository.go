@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 var ErrDefaultUserGroupRequired = errors.New("cannot remove the final default user group")

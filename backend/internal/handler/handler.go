@@ -10,16 +10,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/extractor"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/config"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/extractor"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 const diagnosticRetention = 90 * 24 * time.Hour

@@ -173,7 +173,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 type="search"
-                name="fchat-user-search"
+                name="effchat-user-search"
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}

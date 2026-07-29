@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func setupMessageTestDB(t *testing.T) *sql.DB {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 )
 
 // CompactConversation 手动压缩：对当前会话历史做一次性总结，返回压缩检查点。

@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type SessionMarkdownExport struct {

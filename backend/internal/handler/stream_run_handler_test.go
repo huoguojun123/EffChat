@@ -16,25 +16,25 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 func TestSlowTCPConsumerDoesNotBlockRunCompletion(t *testing.T) {
-	if os.Getenv("FCHAT_LONG_STREAM_TEST") != "1" {
-		t.Skip("set FCHAT_LONG_STREAM_TEST=1 to run the 60-second TCP acceptance test")
+	if os.Getenv("EFFCHAT_LONG_STREAM_TEST") != "1" {
+		t.Skip("set EFFCHAT_LONG_STREAM_TEST=1 to run the 60-second TCP acceptance test")
 	}
 	pause := 60 * time.Second
-	if raw := os.Getenv("FCHAT_SLOW_CONSUMER_DURATION"); raw != "" {
+	if raw := os.Getenv("EFFCHAT_SLOW_CONSUMER_DURATION"); raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil || parsed <= 0 {
-			t.Fatalf("invalid FCHAT_SLOW_CONSUMER_DURATION %q", raw)
+			t.Fatalf("invalid EFFCHAT_SLOW_CONSUMER_DURATION %q", raw)
 		}
 		pause = parsed
 	}

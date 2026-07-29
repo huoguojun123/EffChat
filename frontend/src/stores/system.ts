@@ -4,7 +4,7 @@ import type { FontAsset } from "@/types"
 
 const DEFAULT_SYSTEM_NAME = "EffChat"
 const DEFAULT_SYSTEM_VERSION = "pre-release 0.3.4"
-const CHAT_FONT_STYLE_ID = "fchat-chat-font-face"
+const CHAT_FONT_STYLE_ID = "effchat-chat-font-face"
 
 interface SystemState {
   systemName: string
@@ -96,7 +96,7 @@ function applyChatFonts(fonts: ChatFonts) {
 }
 
 function fontFamilyName(slot: "chinese" | "latin" | "code", font: FontAsset) {
-  return `FChatFont-${slot}-${font.id}`
+  return `EffChatFont-${slot}-${font.id}`
 }
 
 function fontFormat(font: FontAsset) {

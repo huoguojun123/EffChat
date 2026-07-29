@@ -96,9 +96,9 @@ describe("prepareDiagramSvg", () => {
     })
 
     try {
-      expect(normalizeMermaidTypography('<svg><text>完成核心流程</text><text>项目推进</text></svg>', '"FChat Body", serif')).toBe("<svg />")
-      expect(body.setAttribute).toHaveBeenCalledWith("style", "font-family:\"FChat Body\", serif!important")
-      expect(title.setAttribute).toHaveBeenCalledWith("style", "font-family:\"FChat Body\", serif!important;font-size:16px!important")
+      expect(normalizeMermaidTypography('<svg><text>完成核心流程</text><text>项目推进</text></svg>', '"EffChat Body", serif')).toBe("<svg />")
+      expect(body.setAttribute).toHaveBeenCalledWith("style", "font-family:\"EffChat Body\", serif!important")
+      expect(title.setAttribute).toHaveBeenCalledWith("style", "font-family:\"EffChat Body\", serif!important;font-size:16px!important")
     } finally {
       Object.defineProperty(globalThis, "document", { configurable: true, value: originalDocument })
       Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: originalGetComputedStyle })

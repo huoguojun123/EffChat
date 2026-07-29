@@ -39,6 +39,7 @@ cp .env.docker.example .env.docker
 - `SERVER_MODE`
 - `DB_HOST` / `DB_PORT` / `DB_NAME`
 - `CORS_EXTRA_ORIGINS`（同源公共反代一般不填；前后端不同域名才填）
+- `TRUST_PROXY_HEADERS`（使用内置 Web 反代时保持 `true`；后端可能绕过可信代理时设为 `false`）
 - `RUN_*` / `SSE_HEARTBEAT_INTERVAL`
 
 ### 朋友拿源码后的最短启动流程
@@ -141,14 +142,14 @@ backend/migrations/production/*.sql
 
 构建标识按来源自动生成：干净 Git 工作树使用短 commit SHA；有在制源码时使用 `SHA-dirty-内容指纹`；不包含 `.git` 的交付源码使用 `source-内容指纹`。内容指纹只覆盖实际源码和构建配置，排除环境变量、数据、上传、依赖及构建产物。可在构建前执行 `scripts/docker-build.sh build-ref` 查看将要注入的值；发布系统显式传入非空 `BUILD_REF` 时以调用方值为准。
 
-Compose 默认由内置 Nginx 覆盖并传递 `X-Real-IP`，Compose 内的 backend 固定信任这个头，认证限流按浏览器真实地址区分。后端端口只绑定回环地址；如在其他部署方式中绕开内置 Nginx，后端运行时保持默认的 `TRUST_PROXY_HEADERS=false`，或在入口处先清洗代理头。
+Compose 默认由内置 Nginx 覆盖并传递 `X-Real-IP`，因此模板将 `TRUST_PROXY_HEADERS` 设为 `true`，认证限流可按浏览器真实地址区分。后端端口只绑定回环地址；如果其他部署方式允许流量绕过可信代理，应将该变量设为 `false`，或确保唯一入口代理会清洗客户端提供的转发头。
 
 模型渠道、API key、搜索服务、网页提取服务和 MinerU OCR 不在 `.env.docker` 中填写；启动后由管理员在网页后台配置。后台使用步骤见 [管理员配置指南.md](管理员配置指南.md)。
 
 如果需要彻底重建新库：
 
 ```bash
-CONFIRM_RESET=DELETE_FCHAT_DATA scripts/docker-build.sh reset-db
+CONFIRM_RESET=DELETE_EFFCHAT_DATA scripts/docker-build.sh reset-db
 ```
 
 该命令会删除 `${DATA_DIR:-./data}/postgres`、`${DATA_DIR:-./data}/storage` 和遗留的 `${DATA_DIR:-./data}/uploads`，包括数据库与全部受管文件。

@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 const (

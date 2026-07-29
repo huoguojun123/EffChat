@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/config"
 	_ "github.com/lib/pq"
 )
 

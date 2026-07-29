@@ -54,9 +54,9 @@ load_env_file "$PROJECT_DIR/.env"
 
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
-DB_USER="${DB_USER:-postgres}"
-DB_PASSWORD="${DB_PASSWORD:-123456}"
-DB_NAME="${DB_NAME:-fchat}"
+DB_USER="${DB_USER:-effchat}"
+DB_PASSWORD="${DB_PASSWORD:-}"
+DB_NAME="${DB_NAME:-effchat}"
 DB_SSLMODE="${DB_SSLMODE:-disable}"
 
 RED='\033[0;31m'
@@ -241,8 +241,8 @@ fi
 echo ""
 
 if [ "${1:-}" = "reset" ]; then
-    if [ "${CONFIRM_RESET:-}" != "DELETE_FCHAT_DB" ]; then
-        fail "reset 会删除整个数据库 $DB_NAME" "如确认用于本地开发重建，请执行：CONFIRM_RESET=DELETE_FCHAT_DB ./init_db.sh reset"
+    if [ "${CONFIRM_RESET:-}" != "DELETE_EFFCHAT_DB" ]; then
+        fail "reset 会删除整个数据库 $DB_NAME" "如确认用于本地开发重建，请执行：CONFIRM_RESET=DELETE_EFFCHAT_DB ./init_db.sh reset"
     fi
     print_step "2/5" "删除已有数据库..."
     db_ident="$(quote_ident "$DB_NAME")"

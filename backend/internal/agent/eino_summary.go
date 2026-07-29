@@ -8,8 +8,8 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 )
 
 const compactionInstruction = `Create a detailed continuation summary for this conversation. The goal is that future turns can continue smoothly even after the original messages are removed.

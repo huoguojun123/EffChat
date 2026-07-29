@@ -240,9 +240,9 @@ case "$cmd" in
     validate_runtime_secrets
     export_data_dir
     export_build_ref
-    if [ "${CONFIRM_RESET:-}" != "DELETE_FCHAT_DATA" ]; then
+    if [ "${CONFIRM_RESET:-}" != "DELETE_EFFCHAT_DATA" ]; then
       echo "reset-db deletes DATA_DIR/postgres, DATA_DIR/storage, and legacy DATA_DIR/uploads."
-      echo "Re-run with CONFIRM_RESET=DELETE_FCHAT_DATA scripts/docker-build.sh reset-db"
+      echo "Re-run with CONFIRM_RESET=DELETE_EFFCHAT_DATA scripts/docker-build.sh reset-db"
       exit 1
     fi
     "${COMPOSE[@]}" down

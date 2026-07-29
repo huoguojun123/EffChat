@@ -94,8 +94,8 @@ services:
 
   py-extractor:
     build:
-      context: ./py-extractor
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: py-extractor/Dockerfile
       args:
         HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
@@ -121,16 +121,16 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
       args:
         HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
         ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
         NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
-        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
-        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
-        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://mirrors.aliyun.com/alpine}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.org}
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
         BUILD_REF: ${BUILD_REF:-unknown}
     image: effchat-backend:local
     restart: unless-stopped
@@ -155,7 +155,7 @@ services:
       DB_SSLMODE: disable
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
       CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
-      TRUST_PROXY_HEADERS: "true"
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
       AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
       AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-600}
       AUTH_RATE_LIMIT_BLOCK_SECONDS: ${AUTH_RATE_LIMIT_BLOCK_SECONDS:-900}
@@ -174,14 +174,14 @@ services:
 
   web:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
         HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
         ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
         NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
-        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}
     image: effchat-web:local
     restart: unless-stopped
     logging: *default-logging

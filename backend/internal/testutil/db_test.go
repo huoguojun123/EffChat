@@ -12,30 +12,30 @@ import (
 )
 
 func TestValidateTestDSNRejectsNonTestDatabase(t *testing.T) {
-	if err := validateTestDSN("postgres://tester@localhost/fchat"); err == nil {
+	if err := validateTestDSN("postgres://tester@localhost/effchat"); err == nil {
 		t.Fatal("production-like database name should be rejected")
 	}
-	if err := validateTestDSN("postgres://tester@localhost/fchat_test?sslmode=disable"); err != nil {
+	if err := validateTestDSN("postgres://tester@localhost/effchat_test?sslmode=disable"); err != nil {
 		t.Fatalf("test database should be accepted: %v", err)
 	}
 }
 
 func TestPostgresDatabaseName(t *testing.T) {
-	if got := postgresDatabaseName("postgres://user:pass@localhost:5432/fchat_test?sslmode=disable"); got != "fchat_test" {
+	if got := postgresDatabaseName("postgres://user:pass@localhost:5432/effchat_test?sslmode=disable"); got != "effchat_test" {
 		t.Fatalf("URL database = %q", got)
 	}
-	if got := postgresDatabaseName("host=localhost dbname=fchat_test sslmode=disable"); got != "" {
+	if got := postgresDatabaseName("host=localhost dbname=effchat_test sslmode=disable"); got != "" {
 		t.Fatalf("keyword database = %q, want empty", got)
 	}
 }
 
 func TestValidateTestDSNRejectsTargetOverrides(t *testing.T) {
 	for _, dsn := range []string{
-		"postgres://tester@localhost/fchat_test?dbname=fchat",
-		"postgres://tester@localhost/fchat_test?database=fchat",
-		"postgres://tester@localhost/fchat_test?host=production.example",
-		"postgres://tester@localhost/fchat_test?user=production",
-		"host=localhost dbname=fchat_test sslmode=disable",
+		"postgres://tester@localhost/effchat_test?dbname=effchat",
+		"postgres://tester@localhost/effchat_test?database=effchat",
+		"postgres://tester@localhost/effchat_test?host=production.example",
+		"postgres://tester@localhost/effchat_test?user=production",
+		"host=localhost dbname=effchat_test sslmode=disable",
 	} {
 		if err := validateTestDSN(dsn); err == nil {
 			t.Fatalf("unsafe test DSN was accepted: %q", dsn)
@@ -48,8 +48,8 @@ func TestWithPostgresDatabase(t *testing.T) {
 		name string
 		dsn  string
 	}{
-		{name: "url", dsn: "postgres://user:pass@localhost:5432/fchat_test?sslmode=disable"},
-		{name: "postgresql url", dsn: "postgresql://user:pass@localhost:5432/fchat_test?sslmode=disable"},
+		{name: "url", dsn: "postgres://user:pass@localhost:5432/effchat_test?sslmode=disable"},
+		{name: "postgresql url", dsn: "postgresql://user:pass@localhost:5432/effchat_test?sslmode=disable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := withPostgresDatabase(tc.dsn, "postgres")
@@ -83,7 +83,7 @@ func TestNextIsolationDatabaseNameIsUniqueAndParseable(t *testing.T) {
 func TestOpenPostgresTestDBIsolatesAndCleansUp(t *testing.T) {
 	baseDSN := postgresTestDSN()
 	if baseDSN == "" {
-		t.Skip("set FCHAT_TEST_DATABASE_DSN to run PostgreSQL integration tests")
+		t.Skip("set EFFCHAT_TEST_DATABASE_DSN to run PostgreSQL integration tests")
 	}
 	if err := validateTestDSN(baseDSN); err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestOpenPostgresTestDBIsolatesAndCleansUp(t *testing.T) {
 		if err := first.QueryRow("SELECT current_database()").Scan(&firstName); err != nil {
 			t.Fatal(err)
 		}
-		if firstName == postgresDatabaseName(baseDSN) || !strings.HasPrefix(firstName, "fchat_test_isolated_") {
+		if firstName == postgresDatabaseName(baseDSN) || !strings.HasPrefix(firstName, "effchat_test_isolated_") {
 			t.Fatalf("first database = %q, want an isolated clone", firstName)
 		}
 		if _, ok := isolationDatabaseCreatedAt(firstName); !ok {
@@ -151,7 +151,7 @@ func TestOpenPostgresTestDBIsolatesAndCleansUp(t *testing.T) {
 func TestCleanupStaleIsolationDatabases(t *testing.T) {
 	baseDSN := postgresTestDSN()
 	if baseDSN == "" {
-		t.Skip("set FCHAT_TEST_DATABASE_DSN to run PostgreSQL integration tests")
+		t.Skip("set EFFCHAT_TEST_DATABASE_DSN to run PostgreSQL integration tests")
 	}
 	if err := validateTestDSN(baseDSN); err != nil {
 		t.Fatal(err)
@@ -166,6 +166,24 @@ func TestCleanupStaleIsolationDatabases(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer maintenanceDB.Close()
+	lockCtx, lockCancel := context.WithTimeout(context.Background(), isolationDatabaseLockTTL)
+	lockConn, err := maintenanceDB.Conn(lockCtx)
+	lockCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockConn.Close()
+	lockCtx, lockCancel = context.WithTimeout(context.Background(), isolationDatabaseLockTTL)
+	if _, err := lockConn.ExecContext(lockCtx, "SELECT pg_advisory_lock($1)", isolationDatabaseLock); err != nil {
+		lockCancel()
+		t.Fatal(err)
+	}
+	lockCancel()
+	defer func() {
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), isolationDatabaseTTL)
+		defer unlockCancel()
+		_, _ = lockConn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", isolationDatabaseLock)
+	}()
 
 	staleDatabase := isolationDatabaseName(time.Now().Add(-isolationDatabaseStaleAfter-time.Minute), strings.Repeat("a", 16))
 	if _, err := maintenanceDB.Exec(fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s", pq.QuoteIdentifier(staleDatabase), pq.QuoteIdentifier(postgresDatabaseName(baseDSN)))); err != nil {

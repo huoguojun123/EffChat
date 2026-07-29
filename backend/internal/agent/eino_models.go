@@ -12,10 +12,10 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	einoModel "github.com/cloudwego/eino/components/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/tool"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 	"google.golang.org/genai"
 )
 

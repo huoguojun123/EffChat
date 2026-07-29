@@ -18,12 +18,12 @@ describe("GraphvizPreview sandbox", () => {
     const srcDoc = buildGraphvizSandboxSrcDoc(
       '<svg><a xlink:href="javascript:alert(1)"><text>bad</text></a></svg>',
       false,
-      { background: "#fff", foreground: "#111", fontFamily: '"FChat Body", serif' },
+      { background: "#fff", foreground: "#111", fontFamily: '"EffChat Body", serif' },
     )
 
     expect(srcDoc).toContain("pointer-events: none")
     expect(srcDoc).toContain("javascript:alert(1)")
-    expect(srcDoc).toContain('font-family: "FChat Body", serif !important')
+    expect(srcDoc).toContain('font-family: "EffChat Body", serif !important')
   })
 
   it("prefers Graphviz physical SVG dimensions without inserting SVG into the DOM", () => {

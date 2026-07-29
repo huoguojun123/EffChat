@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 type blockingChatRunStore struct {

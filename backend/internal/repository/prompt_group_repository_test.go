@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestPromptGroupRepositoryUpdateRollsBackWhenPromptSyncFails(t *testing.T) {

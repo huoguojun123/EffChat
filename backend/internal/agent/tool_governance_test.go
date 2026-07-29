@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/compose"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {

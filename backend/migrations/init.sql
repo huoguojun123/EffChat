@@ -5,9 +5,9 @@
 --
 -- 已整合迁移 001~013 的最终结构。幂等：可在空库重复执行。
 --
--- 前置：数据库 fchat 已创建（CREATE DATABASE fchat;）。
--- 执行：psql -U postgres -d fchat -f init.sql
---      或 docker exec -i <容器> psql -U postgres -d fchat < init.sql
+-- 前置：数据库 effchat 已创建（CREATE DATABASE effchat;）。
+-- 执行：psql -U postgres -d effchat -f init.sql
+--      或 docker exec -i <容器> psql -U postgres -d effchat < init.sql
 --
 -- 首个注册用户自动成为管理员（由应用层 auth_service 处理，无需在此预置）。
 -- ============================================

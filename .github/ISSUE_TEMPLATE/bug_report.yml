@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible EffChat problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include secrets, personal data, production logs, or database dumps. Report vulnerabilities through the private security channel.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: EffChat version, commit, and build ref from the instance status page
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker Compose
+        - Local development
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: Describe what happened and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide minimal, repeatable steps using synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Optional relevant logs with credentials, URLs, request content, and personal data removed.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed secrets and personal or production data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

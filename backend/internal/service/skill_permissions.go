@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func (s *SkillService) UpdateUserSkills(userID int64, ids []string) (*UserResponse, error) {

@@ -31,7 +31,7 @@ export function selectionAfterSent(selection: StoredSelection, sentIDs: number[]
 }
 
 function selectionKey(sessionId: number) {
-  return `fchat:staged-selection:${sessionId}`
+  return `effchat:staged-selection:${sessionId}`
 }
 
 function readSelection(sessionId: number): StoredSelection {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type ChannelRepository struct {
@@ -198,7 +198,7 @@ func (r *ChannelRepository) SaveExternalServiceContext(ctx context.Context, item
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('fchat_external_service_order'), hashtext($1))`, item.Kind); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('effchat_external_service_order'), hashtext($1))`, item.Kind); err != nil {
 		return fmt.Errorf("lock external service order: %w", channelContextError(ctx, err))
 	}
 	var currentSortOrder int

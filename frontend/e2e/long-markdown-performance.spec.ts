@@ -48,7 +48,7 @@ async function mockLongMarkdownStream(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("token", "test-token")
     const durations: number[] = []
-    Object.defineProperty(window, "__fchatLongTasks", { value: durations, writable: true })
+    Object.defineProperty(window, "__effchatLongTasks", { value: durations, writable: true })
     try {
       new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) durations.push(entry.duration)
@@ -89,7 +89,7 @@ async function mockLongMarkdownStream(page: Page) {
 }
 
 async function attachMetrics(page: Page, testInfo: TestInfo, renderDuration: number) {
-  const longTasks = await page.evaluate(() => ((window as Window & { __fchatLongTasks?: number[] }).__fchatLongTasks || []).slice())
+  const longTasks = await page.evaluate(() => ((window as Window & { __effchatLongTasks?: number[] }).__effchatLongTasks || []).slice())
   const metrics = {
     characters: markdown.length,
     render_duration_ms: Math.round(renderDuration),
@@ -110,8 +110,8 @@ test("100K Markdown stream remains complete and bounded on mobile", async ({ pag
   await mockLongMarkdownStream(page)
   await page.goto("/chat/1")
   await page.evaluate(() => {
-    const target = window as Window & { __fchatLongTasks?: number[] }
-    if (target.__fchatLongTasks) target.__fchatLongTasks.length = 0
+    const target = window as Window & { __effchatLongTasks?: number[] }
+    if (target.__effchatLongTasks) target.__effchatLongTasks.length = 0
   })
 
   const started = Date.now()

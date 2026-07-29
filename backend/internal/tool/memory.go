@@ -8,7 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
 
 // MemoryStore 是 memory 工具所需的最小持久化接口（由 repository.SessionMemoryRepository 实现）。

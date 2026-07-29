@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 const (

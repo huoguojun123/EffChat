@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/netpolicy"
+	"github.com/huoguojun123/EffChat/internal/netpolicy"
 )
 
 // SSRF 防护：basic 爬虫在服务端直连任意 URL，若不设防可被诱导访问内网/环回/云元数据

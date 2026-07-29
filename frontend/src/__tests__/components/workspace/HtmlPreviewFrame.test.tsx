@@ -22,8 +22,8 @@ describe("HtmlPreviewFrame sandbox", () => {
       />
     )
 
-    expect(html).toContain("data-fchat-preview-font")
-    expect(html.indexOf("data-fchat-preview-font")).toBeLessThan(html.indexOf("font-family:monospace"))
+    expect(html).toContain("data-effchat-preview-font")
+    expect(html.indexOf("data-effchat-preview-font")).toBeLessThan(html.indexOf("font-family:monospace"))
   })
 
   it("renders SVG previews through the same sandboxed frame", () => {

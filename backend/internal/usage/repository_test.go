@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func TestRepositoryAggregateSeparatesRunsAttemptsAndDegradedTools(t *testing.T) {

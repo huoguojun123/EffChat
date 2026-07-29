@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/logger"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/logger"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 // stream_handler 是 HTTP/SSE 适配层和当前 Chat run 生命周期的临时编排点。

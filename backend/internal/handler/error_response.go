@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 func writeInvalidJSON(c *gin.Context) {

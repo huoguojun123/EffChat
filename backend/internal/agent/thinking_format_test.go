@@ -6,7 +6,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 )
 
 func TestApplyOpenAICompatibleThinkingDeepSeekViaOpenAI(t *testing.T) {

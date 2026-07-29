@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func TestChannelFromInputNormalizesAndPreservesBlankKey(t *testing.T) {
@@ -157,11 +157,11 @@ func TestChannelServiceExternalServiceSaveHonorsLockCancellation(t *testing.T) {
 		t.Fatalf("open advisory lock connection: %v", err)
 	}
 	defer blocker.Close()
-	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtext('fchat_external_service_order'), hashtext('search'))`); err != nil {
+	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtext('effchat_external_service_order'), hashtext('search'))`); err != nil {
 		t.Fatalf("hold external service order lock: %v", err)
 	}
 	defer func() {
-		_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('fchat_external_service_order'), hashtext('search'))`)
+		_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('effchat_external_service_order'), hashtext('search'))`)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

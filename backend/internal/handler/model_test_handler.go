@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/agent"
 )
 
 type testModelRequest struct {

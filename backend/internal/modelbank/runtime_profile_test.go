@@ -3,7 +3,7 @@ package modelbank
 import (
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestRuntimeProfileSeparatesProviderAndFamily(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 const acceptedRuntimeSnapshotVersion = 2

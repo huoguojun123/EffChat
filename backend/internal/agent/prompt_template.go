@@ -9,7 +9,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 type PromptTemplateData struct {

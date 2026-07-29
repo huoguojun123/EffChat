@@ -13,13 +13,13 @@ import (
 	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/tool"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 // EinoAgent Eino ADK 驱动的 Agent

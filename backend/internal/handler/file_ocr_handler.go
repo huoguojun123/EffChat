@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, _ int, _ int64) (*model.File, int, gin.H) {

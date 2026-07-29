@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/lib/pq"
 )
 
@@ -741,7 +741,7 @@ func (r *FileRepository) ClaimRecoverableOCRTasks(provider string, now time.Time
 		return nil, fmt.Errorf("begin OCR task claim: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext($1))`, "fchat:ocr:"+provider); err != nil {
+	if _, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext($1))`, "effchat:ocr:"+provider); err != nil {
 		return nil, fmt.Errorf("lock OCR task claim: %w", err)
 	}
 	var active int

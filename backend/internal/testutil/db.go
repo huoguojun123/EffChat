@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	isolationDatabasePrefix     = "fchat_test_isolated_"
-	isolationDatabaseLock       = int64(0x4643484154544553)
+	isolationDatabasePrefix     = "effchat_test_isolated_"
+	isolationDatabaseLock       = int64(0x4546464348415453)
 	isolationDatabaseTTL        = 5 * time.Second
 	isolationDatabaseLockTTL    = 30 * time.Second
 	isolationDatabaseCloneTTL   = 10 * time.Second
@@ -31,10 +31,10 @@ func OpenPostgresTestDB(t testing.TB) *sql.DB {
 
 	dsn := postgresTestDSN()
 	if dsn == "" {
-		t.Skip("set FCHAT_TEST_DATABASE_DSN to run PostgreSQL integration tests")
+		t.Skip("set EFFCHAT_TEST_DATABASE_DSN to run PostgreSQL integration tests")
 	}
-	if os.Getenv("FCHAT_ALLOW_DESTRUCTIVE_TESTS") != "1" {
-		t.Fatalf("set FCHAT_ALLOW_DESTRUCTIVE_TESTS=1 to enable PostgreSQL integration tests")
+	if os.Getenv("EFFCHAT_ALLOW_DESTRUCTIVE_TESTS") != "1" {
+		t.Fatalf("set EFFCHAT_ALLOW_DESTRUCTIVE_TESTS=1 to enable PostgreSQL integration tests")
 	}
 	if err := validateTestDSN(dsn); err != nil {
 		t.Fatalf("unsafe PostgreSQL test DSN: %v", err)
@@ -327,7 +327,7 @@ func parsePostgresTestURL(dsn string) (*url.URL, string, error) {
 }
 
 func postgresTestDSN() string {
-	for _, key := range []string{"FCHAT_TEST_DATABASE_DSN", "TEST_DATABASE_DSN"} {
+	for _, key := range []string{"EFFCHAT_TEST_DATABASE_DSN", "TEST_DATABASE_DSN"} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			return value
 		}

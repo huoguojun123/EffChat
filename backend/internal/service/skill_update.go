@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/model"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 const skillEntryPreviewRunes = 3200

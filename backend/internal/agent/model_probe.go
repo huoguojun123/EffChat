@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 )
 
 // ModelProbeResult 是后台“模型连通性探测”的最小结果。

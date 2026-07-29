@@ -1,8 +1,8 @@
 FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
 
-ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
-ARG GOPROXY=https://goproxy.cn,direct
-ARG GOSUMDB=sum.golang.google.cn
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG GOSUMDB=sum.golang.org
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG BUILD_REF=unknown
@@ -14,18 +14,18 @@ WORKDIR /src
 RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" /etc/apk/repositories \
   && apk add --no-cache ca-certificates git
 
-COPY go.mod go.sum ./
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
-COPY . .
+COPY backend/ .
 # -mod=readonly 要求 go.mod/go.sum 已经完整锁定依赖版本。
 # 构建时如果源码引入了新依赖但没有先显式更新依赖锁文件，Go 会直接失败，
 # 避免 Docker 构建阶段偷偷改动依赖图，保证发布镜像和 Git 中记录的版本一致。
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -trimpath -ldflags="-s -w -X github.com/huoguojun123/effchat/pkg/config.BuildRef=${BUILD_REF}" -o /out/effchat-server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -trimpath -ldflags="-s -w -X github.com/huoguojun123/EffChat/pkg/config.BuildRef=${BUILD_REF}" -o /out/effchat-server ./cmd/server
 
 FROM alpine:3.22
 
-ARG ALPINE_MIRROR=https://mirrors.aliyun.com/alpine
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 
 RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" /etc/apk/repositories \
   && apk add --no-cache ca-certificates tzdata wget su-exec git \
@@ -35,7 +35,8 @@ RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" /etc/apk
 WORKDIR /app
 
 COPY --from=builder /out/effchat-server /app/effchat-server
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/effchat/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
   && mkdir -p /app/storage/attachments/originals \
     /app/storage/attachments/extracted \

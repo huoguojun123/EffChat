@@ -3,7 +3,7 @@ package modelbank
 import (
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // TestLoadModels_OverridesBuiltins 验证 DB 记录能覆盖内置默认，且能力字段正确映射。

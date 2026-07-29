@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
 )
 
 func uploadTestPNG(t *testing.T) []byte {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func setupChatRunAdmission(t *testing.T, name string) (*QuotaRepository, *MessageRepository, int64, *model.Session) {

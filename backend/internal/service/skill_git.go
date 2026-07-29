@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/netpolicy"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/netpolicy"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 var gitRefPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,120}$`)
@@ -48,7 +48,7 @@ func scanGitRef(ctx context.Context, repoURL, ref string, selectedFiles map[stri
 	if err := validateGitURL(ctx, repoURL); err != nil {
 		return nil, skillparser.ImportReport{}, err
 	}
-	tmp, err := os.MkdirTemp("", "fchat-skill-import-*")
+	tmp, err := os.MkdirTemp("", "effchat-skill-import-*")
 	if err != nil {
 		return nil, skillparser.ImportReport{}, err
 	}

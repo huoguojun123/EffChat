@@ -48,7 +48,7 @@ cd backend/migrations
 1. 当前 shell 已导出的环境变量。
 2. `backend/.env`。
 3. 仓库根目录 `.env`。
-4. 默认值：`localhost:5432 / postgres / 123456 / fchat / sslmode=disable`。
+4. 本地连接示例：`localhost:5432 / effchat / <your-password> / effchat / sslmode=disable`。
 
 支持的变量：
 
@@ -62,7 +62,7 @@ cd backend/migrations
 本地重建数据库需要显式确认：
 
 ```bash
-CONFIRM_RESET=DELETE_FCHAT_DB ./init_db.sh reset
+CONFIRM_RESET=DELETE_EFFCHAT_DB ./init_db.sh reset
 ```
 
 `reset` 会删除整个 `DB_NAME` 数据库，只适合本地开发重建。普通升级不会删除用户、会话、消息、文件、Skills、字体等真实数据。
@@ -72,8 +72,8 @@ CONFIRM_RESET=DELETE_FCHAT_DB ./init_db.sh reset
 全新库可以直接执行 schema 快照：
 
 ```bash
-createdb -h localhost -U postgres fchat
-psql -h localhost -U postgres -d fchat -f init.sql
+createdb -h localhost -U postgres effchat
+psql -h localhost -U postgres -d effchat -f init.sql
 ```
 
 如果要模拟生产升级，请执行 production 链并记录 `schema_migrations`，不要手动挑选顶层历史迁移。

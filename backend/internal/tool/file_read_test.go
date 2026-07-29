@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type fakeFileReadStore struct {

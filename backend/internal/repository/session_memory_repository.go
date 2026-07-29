@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
 
 var (

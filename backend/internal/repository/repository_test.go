@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func setupTestDB(t *testing.T) *sql.DB {
@@ -21,7 +21,7 @@ func createRepositoryTestUser(t *testing.T, db *sql.DB, name string) int64 {
 
 	repo := NewUserRepository(db)
 	user := &model.User{
-		Username:     fmt.Sprintf("repo_%s_%d", name, time.Now().UnixNano()),
+		Username:     fmt.Sprintf("repo_%s_%x", name, time.Now().UnixNano()),
 		PasswordHash: "hashed_password",
 		Role:         "user",
 		IsActive:     true,

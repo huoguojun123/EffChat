@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 func ListToolConfigsHandler(toolConfigService *service.ToolConfigService) gin.HandlerFunc {

@@ -10,7 +10,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "prompt",
-      includeAssets: ["favicon.svg", "icons.svg", "theme-init.js"],
+      includeAssets: ["favicon.svg", "theme-init.js"],
       manifest: {
         name: "EffChat",
         short_name: "EffChat",
@@ -47,7 +47,6 @@ export default defineConfig({
           "index.html",
           "manifest.webmanifest",
           "favicon.svg",
-          "icons.svg",
           "pwa-*.png",
           "assets/index-*.js",
           "assets/index-*.css",

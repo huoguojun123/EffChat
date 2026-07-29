@@ -3,7 +3,7 @@ package modelbank
 import (
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // thinking format 是“运行时请求字段”的归一化层，不是 UI 标签层。

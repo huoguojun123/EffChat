@@ -9,7 +9,7 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
 
 type memoryMaintenanceStreamModel struct {
@@ -411,7 +411,7 @@ func TestGenerateMemoryMaintenanceTextReturnsStreamError(t *testing.T) {
 }
 
 func TestValidateMemoryMaintenanceUpdate(t *testing.T) {
-	before := "## User Preferences\n- 默认中文沟通。\n\n## Project Context\n- FChat 是个人 AI workbench。"
+	before := "## User Preferences\n- 默认中文沟通。\n\n## Project Context\n- EffChat 是个人 AI workbench。"
 	if err := validateMemoryMaintenanceUpdate(before, "", false); err == nil {
 		t.Fatal("expected empty update to be rejected")
 	}

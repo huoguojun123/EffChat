@@ -7,9 +7,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/service"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/service"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 func ListSkillsHandler(skillService *service.SkillService) gin.HandlerFunc {

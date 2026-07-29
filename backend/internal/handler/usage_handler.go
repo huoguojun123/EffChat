@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/usage"
 )
 
 func AdminUsageHandler(usageService *usage.Service) gin.HandlerFunc {

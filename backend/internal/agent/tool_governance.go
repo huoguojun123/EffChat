@@ -14,8 +14,8 @@ import (
 
 	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 var sensitiveToolDiagnosticPattern = regexp.MustCompile(`(?i)(api[_-]?key|authorization|bearer|access[_-]?token|password|secret)(\s*[:=]?\s*)[^\s,;]+`)

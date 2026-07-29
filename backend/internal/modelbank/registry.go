@@ -3,7 +3,7 @@ package modelbank
 import (
 	"sync"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // registry 内置模型能力表

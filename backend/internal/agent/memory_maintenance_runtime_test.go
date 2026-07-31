@@ -14,7 +14,9 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	"github.com/huoguojun123/EffChat/internal/testutil"
@@ -78,7 +80,7 @@ func TestMemoryMaintenanceModelStreamsAfterSetupCancellationAndClonesRequest(t *
 		SessionID:    chatReq.SessionID,
 		UserID:       chatReq.UserID,
 		ModelRequest: chatReq,
-	})
+	}, sessionmemory.DefaultLimits())
 	if err != nil {
 		cancelSetup()
 		t.Fatalf("buildMemoryMaintenanceModel() error = %v", err)
@@ -112,8 +114,71 @@ func TestMemoryMaintenanceModelStreamsAfterSetupCancellationAndClonesRequest(t *
 	if maxTokens == 0 {
 		maxTokens, _ = providerRequest["max_completion_tokens"].(float64)
 	}
-	if int(maxTokens) != memoryMaintenanceMaxOutputTokens {
-		t.Fatalf("memory output limit = %v, want %d", maxTokens, memoryMaintenanceMaxOutputTokens)
+	wantOutputBudget := memoryMaintenanceOutputTokenBudget(sessionmemory.DefaultLimits())
+	if int(maxTokens) != wantOutputBudget {
+		t.Fatalf("memory output limit = %v, want %d", maxTokens, wantOutputBudget)
+	}
+}
+
+func TestMemoryMaintenanceGPT56KeepsCompletionFieldWhileSuppressingThinking(t *testing.T) {
+	requestBody := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requestBody <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-memory-gpt56\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6-terra\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"{\\\"action\\\":\\\"none\\\"}\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	chatReq := &ChatRequest{
+		ModelID:         "gpt-5.6-terra",
+		Provider:        "openai",
+		ModelMaxOutput:  128000,
+		RuntimeResolved: true,
+		Reasoning:       true,
+		ThinkingFormat:  string(modelbank.ThinkingFormatOpenAIGPT56),
+		ThinkingEffort:  string(modelbank.ThinkingEffortHigh),
+		RuntimeChannel: &model.AIChannel{
+			Key:     "openai",
+			Adapter: service.AdapterOpenAICompatible,
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	}
+	agent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	limits := sessionmemory.NormalizeLimits(8000, 0)
+	chatModel, _, _, err := agent.buildMemoryMaintenanceModel(t.Context(), MemoryMaintenanceRequest{
+		SessionID:    22,
+		UserID:       11,
+		ModelRequest: chatReq,
+	}, limits)
+	if err != nil {
+		t.Fatalf("build memory model: %v", err)
+	}
+	if _, err := generateMemoryMaintenanceText(t.Context(), chatModel, nil); err != nil {
+		t.Fatalf("generate memory output: %v", err)
+	}
+
+	var providerRequest map[string]interface{}
+	select {
+	case body := <-requestBody:
+		if err := json.Unmarshal(body, &providerRequest); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("memory provider request was not captured")
+	}
+	wantBudget := memoryMaintenanceOutputTokenBudget(limits)
+	if got, _ := providerRequest["max_completion_tokens"].(float64); int(got) != wantBudget {
+		t.Fatalf("max_completion_tokens = %v, want %d", got, wantBudget)
+	}
+	if _, ok := providerRequest["max_tokens"]; ok {
+		t.Fatalf("GPT-5.6 utility request used max_tokens: %v", providerRequest)
+	}
+	if _, ok := providerRequest["reasoning_effort"]; ok {
+		t.Fatalf("memory request leaked reasoning_effort: %v", providerRequest)
 	}
 }
 
@@ -217,7 +282,7 @@ func TestMemoryMaintenanceControlStagesHonorShorterParentDeadline(t *testing.T) 
 				ModelID:  "memory-blocked-test",
 				Provider: "blocked-provider",
 			},
-		})
+		}, sessionmemory.DefaultLimits())
 		return err
 	})
 }

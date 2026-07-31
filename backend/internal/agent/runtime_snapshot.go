@@ -154,6 +154,9 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	currentReq.RuntimeSearchConfigState = service.SearchRuntimeConfigState{}
 	current, err := a.captureAcceptedRuntimeSnapshot(ctx, &currentReq)
 	if err != nil {
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return ctxErr
+		}
 		return runtimeDependencyChangedError()
 	}
 	if current.Checksum != expected.Checksum {
@@ -196,6 +199,9 @@ func ParseAcceptedRuntimeSnapshot(raw json.RawMessage) (*AcceptedRuntimeSnapshot
 }
 
 func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *ChatRequest) (*AcceptedRuntimeSnapshot, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
+	}
 	if a == nil || req == nil {
 		return nil, fmt.Errorf("runtime snapshot is unavailable")
 	}
@@ -203,11 +209,14 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	if modelInfo == nil || !modelInfo.Enabled || strings.TrimSpace(modelInfo.Provider) != strings.TrimSpace(req.Provider) {
 		return nil, fmt.Errorf("accepted model is no longer available")
 	}
-	channel, err := a.channelService.ResolveAIChannel(req.Provider)
+	channel, err := a.channelService.ResolveAIChannelContext(ctx, req.Provider)
 	if err != nil {
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("accepted channel is no longer available: %w", err)
 	}
-	templateText, err := loadPromptTemplate(a.configRepo)
+	templateText, err := loadPromptTemplateContext(ctx, a.configRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -247,18 +256,21 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 		PreferModelNativeSearch: req.PreferModelNativeSearch, MemoryEnabled: req.MemoryEnabled,
 	}
 
-	memory, memoryState := a.readRuntimeMemory(ctx, req.SessionID, req.MemoryEnabled)
-	toolRuntime, toolRuntimeState := a.resolveToolRuntimeConfigWithState()
-	searchRuntime, searchRuntimeState := a.resolveSearchRuntimeConfigWithState()
-	configMaterial := runtimeConfigMaterial{
-		CompressionContextThreshold: a.compressionContextThreshold(),
-		ExtractSummaryEnabled:       true,
-		ExtractSummaryModel:         "claude-haiku-4-5",
-		MemoryMaxChars:              a.memoryLimits().MaxChars,
+	memory, memoryState, err := a.readRuntimeMemoryContext(ctx, req.SessionID, req.MemoryEnabled)
+	if err != nil {
+		return nil, err
 	}
-	if a.configRepo != nil {
-		configMaterial.ExtractSummaryEnabled = a.configRepo.GetBool("extract_summary_enabled", true)
-		configMaterial.ExtractSummaryModel = a.configRepo.GetString("extract_summary_model", configMaterial.ExtractSummaryModel)
+	toolRuntime, toolRuntimeState, err := a.resolveToolRuntimeConfigWithStateContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	searchRuntime, searchRuntimeState, err := a.resolveSearchRuntimeConfigWithStateContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	configMaterial, err := a.runtimeConfigMaterialContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	req.PromptTime = capturedAt
@@ -320,20 +332,31 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 }
 
 func (a *EinoAgent) readRuntimeMemory(ctx context.Context, sessionID int64, enabled bool) (string, service.RuntimeConfigState) {
+	value, state, _ := a.readRuntimeMemoryContext(ctx, sessionID, enabled)
+	return value, state
+}
+
+func (a *EinoAgent) readRuntimeMemoryContext(ctx context.Context, sessionID int64, enabled bool) (string, service.RuntimeConfigState, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return "", service.RuntimeConfigState{}, cause
+	}
 	if !enabled {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateDisabled, Cause: "session_disabled", Version: "disabled"}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateDisabled, Cause: "session_disabled", Version: "disabled"}, nil
 	}
 	if a == nil || a.memoryRepo == nil || sessionID <= 0 {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}, nil
 	}
 	value, updatedAt, err := a.memoryRepo.GetWithUpdatedAt(ctx, sessionID)
 	if err != nil {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return "", service.RuntimeConfigState{}, ctxErr
+		}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}, nil
 	}
 	if updatedAt.IsZero() {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateUnconfigured, Cause: "empty_memory", Version: "empty"}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateUnconfigured, Cause: "empty_memory", Version: "empty"}, nil
 	}
-	return value, service.RuntimeConfigState{State: service.RuntimeStateReady, Version: updatedAt.UTC().Format(time.RFC3339Nano)}
+	return value, service.RuntimeConfigState{State: service.RuntimeStateReady, Version: updatedAt.UTC().Format(time.RFC3339Nano)}, nil
 }
 
 func runtimeSkillRefs(skills []SkillInstruction) ([]RuntimeDependencyRef, string) {

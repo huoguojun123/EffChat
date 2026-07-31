@@ -139,6 +139,129 @@ func TestReadRuntimeMemoryReportsRepositoryUnavailable(t *testing.T) {
 	if memory != "" || state.State != service.RuntimeStateUnavailable || state.Cause != "repository_unavailable" {
 		t.Fatalf("memory=%q state=%+v", memory, state)
 	}
+	if _, _, err := agent.readRuntimeMemoryContext(context.Background(), 1, true); err != nil {
+		t.Fatalf("ordinary unavailable repository error = %v", err)
+	}
+}
+
+func TestRuntimeSnapshotContextDependenciesSurfaceDeadline(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	blocker, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("hold database connection: %v", err)
+	}
+	defer blocker.Close()
+	releaseFallback := time.AfterFunc(2*time.Second, func() { _ = blocker.Close() })
+	defer releaseFallback.Stop()
+
+	configRepo := repository.NewConfigRepository(db)
+	agent := NewEinoAgent(
+		service.NewChannelService(repository.NewChannelRepository(db)),
+		service.NewToolConfigService(repository.NewToolConfigRepository(db)),
+		64000,
+		configRepo,
+		repository.NewSessionMemoryRepository(db),
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	tests := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{
+			name: "prompt",
+			run: func(ctx context.Context) error {
+				_, err := loadPromptTemplateContext(ctx, configRepo)
+				return err
+			},
+		},
+		{
+			name: "memory",
+			run: func(ctx context.Context) error {
+				_, _, err := agent.readRuntimeMemoryContext(ctx, 1, true)
+				return err
+			},
+		},
+		{
+			name: "tool runtime",
+			run: func(ctx context.Context) error {
+				_, _, err := agent.resolveToolRuntimeConfigWithStateContext(ctx)
+				return err
+			},
+		},
+		{
+			name: "search runtime",
+			run: func(ctx context.Context) error {
+				_, _, err := agent.resolveSearchRuntimeConfigWithStateContext(ctx)
+				return err
+			},
+		},
+		{
+			name: "config material",
+			run: func(ctx context.Context) error {
+				_, err := agent.runtimeConfigMaterialContext(ctx)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			if err := test.run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptedRuntimeSnapshotPreservesContextCancellation(t *testing.T) {
+	raw, err := json.Marshal(AcceptedRuntimeSnapshot{
+		Version:  acceptedRuntimeSnapshotVersion,
+		ModelID:  "context-model",
+		Provider: "context-provider",
+		Checksum: "sha256:accepted",
+	})
+	if err != nil {
+		t.Fatalf("marshal accepted snapshot: %v", err)
+	}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := fmt.Errorf("accepted snapshot validation canceled: %w", context.Canceled)
+	cancel(cause)
+	err = (&EinoAgent{}).ValidateAcceptedRuntimeSnapshot(ctx, &ChatRequest{
+		ModelID:  "context-model",
+		Provider: "context-provider",
+	}, raw)
+	if err != cause {
+		t.Fatalf("validate error = %v, want original cause %v", err, cause)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("validate error = %v, want context.Canceled", err)
+	}
+	var runtimeErr *RuntimeError
+	if errors.As(err, &runtimeErr) {
+		t.Fatalf("context cancellation was rewritten as runtime error: %v", runtimeErr)
+	}
+}
+
+func TestCaptureAcceptedRuntimeSnapshotPreservesContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := fmt.Errorf("accepted snapshot capture canceled: %w", context.Canceled)
+	cancel(cause)
+
+	_, err := (&EinoAgent{}).CaptureAcceptedRuntimeSnapshot(ctx, &ChatRequest{})
+	if err != cause {
+		t.Fatalf("capture error = %v, want original cause %v", err, cause)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("capture error = %v, want context.Canceled", err)
+	}
 }
 
 func TestRuntimeContextPlanDoesNotMountUnavailableMemory(t *testing.T) {

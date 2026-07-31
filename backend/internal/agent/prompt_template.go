@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,12 +39,22 @@ type PromptTemplateData struct {
 }
 
 func loadPromptTemplate(configRepo *repository.ConfigRepository) (string, error) {
+	return loadPromptTemplateContext(context.Background(), configRepo)
+}
+
+func loadPromptTemplateContext(ctx context.Context, configRepo *repository.ConfigRepository) (string, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return "", cause
+	}
 	templateText := defaultSystemPromptTemplate()
 	if configRepo == nil {
 		return templateText, nil
 	}
-	item, err := configRepo.Get("system_prompt_template")
+	item, err := configRepo.GetContext(ctx, "system_prompt_template")
 	if err != nil {
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return "", ctxErr
+		}
 		if errors.Is(err, repository.ErrNotFound) {
 			return templateText, nil
 		}

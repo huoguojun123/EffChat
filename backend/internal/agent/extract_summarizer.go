@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	internaltool "github.com/huoguojun123/EffChat/internal/tool"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
@@ -22,7 +24,18 @@ type extractSummarizer struct {
 	provider       string
 	modelID        string
 	runtimeVersion string
+	refinementOnce sync.Once
+	refinementSlot chan struct{}
+	refinementMu   sync.Mutex
+	refinementDown bool
 }
+
+const (
+	extractSummaryFirstOutputTimeout = 15 * time.Second
+	extractSummaryControlTimeout     = 5 * time.Second
+	extractSummaryMaxConcurrency     = 2
+	extractSummaryMaxTokens          = 4096
+)
 
 const extractSummaryInstruction = `You are the small summarization model behind the web_extract tool. Your output becomes a tool result for the main assistant and may be reused in later turns as session web evidence.
 
@@ -41,23 +54,52 @@ Rules:
 - Keep the result proportional to the evidence required by the requested detail. Do not trade away material qualifications, exceptions, comparisons, or procedural conditions merely to be shorter.`
 
 // Summarize 单次调用小模型提炼正文。goal 为模型自述的提取目标（可空），
-// title 为页面标题。15s 超时；空结果返回 error，由工具据此降级到截断。
+// title 为页面标题。15s 只约束首个有效输出；流一旦开始，就完整收取到 EOF，
+// 除非用户停止、服务关闭或上游传输真实失败。空结果由工具降级到原文截断。
 func (s *extractSummarizer) Summarize(ctx context.Context, goal, title, content, detail string) (string, error) {
 	if s == nil || s.chatModel == nil {
 		return "", internaltool.NewRefinementError(internaltool.RefinementUnavailable)
 	}
+	if err := s.acquireRefinement(ctx); err != nil {
+		return "", err
+	}
+	slotHeld := true
+	releaseSlot := func() {
+		if !slotHeld {
+			return
+		}
+		s.releaseRefinement()
+		slotHeld = false
+	}
+	defer releaseSlot()
+	if cause := context.Cause(ctx); cause != nil {
+		return "", cause
+	}
+	// One summarizer is shared by every web_extract call in a single Agent run.
+	// Re-check after waiting so one real upstream failure prevents the rest of
+	// the same batch from stampeding a model already known to be unavailable.
+	// Two calls may already be in flight; the mutex protects the breaker without
+	// canceling those accepted calls when either one reports a provider failure.
+	if s.refinementUnavailable() {
+		return "", internaltool.NewRefinementError(internaltool.RefinementCooldown)
+	}
+
 	meta := modelusage.MetaFromContext(ctx)
 	if s.taskRuns != nil && meta.UserID > 0 && meta.SessionID > 0 {
-		cooling, err := s.taskRuns.LatestCooldown(ctx, meta.SessionID, meta.UserID, repository.ModelTaskToolExtractSummary, repository.ModelTaskSourceTool, time.Now())
+		controlCtx, controlCancel := extractSummaryControlContext(ctx)
+		cooling, err := s.taskRuns.LatestCooldown(controlCtx, meta.SessionID, meta.UserID, repository.ModelTaskToolExtractSummary, repository.ModelTaskSourceTool, time.Now())
+		controlCancel()
 		if err != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return "", cause
+			}
 			return "", internaltool.NewRefinementError(internaltool.RefinementUnavailable)
 		}
 		if cooling != nil && (s.runtimeVersion == "" || cooling.TargetID == s.runtimeVersion) {
 			return "", internaltool.NewRefinementError(internaltool.RefinementCooldown)
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+
 	started := time.Now()
 	ctx = modelusage.WithMeta(ctx, modelusage.Meta{Kind: modelusage.KindToolChain})
 
@@ -84,20 +126,61 @@ func (s *extractSummarizer) Summarize(ctx context.Context, goal, title, content,
 		{Role: schema.User, Content: b.String()},
 	}
 
-	resp, err := s.chatModel.Generate(ctx, messages)
+	resp, err := modelstream.Collect(ctx, s.chatModel, messages, extractSummaryFirstOutputTimeout)
 	if err != nil {
-		err = fmt.Errorf("extract summary generation failed: %w", err)
+		err = fmt.Errorf("extract summary stream failed: %w", err)
+		s.markRefinementUnavailable(ctx)
+		// Durable observability must never occupy a scarce provider slot. This
+		// lets queued pages proceed (or observe the opened breaker) even if the
+		// task-run table is temporarily blocked.
+		releaseSlot()
 		s.recordTaskRun(ctx, started, repository.ModelTaskStatusFailed, err)
 		return "", err
 	}
 	summary := strings.TrimSpace(resp.Content)
 	if summary == "" {
 		err = fmt.Errorf("extract summary empty")
+		s.markRefinementUnavailable(ctx)
+		releaseSlot()
 		s.recordTaskRun(ctx, started, repository.ModelTaskStatusFailed, err)
 		return "", err
 	}
+	releaseSlot()
 	s.recordTaskRun(ctx, started, repository.ModelTaskStatusSuccess, nil)
 	return summary, nil
+}
+
+func (s *extractSummarizer) acquireRefinement(ctx context.Context) error {
+	s.refinementOnce.Do(func() {
+		s.refinementSlot = make(chan struct{}, extractSummaryMaxConcurrency)
+	})
+	select {
+	case s.refinementSlot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (s *extractSummarizer) releaseRefinement() {
+	<-s.refinementSlot
+}
+
+func (s *extractSummarizer) refinementUnavailable() bool {
+	s.refinementMu.Lock()
+	defer s.refinementMu.Unlock()
+	return s.refinementDown
+}
+
+func (s *extractSummarizer) markRefinementUnavailable(ctx context.Context) {
+	// User stop, server drain, and other semantic cancellation say nothing
+	// about provider health, so a canceled caller must not poison its batch.
+	if ctx.Err() != nil {
+		return
+	}
+	s.refinementMu.Lock()
+	s.refinementDown = true
+	s.refinementMu.Unlock()
 }
 
 func (s *extractSummarizer) recordTaskRun(ctx context.Context, started time.Time, status string, err error) {
@@ -112,8 +195,13 @@ func (s *extractSummarizer) recordTaskRun(ctx context.Context, started time.Time
 	if err != nil {
 		errorType = modelusage.ErrorType(err)
 		errorMessage = extractSummaryErrorMessage(errorType)
-		t := time.Now().Add(30 * time.Minute)
-		retryAfter = &t
+		// Semantic cancellation is recorded for observability but must not
+		// create a session-wide provider cooldown: user stop and service drain
+		// are not evidence that the refinement model is unhealthy.
+		if ctx.Err() == nil {
+			t := time.Now().Add(30 * time.Minute)
+			retryAfter = &t
+		}
 	}
 	_, _ = s.taskRuns.Record(recordCtx, repository.RecordModelTaskRunInput{
 		TaskKey:      repository.ModelTaskToolExtractSummary,
@@ -136,6 +224,8 @@ func (s *extractSummarizer) recordTaskRun(ctx context.Context, started time.Time
 
 func extractSummaryErrorMessage(errorType string) string {
 	switch errorType {
+	case "first_output_timeout":
+		return "网页内容提炼等待首个输出超时"
 	case "timeout":
 		return "网页内容提炼超时"
 	case "canceled":
@@ -143,4 +233,14 @@ func extractSummaryErrorMessage(errorType string) string {
 	default:
 		return "网页内容提炼失败"
 	}
+}
+
+// extractSummaryControlContext bounds the persistent cooldown lookup without
+// imposing a total deadline on the provider stream. A shorter caller deadline
+// still wins, so user stop and service drain propagate immediately.
+func extractSummaryControlContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, extractSummaryControlTimeout)
 }

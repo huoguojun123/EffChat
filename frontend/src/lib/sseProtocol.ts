@@ -139,6 +139,16 @@ export async function consumeCompactionSSE(response: Response): Promise<"complet
   return outcome
 }
 
+export async function consumeMemoryMaintenanceSSE(response: Response): Promise<void> {
+  let completed = false
+  await readSSEEvents(response, (event, data) => {
+    if (event === "memory_maintenance_complete") completed = true
+    else if (event === "memory_maintenance_canceled") throw new Error("记忆维护已取消")
+    else if (event === "error") throw new Error(formatCompactionError(data).replace("压缩", "记忆维护"))
+  })
+  if (!completed) throw new Error("记忆维护结果未确认，请重试")
+}
+
 export function parseUsage(value: unknown) {
   if (!value || typeof value !== "object") return undefined
   const usage = value as Record<string, unknown>

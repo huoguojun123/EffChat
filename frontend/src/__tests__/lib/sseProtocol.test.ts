@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { consumeCompactionSSE, createStreamHTTPError, formatErrorDiagnostic, parseUsage, readSSEEvents, trimTrailingCodePoints } from "@/lib/sseProtocol"
+import { consumeCompactionSSE, consumeMemoryMaintenanceSSE, createStreamHTTPError, formatErrorDiagnostic, parseUsage, readSSEEvents, trimTrailingCodePoints } from "@/lib/sseProtocol"
 
 function streamedResponse(chunks: Uint8Array[]) {
   return new Response(new ReadableStream({
@@ -70,5 +70,13 @@ describe("SSE protocol helpers", () => {
 
     const missing = streamedResponse([new TextEncoder().encode("event: ping\ndata: {}\n\n")])
     await expect(consumeCompactionSSE(missing)).rejects.toThrow("压缩结果未确认")
+  })
+
+  it("requires an explicit memory maintenance terminal event", async () => {
+    const complete = streamedResponse([new TextEncoder().encode("event: memory_maintenance_complete\ndata: {\"updated\":true}\n\n")])
+    await expect(consumeMemoryMaintenanceSSE(complete)).resolves.toBeUndefined()
+
+    const missing = streamedResponse([new TextEncoder().encode("event: memory_maintenance_start\ndata: {}\n\n")])
+    await expect(consumeMemoryMaintenanceSSE(missing)).rejects.toThrow("记忆维护结果未确认")
   })
 })

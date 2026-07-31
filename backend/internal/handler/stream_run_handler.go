@@ -467,12 +467,20 @@ func executeAgentRun(exec agentRunExecution) {
 		})
 		return
 	}
-	// Cancel only the setup child. The durable parent remains armed for first
-	// model output and owns StreamChat plus all later persistence.
-	if finishRunSetup(nil, nil, runHub, runSnapshot.RunID, runContext, setupCancel) {
+	preparedChat, prepareErr := einoAgent.PrepareChat(setupContext, agentReq, writer)
+	if prepareErr != nil {
+		// Setup interruption classification is valid only while PrepareChat owns
+		// the bounded child. Ordinary preparation errors continue through the
+		// existing agent error persistence path below.
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
+			return
+		}
+		setupCancel()
+	} else if finishRunSetup(nil, nil, runHub, runSnapshot.RunID, runContext, setupCancel) {
 		return
 	}
-
+	// Cancel only the setup child. The durable parent remains armed for first
+	// model output and owns RunPreparedChat plus all later persistence.
 	ctx := modelusage.WithMeta(runContext, modelusage.Meta{
 		UserID:    userID,
 		SessionID: sessionID,
@@ -480,7 +488,11 @@ func executeAgentRun(exec agentRunExecution) {
 		RunID:     runSnapshot.RunID,
 		Kind:      usageKind,
 	})
-	resp, err := einoAgent.StreamChat(ctx, agentReq, writer)
+	var resp *agent.ChatResponse
+	err = prepareErr
+	if err == nil {
+		resp, err = einoAgent.RunPreparedChat(ctx, preparedChat)
+	}
 	cancelCause := effectiveRunCancelCause(runHub, runSnapshot.RunID, ctx)
 	if resp != nil && resp.Canceled && cancelCause == "" {
 		cancelCause = service.RunCancelUpstream

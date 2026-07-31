@@ -192,15 +192,45 @@ type Usage struct {
 	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 }
 
-// StreamChat 流式对话（使用 Eino ADK）
+// PreparedChatRun owns only immutable setup output. In particular it must not
+// retain the bounded setup context: the durable run context exclusively owns
+// Runner execution, provider streaming, tools, retries, and cancellation.
 //
-// 事件循环按 ADK 的真实行为消费 AsyncIterator：
-//   - assistant 事件：流式逐帧发 content_delta / thinking_delta，拼接还原完整消息
-//   - tool 事件：发 tool_call_result，不混入助手正文
-//   - 迭代结束：iter.Next() 返回 ok=false
-//
-// 运行事件写入独立于客户端连接，后端会继续跑完并返回完整消息供持久化。
+// Fields remain private so only EinoAgent can execute or mutate the prepared
+// plan; handlers may carry the opaque value across the setup boundary.
+type PreparedChatRun struct {
+	agent     *adk.ChatModelAgent
+	messages  []*schema.Message
+	writer    streaming.EventWriter
+	provider  string
+	modelID   string
+	startedAt time.Time
+}
+
+// StreamChat keeps the historical single-context API for utility callers.
+// Durable RunHub execution uses PrepareChat followed by RunPreparedChat so its
+// bounded setup child cannot leak into provider streaming.
 func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer streaming.EventWriter) (*ChatResponse, error) {
+	prepared, err := a.PrepareChat(ctx, req, writer)
+	if err != nil {
+		return nil, err
+	}
+	return a.RunPreparedChat(ctx, prepared)
+}
+
+// PrepareChat resolves and constructs everything required before model
+// execution. The caller may cancel setupCtx as soon as this method succeeds;
+// no returned value retains it.
+func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writer streaming.EventWriter) (*PreparedChatRun, error) {
+	if setupCtx == nil {
+		return nil, errors.New("chat setup context is required")
+	}
+	if req == nil {
+		return nil, errors.New("chat request is required")
+	}
+	if writer == nil {
+		return nil, errors.New("chat event writer is required")
+	}
 	startedAt := time.Now()
 	plan := a.buildRuntimeContextPlan(req)
 	toolRuntime := plan.toolRuntime
@@ -208,7 +238,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 	searchRuntime := plan.searchRuntime
 
 	// 2. 根据 provider 创建对应的 ChatModel（按搜索决策挂载原生搜索能力）
-	chatModel, err := a.buildChatModel(ctx, req, searchDecision)
+	chatModel, err := a.buildChatModel(setupCtx, req, searchDecision)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +304,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		if toolRuntime.IsEnabled("web_extract") {
 			// 网页提炼：默认用独立小模型把抓取正文按 goal 提炼成要点（仿 Claude Code），
 			// 避免整页正文塞满上下文。配置关闭或小模型构造失败时降级到截断（工具内默认 4000）。
-			summarizer, summaryEnabled := a.buildExtractSummarizer(ctx)
+			summarizer, summaryEnabled := a.buildExtractSummarizer(setupCtx)
 			webExtractTool := tool.NewWebExtractTool(tool.WebExtractConfig{
 				CrawlerImpl:      searchRuntime.CrawlerImpl,
 				CrawlerProviders: searchRuntime.CrawlerProviders,
@@ -296,7 +326,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 
 	mountedTools := make(map[string]bool, len(tools))
 	for _, mountedTool := range tools {
-		info, err := mountedTool.Info(ctx)
+		info, err := mountedTool.Info(setupCtx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to inspect mounted tool: %w", err)
 		}
@@ -362,7 +392,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		agentConfig.Handlers = append(agentConfig.Handlers, toolBudget)
 	}
 
-	agent, err := adk.NewChatModelAgent(ctx, agentConfig)
+	agent, err := adk.NewChatModelAgent(setupCtx, agentConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent: %w", err)
 	}
@@ -377,17 +407,38 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		return nil, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
+	return &PreparedChatRun{
+		agent:     agent,
+		messages:  einoMessages,
+		writer:    writer,
+		provider:  req.Provider,
+		modelID:   req.ModelID,
+		startedAt: startedAt,
+	}, nil
+}
+
+// RunPreparedChat executes a successfully prepared chat with the durable run
+// context. Runner construction intentionally lives here because Eino lazily
+// builds its execution graph on the first Run call.
+func (a *EinoAgent) RunPreparedChat(runCtx context.Context, prepared *PreparedChatRun) (*ChatResponse, error) {
+	if runCtx == nil {
+		return nil, errors.New("durable run context is required")
+	}
+	if prepared == nil || prepared.agent == nil {
+		return nil, errors.New("prepared chat run is required")
+	}
+
 	// 6. 创建 Runner 并执行
 	// 必须显式开启 EnableStreaming，否则 ADK 默认走非流式 Invoke/Generate，
 	// 上游 OpenAI 兼容网关会收到非流式请求，前端也只能在 message_complete 时整块拿到内容。
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		Agent:           agent,
+	runner := adk.NewRunner(runCtx, adk.RunnerConfig{
+		Agent:           prepared.agent,
 		EnableStreaming: true,
 	})
-	iter := runner.Run(ctx, einoMessages)
+	iter := runner.Run(runCtx, prepared.messages)
 
 	emit := func(event string, data interface{}) error {
-		_ = writer.WriteEvent(event, data)
+		_ = prepared.writer.WriteEvent(event, data)
 		return nil
 	}
 
@@ -409,12 +460,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 			if errors.As(event.Err, &willRetry) {
 				continue
 			}
-			if service.RunCancelCauseFromContext(ctx) != "" && ctx.Err() != nil {
+			if service.RunCancelCauseFromContext(runCtx) != "" && runCtx.Err() != nil {
 				canceled = true
 				finishReason = "canceled"
 				break
 			}
-			return partialChatResponse(produced, interruptedFinishReason(finishReason), usage), sanitizeModelRuntimeError(req.Provider, req.ModelID, event.Err)
+			return partialChatResponse(produced, interruptedFinishReason(finishReason), usage), sanitizeModelRuntimeError(prepared.provider, prepared.modelID, event.Err)
 		}
 
 		if event.Output == nil || event.Output.MessageOutput == nil {
@@ -439,12 +490,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		}
 
 		// 助手事件
-		fullMsg, err := a.consumeAssistantEvent(ctx, mv, emit)
+		fullMsg, err := a.consumeAssistantEvent(runCtx, mv, emit)
 		if err != nil {
 			if fullMsg != nil {
 				produced = append(produced, messageToData(fullMsg))
 			}
-			if service.RunCancelCauseFromContext(ctx) != "" && ctx.Err() != nil {
+			if service.RunCancelCauseFromContext(runCtx) != "" && runCtx.Err() != nil {
 				canceled = true
 				finishReason = "canceled"
 				break
@@ -482,7 +533,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 	if usage == nil {
 		usage = &Usage{}
 	}
-	duration := time.Since(startedAt)
+	duration := time.Since(prepared.startedAt)
 	var tokensPerSecond float64
 	if duration > 0 && usage.CompletionTokens > 0 {
 		tokensPerSecond = float64(usage.CompletionTokens) / duration.Seconds()
@@ -495,12 +546,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 	if !canceled && !hasDisplayableAssistantOutput(produced) {
 		if fallback, ok := materializeReasoningOnlyAssistantOutput(produced); ok {
 			log.Printf("[eino] reasoning-only assistant output materialized: provider=%s model=%s finish_reason=%s prompt_tokens=%d completion_tokens=%d reasoning_tokens=%d",
-				req.Provider, req.ModelID, finishReason, usage.PromptTokens, usage.CompletionTokens, usage.ReasoningTokens)
+				prepared.provider, prepared.modelID, finishReason, usage.PromptTokens, usage.CompletionTokens, usage.ReasoningTokens)
 			if err := emit(streaming.EventContentDelta, streaming.ContentDeltaEvent{Delta: fallback}); err != nil {
 				return nil, err
 			}
 		} else {
-			return nil, newModelEmptyResponseError(req.Provider, req.ModelID, finishReason, usage)
+			return nil, newModelEmptyResponseError(prepared.provider, prepared.modelID, finishReason, usage)
 		}
 	}
 	attachRuntimeMeta(produced, duration.Milliseconds(), tokensPerSecond)

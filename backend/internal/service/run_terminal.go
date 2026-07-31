@@ -20,12 +20,10 @@ type RunCancelCause string
 const (
 	RunCancelUserStop           RunCancelCause = "user_stop"
 	RunCancelFirstOutputTimeout RunCancelCause = "first_output_timeout"
-	// Deprecated: remove after all RunHub callers migrate to the precise cause.
-	RunCancelDeadline       RunCancelCause = RunCancelFirstOutputTimeout
-	RunCancelServerDrain    RunCancelCause = "server_draining"
-	RunCancelAccountChanged RunCancelCause = "account_changed"
-	RunCancelSessionDeleted RunCancelCause = "session_deleted"
-	RunCancelUpstream       RunCancelCause = "upstream_canceled"
+	RunCancelServerDrain        RunCancelCause = "server_draining"
+	RunCancelAccountChanged     RunCancelCause = "account_changed"
+	RunCancelSessionDeleted     RunCancelCause = "session_deleted"
+	RunCancelUpstream           RunCancelCause = "upstream_canceled"
 )
 
 type runCancellationError struct {
@@ -159,7 +157,7 @@ func (h *RunHub) PersistAdmission(ctx context.Context, runID string, persist Run
 	}
 	terminalEvent := h.applyStoredRunTerminal(state, record)
 	h.closeSubscribersLocked(state)
-	deadlineCancel := state.deadlineCancel
+	firstOutputStop := state.firstOutputStop
 	cancelCause := state.cancelCause
 	boundCancel := state.boundCancel
 	snapshot := cloneStateSnapshot(state)
@@ -167,8 +165,8 @@ func (h *RunHub) PersistAdmission(ctx context.Context, runID string, persist Run
 	if terminalEvent == nil {
 		return nil, fmt.Errorf("stored terminal run has no replay event")
 	}
-	if deadlineCancel != nil {
-		deadlineCancel()
+	if firstOutputStop != nil {
+		firstOutputStop()
 	}
 	if cancelCause != nil {
 		cancelCause(nil)
@@ -235,16 +233,12 @@ func storedRunMatchesState(record repository.ChatRunRecord, state *runState) boo
 		record.RetryTargetMessageID == state.RetryTargetMessageID
 }
 
-func newRunContext(timeout time.Duration) (context.Context, context.CancelCauseFunc, context.CancelFunc) {
-	parent := context.Background()
-	timeoutCancel := func() {}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		parent, cancel = context.WithTimeoutCause(parent, timeout, runCancellationError{Cause: RunCancelFirstOutputTimeout})
-		timeoutCancel = cancel
-	}
-	ctx, cancelCause := context.WithCancelCause(parent)
-	return ctx, cancelCause, timeoutCancel
+func newRunContext(timeout time.Duration) (context.Context, context.CancelCauseFunc, func()) {
+	return modelstream.WithDeferredFirstOutputTimeout(
+		context.Background(),
+		timeout,
+		runCancellationError{Cause: RunCancelFirstOutputTimeout},
+	)
 }
 
 func RunCancelCauseFromContext(ctx context.Context) RunCancelCause {
@@ -266,6 +260,39 @@ func (h *RunHub) Context(runID string) (context.Context, bool) {
 		return nil, false
 	}
 	return state.runContext, true
+}
+
+// BeginExecution atomically transfers a durable running reservation to its
+// single in-process execution owner and starts the run-level first-output
+// guard. Admission I/O is intentionally outside this budget; every setup step
+// after ownership (session/history/config/Agent construction) is inside it.
+//
+// The caller must launch or enter the worker immediately after this method
+// returns. No network or database work may be inserted between ownership and
+// worker start, otherwise a process panic could strand a durable running row.
+func (h *RunHub) BeginExecution(runID string) (context.Context, error) {
+	h.mu.Lock()
+	state := h.runs[runID]
+	if state == nil || state.Status != RunStatusRunning || state.finishing {
+		h.mu.Unlock()
+		return nil, ErrRunTerminal
+	}
+	if !state.durable {
+		h.mu.Unlock()
+		return nil, ErrRunNotDurable
+	}
+	if state.executionOwned {
+		h.mu.Unlock()
+		return nil, ErrRunExecutionOwned
+	}
+	state.executionOwned = true
+	runContext := state.runContext
+	h.mu.Unlock()
+
+	if context.Cause(runContext) == nil {
+		modelstream.ArmFirstOutputTimeout(runContext)
+	}
+	return runContext, nil
 }
 
 func (h *RunHub) CancelCause(runID string) RunCancelCause {
@@ -496,8 +523,11 @@ func (h *RunHub) transition(ctx context.Context, runID string, commit RunTermina
 		state.ExpiresAt = now.Add(h.ttl)
 	}
 	state.finishing = false
-	if state.deadlineCancel != nil {
-		state.deadlineCancel()
+	if state.firstOutputStop != nil {
+		state.firstOutputStop()
+	}
+	if state.cancelCause != nil {
+		state.cancelCause(nil)
 	}
 	h.closeSubscribersLocked(state)
 	return cloneStateSnapshot(state), transitioned, terminalEvent, nil

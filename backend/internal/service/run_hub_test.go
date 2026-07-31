@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
@@ -740,35 +742,104 @@ func TestRunHubCancellationCauseReachesRunContext(t *testing.T) {
 	}
 }
 
-func TestRunHubDeadlineCauseStartsAtAccepted(t *testing.T) {
+func TestRunHubFirstOutputTimeoutStartsWhenDurableExecutionIsOwned(t *testing.T) {
 	hub := NewRunHub(time.Minute, 1<<20)
-	run, err := hub.StartWithTimeout(1, 2, 0, "deadline-run", RunKindChat, 20*time.Millisecond)
+	run, err := hub.StartWithFirstOutputTimeout(1, 2, 0, "first-output-timeout-run", RunKindChat, 20*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runContext, ok := hub.Context(run.RunID)
+	admissionContext, ok := hub.Context(run.RunID)
 	if !ok {
 		t.Fatal("run context missing")
+	}
+	time.Sleep(4 * 20 * time.Millisecond)
+	select {
+	case <-admissionContext.Done():
+		t.Fatalf("first-output timeout started during admission: %v", context.Cause(admissionContext))
+	default:
+	}
+
+	if _, err := hub.BeginExecution(run.RunID); !errors.Is(err, ErrRunNotDurable) {
+		t.Fatalf("BeginExecution() before durable admission = %v, want ErrRunNotDurable", err)
+	}
+	if err := hub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("PersistDurable() error = %v", err)
+	}
+	runContext, err := hub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatalf("BeginExecution() error = %v", err)
+	}
+	if runContext != admissionContext {
+		t.Fatal("execution owner did not receive the admitted run context")
+	}
+	if _, err := hub.BeginExecution(run.RunID); !errors.Is(err, ErrRunExecutionOwned) {
+		t.Fatalf("duplicate BeginExecution() = %v, want ErrRunExecutionOwned", err)
 	}
 	select {
 	case <-runContext.Done():
 	case <-time.After(time.Second):
-		t.Fatal("accepted deadline did not cancel run context")
+		t.Fatal("armed first-output timeout did not cancel run context")
 	}
-	if cause := RunCancelCauseFromContext(runContext); cause != RunCancelDeadline {
-		t.Fatalf("context cause = %q, want %q", cause, RunCancelDeadline)
+	if cause := RunCancelCauseFromContext(runContext); cause != RunCancelFirstOutputTimeout {
+		t.Fatalf("context cause = %q, want %q", cause, RunCancelFirstOutputTimeout)
 	}
 }
 
-func TestRunHubTransitionHonorsAcceptedDeadline(t *testing.T) {
+func TestRunHubFirstOutputTimeoutStopsAfterMeaningfulModelOutput(t *testing.T) {
 	hub := NewRunHub(time.Minute, 1<<20)
-	run, err := hub.StartWithTimeout(1, 2, 0, "deadline-terminal", RunKindChat, 20*time.Millisecond)
+	run, err := hub.StartWithFirstOutputTimeout(1, 2, 0, "first-output-run", RunKindChat, 20*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runContext, ok := hub.Context(run.RunID)
 	if !ok {
 		t.Fatal("run context missing")
+	}
+	if err := hub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("PersistDurable() error = %v", err)
+	}
+	runContext, err = hub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatalf("BeginExecution() error = %v", err)
+	}
+
+	modelstream.ObserveMessage(runContext, &schema.Message{Role: schema.Assistant, Content: "started"})
+	time.Sleep(4 * 20 * time.Millisecond)
+	select {
+	case <-runContext.Done():
+		t.Fatalf("run canceled after output started: %v", context.Cause(runContext))
+	default:
+	}
+
+	if !hub.CancelWithCause(run.RunID, 1, 2, RunCancelUserStop) {
+		t.Fatal("user stop failed after first output")
+	}
+	select {
+	case <-runContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("user stop did not cancel disarmed run")
+	}
+	if cause := RunCancelCauseFromContext(runContext); cause != RunCancelUserStop {
+		t.Fatalf("context cause = %q, want %q", cause, RunCancelUserStop)
+	}
+}
+
+func TestRunHubTransitionHonorsFirstOutputTimeout(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	run, err := hub.StartWithFirstOutputTimeout(1, 2, 0, "first-output-terminal", RunKindChat, 20*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, ok := hub.Context(run.RunID)
+	if !ok {
+		t.Fatal("run context missing")
+	}
+	if err := hub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("PersistDurable() error = %v", err)
+	}
+	runContext, err = hub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatalf("BeginExecution() error = %v", err)
 	}
 	<-runContext.Done()
 
@@ -776,11 +847,11 @@ func TestRunHubTransitionHonorsAcceptedDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !transitioned || snapshot.Status != RunStatusCanceled || snapshot.CancelCause != string(RunCancelDeadline) {
-		t.Fatalf("deadline terminal = snapshot:%+v transitioned:%v", snapshot, transitioned)
+	if !transitioned || snapshot.Status != RunStatusCanceled || snapshot.CancelCause != string(RunCancelFirstOutputTimeout) {
+		t.Fatalf("first-output terminal = snapshot:%+v transitioned:%v", snapshot, transitioned)
 	}
 	if event == nil || event.Event != "error" {
-		t.Fatalf("deadline terminal event = %+v", event)
+		t.Fatalf("first-output terminal event = %+v", event)
 	}
 }
 

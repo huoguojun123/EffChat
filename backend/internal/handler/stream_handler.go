@@ -13,6 +13,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/agent"
 	"github.com/huoguojun123/EffChat/internal/middleware"
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
@@ -31,8 +32,8 @@ import (
 
 const runTerminalWriteTimeout = 5 * time.Second
 
-func reserveSessionRun(c *gin.Context, runHub *service.RunHub, heartbeat, maxRunDuration time.Duration, sessionID, userID int64, clientRunID, kind string, intent service.RunIntent) (*service.RunSnapshot, bool) {
-	snapshot, err := runHub.StartWithIntentAndTimeout(sessionID, userID, 0, clientRunID, kind, intent, maxRunDuration)
+func reserveSessionRun(c *gin.Context, runHub *service.RunHub, heartbeat, firstOutputTimeout time.Duration, sessionID, userID int64, clientRunID, kind string, intent service.RunIntent) (*service.RunSnapshot, bool) {
+	snapshot, err := runHub.StartWithIntentAndFirstOutputTimeout(sessionID, userID, 0, clientRunID, kind, intent, firstOutputTimeout)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrRunIDConflict):
@@ -269,7 +270,7 @@ func bindMessageRequest(c *gin.Context, req *service.SendMessageRequest) bool {
 }
 
 // SendMessageStreamHandler 发送消息（SSE 流式）
-func SendMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, maxRunDuration time.Duration) gin.HandlerFunc {
+func SendMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, configuredFirstOutputTimeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 
@@ -324,8 +325,8 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 			c.JSON(status, gin.H{"error": message, "code": code, "retryable": retryable})
 			return
 		}
-		runTimeout := effectiveRunTimeout(maxRunDuration, defaultChatRunTimeout)
-		runSnapshot, handled := reserveSessionRun(c, runHub, heartbeat, runTimeout, sessionID, userID, req.ClientRunID, service.RunKindChat, intent)
+		firstOutputTimeout := effectiveFirstOutputTimeout(configuredFirstOutputTimeout, defaultChatFirstOutputTimeout)
+		runSnapshot, handled := reserveSessionRun(c, runHub, heartbeat, firstOutputTimeout, sessionID, userID, req.ClientRunID, service.RunKindChat, intent)
 		if handled {
 			return
 		}
@@ -341,7 +342,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 				UserID: userID, AuthVersion: middleware.GetAuthVersion(c), SessionID: sessionID, RunID: runSnapshot.RunID, Kind: service.RunKindChat, Intent: intent, ReserveMessage: true,
 				RuntimeSnapshot: preflight.runtimeSnapshot,
 				AcceptedAt:      runSnapshot.AcceptedAt,
-				ExpiresAt:       runSnapshot.AcceptedAt.Add(runTimeout + time.Minute),
+				ExpiresAt:       runSnapshot.ExpiresAt,
 			}, userMessage)
 			return admission.Record, err
 		})
@@ -393,15 +394,15 @@ type editRetryRequest struct {
 	ClientRunID string `json:"client_run_id"`
 }
 
-func RetryMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, maxRunDuration time.Duration) gin.HandlerFunc {
-	return retryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, heartbeat, maxRunDuration, false)
+func RetryMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, configuredFirstOutputTimeout time.Duration) gin.HandlerFunc {
+	return retryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, heartbeat, configuredFirstOutputTimeout, false)
 }
 
-func EditRetryMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, maxRunDuration time.Duration) gin.HandlerFunc {
-	return retryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, heartbeat, maxRunDuration, true)
+func EditRetryMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, configuredFirstOutputTimeout time.Duration) gin.HandlerFunc {
+	return retryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, heartbeat, configuredFirstOutputTimeout, true)
 }
 
-func retryMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, maxRunDuration time.Duration, edited bool) gin.HandlerFunc {
+func retryMessageStreamHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, configuredFirstOutputTimeout time.Duration, edited bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 
@@ -540,8 +541,8 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 			writeQuotaError(c, err)
 			return
 		}
-		runTimeout := effectiveRunTimeout(maxRunDuration, defaultChatRunTimeout)
-		runSnapshot, handled := reserveSessionRun(c, runHub, heartbeat, runTimeout, sessionID, userID, clientRunID, service.RunKindChat, intent)
+		firstOutputTimeout := effectiveFirstOutputTimeout(configuredFirstOutputTimeout, defaultChatFirstOutputTimeout)
+		runSnapshot, handled := reserveSessionRun(c, runHub, heartbeat, firstOutputTimeout, sessionID, userID, clientRunID, service.RunKindChat, intent)
 		if handled {
 			return
 		}
@@ -557,7 +558,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 				UserID: userID, AuthVersion: middleware.GetAuthVersion(c), SessionID: sessionID, RunID: runSnapshot.RunID, Kind: service.RunKindChat, Intent: intent, ReserveMessage: edited,
 				RuntimeSnapshot: runtimeSnapshot,
 				AcceptedAt:      runSnapshot.AcceptedAt,
-				ExpiresAt:       runSnapshot.AcceptedAt.Add(runTimeout + time.Minute),
+				ExpiresAt:       runSnapshot.ExpiresAt,
 			}
 			if edited {
 				admission, err = quotaService.AdmitEditedRetryChatRun(ctx, input, messageID, retryUser)
@@ -829,8 +830,8 @@ func MessagePreflightHandler(messageService *service.MessageService, sessionServ
 //
 // 复用 RunHub + SSE：压缩本质是一次 LLM 生成，因此与对话流共用断点续传通道。
 // 客户端断线/刷新后可经 runs/active + runs/:id/resume 重连，拿到最终结果。
-// RunHub 持有与 HTTP 请求解耦的有界 context，客户端断开后仍可继续并落库。
-func CompactSessionHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, maxRunDuration time.Duration) gin.HandlerFunc {
+// RunHub 持有与 HTTP 请求解耦、受首包保护的 context，客户端断开后仍可继续并落库。
+func CompactSessionHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, quotaService *service.QuotaService, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, configuredFirstOutputTimeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -885,8 +886,8 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			return
 		}
 
-		runTimeout := effectiveRunTimeout(maxRunDuration, defaultCompactionRunTimeout)
-		runSnapshot, handled := reserveSessionRun(c, runHub, heartbeat, runTimeout, sessionID, userID, clientRunID, service.RunKindCompaction, intent)
+		firstOutputTimeout := effectiveFirstOutputTimeout(configuredFirstOutputTimeout, defaultCompactionFirstOutputTimeout)
+		runSnapshot, handled := reserveSessionRun(c, runHub, heartbeat, firstOutputTimeout, sessionID, userID, clientRunID, service.RunKindCompaction, intent)
 		if handled {
 			return
 		}
@@ -901,7 +902,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 				UserID: userID, AuthVersion: middleware.GetAuthVersion(c), SessionID: sessionID, RunID: runSnapshot.RunID, Kind: service.RunKindCompaction, Intent: intent,
 				RuntimeSnapshot: runtimeSnapshot,
 				AcceptedAt:      runSnapshot.AcceptedAt,
-				ExpiresAt:       runSnapshot.AcceptedAt.Add(runTimeout + time.Minute),
+				ExpiresAt:       runSnapshot.ExpiresAt,
 			})
 		})
 		if err != nil {
@@ -936,6 +937,23 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
 			return
 		}
+		executionContext, err := runHub.BeginExecution(runSnapshot.RunID)
+		if err != nil {
+			if errors.Is(err, service.ErrRunTerminal) || errors.Is(err, service.ErrRunExecutionOwned) {
+				writer, writerErr := streaming.NewSSEWriter(c)
+				if writerErr != nil {
+					c.JSON(http.StatusConflict, gin.H{"error": "任务已开始，请通过 run_id 恢复", "code": "run_execution_owned", "run_id": runSnapshot.RunID})
+					return
+				}
+				replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
+				return
+			}
+			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "run_execution_unavailable", "压缩任务执行状态异常，请重试", err)
+			c.JSON(http.StatusInternalServerError, payload)
+			return
+		}
+		runContext = executionContext
+
 		var writer *streaming.SSEWriter
 		defer func() {
 			event, err := transitionRun(runHub, runSnapshot.RunID, service.RunTerminal{
@@ -1217,7 +1235,10 @@ func runCompactionTasks(ctx context.Context, maintainMemory func(context.Context
 	defer cancel()
 	results := make(chan result, 2)
 	go func() {
-		results <- result{err: maintainMemory(taskCtx)}
+		// Memory maintenance is a sibling prerequisite, not the output owner
+		// of the compaction run. Its model chunks must not disarm the outer
+		// RunHub guard while the actual conversation compression is silent.
+		results <- result{err: maintainMemory(modelstream.IsolateFirstOutputTimeout(taskCtx))}
 	}()
 	go func() {
 		checkpoint, err := compact(taskCtx)

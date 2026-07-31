@@ -12,6 +12,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/agent"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
@@ -138,8 +139,8 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 }
 
 const (
-	defaultChatRunTimeout       = 15 * time.Minute
-	defaultCompactionRunTimeout = 5 * time.Minute
+	defaultChatFirstOutputTimeout       = 15 * time.Minute
+	defaultCompactionFirstOutputTimeout = 5 * time.Minute
 )
 
 type agentRunExecution struct {
@@ -152,6 +153,7 @@ type agentRunExecution struct {
 	titleService   *service.TitleService
 	runHub         *service.RunHub
 	taskRunRepo    *repository.ModelTaskRunRepository
+	runContext     context.Context
 	sessionID      int64
 	userID         int64
 	userMessage    *model.Message
@@ -171,7 +173,7 @@ func (w runHubEventWriter) WriteEvent(event string, data interface{}) error {
 	return nil
 }
 
-func effectiveRunTimeout(configured, fallback time.Duration) time.Duration {
+func effectiveFirstOutputTimeout(configured, fallback time.Duration) time.Duration {
 	if configured > 0 {
 		return configured
 	}
@@ -179,31 +181,7 @@ func effectiveRunTimeout(configured, fallback time.Duration) time.Duration {
 }
 
 func runAgentStream(c *gin.Context, messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, taskRunRepo *repository.ModelTaskRunRepository, heartbeat time.Duration, sessionID, userID int64, userMessage *model.Message, runSnapshot *service.RunSnapshot, usageKind string) {
-	writer, err := streaming.NewSSEWriter(c)
-	if err != nil {
-		payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "stream_unavailable", "当前连接不支持流式响应", err)
-		c.JSON(http.StatusInternalServerError, payload)
-		return
-	}
-	if !runHub.Record(runSnapshot.RunID, streaming.EventMessageStart, streaming.MessageStartEvent{
-		MessageID:     0,
-		RunID:         runSnapshot.RunID,
-		UserMessageID: userMessage.ID,
-	}) {
-		replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
-		return
-	}
-	events, ch, cleanup, _, err := runHub.EventsAfter(runSnapshot.RunID, sessionID, userID, 0)
-	if err != nil {
-		failRunWithRequestID(runHub, runSnapshot.RunID, c.GetString("request_id"), "stream_subscription_failed", "任务流建立失败，请重试", true, err)
-		_ = writer.WriteError("无法启动该任务", map[string]interface{}{"code": "run_not_found"})
-		return
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-
-	go executeAgentRun(agentRunExecution{
+	exec := agentRunExecution{
 		requestID:      c.GetString("request_id"),
 		messageService: messageService,
 		sessionService: sessionService,
@@ -218,7 +196,49 @@ func runAgentStream(c *gin.Context, messageService *service.MessageService, sess
 		userMessage:    userMessage,
 		runSnapshot:    runSnapshot,
 		usageKind:      usageKind,
-	})
+	}
+	runContext, err := runHub.BeginExecution(runSnapshot.RunID)
+	if err != nil {
+		writer, writerErr := streaming.NewSSEWriter(c)
+		if writerErr == nil && (errors.Is(err, service.ErrRunTerminal) || errors.Is(err, service.ErrRunExecutionOwned)) {
+			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
+			return
+		}
+		payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "run_execution_unavailable", "任务执行状态异常，请重试", err)
+		c.JSON(http.StatusInternalServerError, payload)
+		return
+	}
+	exec.runContext = runContext
+	// Launch immediately after ownership. The worker records message_start as
+	// its first operation, before any setup or model output, so SSE may attach
+	// later without becoming part of the execution ownership chain.
+	go executeAgentRun(exec)
+
+	writer, err := streaming.NewSSEWriter(c)
+	if err != nil {
+		// The durable worker owns completion now. A transport that cannot open
+		// SSE must not cancel model execution; the client can resume by run_id.
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":     "当前连接不支持流式响应",
+			"code":      "stream_unavailable",
+			"retryable": true,
+			"run_id":    runSnapshot.RunID,
+		})
+		return
+	}
+	events, ch, cleanup, _, err := runHub.EventsAfter(runSnapshot.RunID, sessionID, userID, 0)
+	if err != nil {
+		_ = writer.WriteError("任务仍在后台执行，请稍后恢复", map[string]interface{}{
+			"code":      "stream_subscription_failed",
+			"retryable": true,
+			"run_id":    runSnapshot.RunID,
+		})
+		return
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
 	forwardRunEvents(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, events, ch, 0)
 }
 
@@ -269,13 +289,25 @@ func executeAgentRun(exec agentRunExecution) {
 			logger.Error("finalize incomplete chat run failed: run_id=%q err=%v", runSnapshot.RunID, err)
 		}
 	}()
-	writer := runHubEventWriter{runHub: runHub, runID: runSnapshot.RunID}
-
-	runContext, ok := runHub.Context(runSnapshot.RunID)
-	if !ok {
-		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "run_context_missing", "任务状态异常，请重试", true, errors.New("run context missing"))
+	if !runHub.Record(runSnapshot.RunID, streaming.EventMessageStart, streaming.MessageStartEvent{
+		MessageID:     0,
+		RunID:         runSnapshot.RunID,
+		UserMessageID: userMessage.ID,
+	}) {
 		return
 	}
+	writer := runHubEventWriter{runHub: runHub, runID: runSnapshot.RunID}
+
+	runContext := exec.runContext
+	if runContext == nil {
+		var ok bool
+		runContext, ok = runHub.Context(runSnapshot.RunID)
+		if !ok {
+			failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "run_context_missing", "任务状态异常，请重试", true, errors.New("run context missing"))
+			return
+		}
+	}
+	modelstream.ArmFirstOutputTimeout(runContext)
 	if cause := service.RunCancelCauseFromContext(runContext); cause != "" {
 		transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext)
 		return

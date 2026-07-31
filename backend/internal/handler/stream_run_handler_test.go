@@ -20,6 +20,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/middleware"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
@@ -332,12 +333,12 @@ func TestAgentErrorPayload_RuntimeError(t *testing.T) {
 	}
 }
 
-func TestEffectiveRunTimeoutUsesConfiguredValueOrExistingDefault(t *testing.T) {
-	if got := effectiveRunTimeout(20*time.Second, defaultChatRunTimeout); got != 20*time.Second {
+func TestEffectiveFirstOutputTimeoutUsesConfiguredValueOrExistingDefault(t *testing.T) {
+	if got := effectiveFirstOutputTimeout(20*time.Second, defaultChatFirstOutputTimeout); got != 20*time.Second {
 		t.Fatalf("configured timeout = %s, want 20s", got)
 	}
-	if got := effectiveRunTimeout(0, defaultCompactionRunTimeout); got != defaultCompactionRunTimeout {
-		t.Fatalf("default timeout = %s, want %s", got, defaultCompactionRunTimeout)
+	if got := effectiveFirstOutputTimeout(0, defaultCompactionFirstOutputTimeout); got != defaultCompactionFirstOutputTimeout {
+		t.Fatalf("default timeout = %s, want %s", got, defaultCompactionFirstOutputTimeout)
 	}
 }
 
@@ -378,7 +379,7 @@ func TestLoadPostRunMemorySessionUsesDetachedContext(t *testing.T) {
 	env := setupTestEnv(t)
 	session := createResumeTestSession(t, env)
 	runHub := service.NewRunHub(time.Minute, 1<<20)
-	run, err := runHub.StartWithTimeout(session.ID, env.userID, 0, "post-run-memory", service.RunKindChat, time.Minute)
+	run, err := runHub.StartWithFirstOutputTimeout(session.ID, env.userID, 0, "post-run-memory", service.RunKindChat, time.Minute)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -435,6 +436,29 @@ func TestRunCompactionTasksCancelsMemoryAfterCompactionFailure(t *testing.T) {
 	case <-memoryCanceled:
 	case <-time.After(time.Second):
 		t.Fatal("memory maintenance was not canceled after compaction failure")
+	}
+}
+
+func TestRunCompactionTasksMemoryOutputDoesNotDisarmCompressionGuard(t *testing.T) {
+	timeoutCause := errors.New("compression first output timeout")
+	parent, parentCancel := context.WithTimeout(t.Context(), time.Second)
+	defer parentCancel()
+	runCtx, cancelRun, stopGuard := modelstream.WithDeferredFirstOutputTimeout(parent, 20*time.Millisecond, timeoutCause)
+	defer func() {
+		stopGuard()
+		cancelRun(nil)
+	}()
+	modelstream.ArmFirstOutputTimeout(runCtx)
+
+	_, err := runCompactionTasks(runCtx, func(ctx context.Context) error {
+		modelstream.MarkOutput(ctx)
+		return nil
+	}, func(ctx context.Context) (*agent.CompressionCheckpoint, error) {
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	})
+	if !errors.Is(err, timeoutCause) {
+		t.Fatalf("error = %v, want compression-owned first output timeout", err)
 	}
 }
 
@@ -641,7 +665,7 @@ func TestRunAgentStreamContinuesAfterRequestDisconnect(t *testing.T) {
 	if err := runHub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelDeadline) {
+	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelFirstOutputTimeout) {
 		t.Fatal("failed to cancel admitted run")
 	}
 

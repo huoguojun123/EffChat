@@ -25,10 +25,12 @@ const (
 )
 
 var (
-	ErrRunIDConflict    = errors.New("run_id conflict")
-	ErrSessionRunActive = errors.New("session run active")
-	ErrServerDraining   = errors.New("server draining")
-	ErrRunTerminal      = errors.New("run is no longer running")
+	ErrRunIDConflict     = errors.New("run_id conflict")
+	ErrSessionRunActive  = errors.New("session run active")
+	ErrServerDraining    = errors.New("server draining")
+	ErrRunTerminal       = errors.New("run is no longer running")
+	ErrRunNotDurable     = errors.New("run admission is not durable")
+	ErrRunExecutionOwned = errors.New("run execution already has an owner")
 )
 
 type RunEvent struct {
@@ -96,11 +98,12 @@ type runState struct {
 	subscribers     map[chan RunEvent]struct{}
 	runContext      context.Context
 	cancelCause     context.CancelCauseFunc
-	deadlineCancel  context.CancelFunc
+	firstOutputStop func()
 	boundCancel     context.CancelFunc
 	cancelRequested bool
 	finishing       bool
 	durable         bool
+	executionOwned  bool
 }
 
 func NewRunHub(ttl time.Duration, maxBytes int) *RunHub {
@@ -114,18 +117,18 @@ func NewRunHub(ttl time.Duration, maxBytes int) *RunHub {
 }
 
 func (h *RunHub) Start(sessionID, userID, userMessageID int64, clientRunID, kind string) (*RunSnapshot, error) {
-	return h.StartWithIntentAndTimeout(sessionID, userID, userMessageID, clientRunID, kind, legacyRunIntent(kind), 0)
+	return h.StartWithIntentAndFirstOutputTimeout(sessionID, userID, userMessageID, clientRunID, kind, legacyRunIntent(kind), 0)
 }
 
-func (h *RunHub) StartWithTimeout(sessionID, userID, userMessageID int64, clientRunID, kind string, timeout time.Duration) (*RunSnapshot, error) {
-	return h.StartWithIntentAndTimeout(sessionID, userID, userMessageID, clientRunID, kind, legacyRunIntent(kind), timeout)
+func (h *RunHub) StartWithFirstOutputTimeout(sessionID, userID, userMessageID int64, clientRunID, kind string, timeout time.Duration) (*RunSnapshot, error) {
+	return h.StartWithIntentAndFirstOutputTimeout(sessionID, userID, userMessageID, clientRunID, kind, legacyRunIntent(kind), timeout)
 }
 
 func (h *RunHub) StartWithIntent(sessionID, userID, userMessageID int64, clientRunID, kind string, intent RunIntent) (*RunSnapshot, error) {
-	return h.StartWithIntentAndTimeout(sessionID, userID, userMessageID, clientRunID, kind, intent, 0)
+	return h.StartWithIntentAndFirstOutputTimeout(sessionID, userID, userMessageID, clientRunID, kind, intent, 0)
 }
 
-func (h *RunHub) StartWithIntentAndTimeout(sessionID, userID, userMessageID int64, clientRunID, kind string, intent RunIntent, timeout time.Duration) (*RunSnapshot, error) {
+func (h *RunHub) StartWithIntentAndFirstOutputTimeout(sessionID, userID, userMessageID int64, clientRunID, kind string, intent RunIntent, timeout time.Duration) (*RunSnapshot, error) {
 	runID := strings.TrimSpace(clientRunID)
 	if runID == "" {
 		runID = uuid.NewString()
@@ -158,7 +161,7 @@ func (h *RunHub) StartWithIntentAndTimeout(sessionID, userID, userMessageID int6
 		}
 	}
 
-	runContext, cancelCause, deadlineCancel := newRunContext(timeout)
+	runContext, cancelCause, firstOutputStop := newRunContext(timeout)
 	state := &runState{
 		RunSnapshot: RunSnapshot{
 			RunID:                runID,
@@ -176,10 +179,10 @@ func (h *RunHub) StartWithIntentAndTimeout(sessionID, userID, userMessageID int6
 			UpdatedAt:            now,
 			ExpiresAt:            now.Add(h.ttl),
 		},
-		runContext:     runContext,
-		cancelCause:    cancelCause,
-		deadlineCancel: deadlineCancel,
-		subscribers:    make(map[chan RunEvent]struct{}),
+		runContext:      runContext,
+		cancelCause:     cancelCause,
+		firstOutputStop: firstOutputStop,
+		subscribers:     make(map[chan RunEvent]struct{}),
 	}
 	h.runs[runID] = state
 	return cloneStateSnapshot(state), nil

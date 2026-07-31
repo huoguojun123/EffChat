@@ -50,11 +50,19 @@ type ExternalServiceInput struct {
 }
 
 func (s *ChannelService) ListAIChannels(includeDisabled bool) ([]*model.AIChannel, error) {
-	return s.repo.ListAIChannels(includeDisabled)
+	return s.ListAIChannelsContext(context.Background(), includeDisabled)
+}
+
+func (s *ChannelService) ListAIChannelsContext(ctx context.Context, includeDisabled bool) ([]*model.AIChannel, error) {
+	return s.repo.ListAIChannelsContext(ctx, includeDisabled)
 }
 
 func (s *ChannelService) GetAIChannel(key string) (*model.AIChannel, error) {
-	return s.repo.GetAIChannel(normalizeKey(key))
+	return s.GetAIChannelContext(context.Background(), key)
+}
+
+func (s *ChannelService) GetAIChannelContext(ctx context.Context, key string) (*model.AIChannel, error) {
+	return s.repo.GetAIChannelContext(ctx, normalizeKey(key))
 }
 
 func (s *ChannelService) SaveAIChannel(input *AIChannelInput) (*model.AIChannel, error) {
@@ -73,11 +81,15 @@ func (s *ChannelService) DeleteAIChannel(key string) error {
 }
 
 func (s *ChannelService) ResolveAIChannel(key string) (*model.AIChannel, error) {
+	return s.ResolveAIChannelContext(context.Background(), key)
+}
+
+func (s *ChannelService) ResolveAIChannelContext(ctx context.Context, key string) (*model.AIChannel, error) {
 	key = normalizeKey(key)
 	if key == "" {
 		return nil, fmt.Errorf("channel is required")
 	}
-	item, err := s.repo.GetAIChannel(key)
+	item, err := s.repo.GetAIChannelContext(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -94,11 +106,19 @@ func (s *ChannelService) ResolveAIChannel(key string) (*model.AIChannel, error) 
 }
 
 func (s *ChannelService) ListExternalServices(includeDisabled bool) ([]*model.ExternalService, error) {
-	return s.repo.ListExternalServices(includeDisabled)
+	return s.ListExternalServicesContext(context.Background(), includeDisabled)
+}
+
+func (s *ChannelService) ListExternalServicesContext(ctx context.Context, includeDisabled bool) ([]*model.ExternalService, error) {
+	return s.repo.ListExternalServicesContext(ctx, includeDisabled)
 }
 
 func (s *ChannelService) GetExternalService(key string) (*model.ExternalService, error) {
-	return s.repo.GetExternalService(normalizeKey(key))
+	return s.GetExternalServiceContext(context.Background(), key)
+}
+
+func (s *ChannelService) GetExternalServiceContext(ctx context.Context, key string) (*model.ExternalService, error) {
+	return s.repo.GetExternalServiceContext(ctx, normalizeKey(key))
 }
 
 func (s *ChannelService) SaveExternalService(input *ExternalServiceInput) (*model.ExternalService, error) {
@@ -175,25 +195,42 @@ type MinerUOCRConfig struct {
 }
 
 func (s *ChannelService) ResolveSearchRuntimeConfig() SearchRuntimeConfig {
-	cfg, _ := s.ResolveSearchRuntimeConfigWithState()
+	cfg, _ := s.ResolveSearchRuntimeConfigContext(context.Background())
 	return cfg
 }
 
 func (s *ChannelService) ResolveSearchRuntimeConfigWithState() (SearchRuntimeConfig, SearchRuntimeConfigState) {
+	cfg, state, _ := s.ResolveSearchRuntimeConfigWithStateContext(context.Background())
+	return cfg, state
+}
+
+func (s *ChannelService) ResolveSearchRuntimeConfigContext(ctx context.Context) (SearchRuntimeConfig, error) {
+	cfg, _, err := s.ResolveSearchRuntimeConfigWithStateContext(ctx)
+	return cfg, err
+}
+
+func (s *ChannelService) ResolveSearchRuntimeConfigWithStateContext(ctx context.Context) (SearchRuntimeConfig, SearchRuntimeConfigState, error) {
+	if err := ctx.Err(); err != nil {
+		return SearchRuntimeConfig{}, SearchRuntimeConfigState{}, err
+	}
 	if s == nil || s.repo == nil {
 		cfg, state := BuildSearchRuntimeConfigWithState(nil)
 		state.Search = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:search:unavailable", nil))
 		state.Extract = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:crawler:unavailable", nil))
-		return cfg, state
+		return cfg, state, nil
 	}
-	services, err := s.repo.ListExternalServices(true)
+	services, err := s.repo.ListExternalServicesContext(ctx, true)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return SearchRuntimeConfig{}, SearchRuntimeConfigState{}, ctxErr
+		}
 		cfg, state := BuildSearchRuntimeConfigWithState(nil)
 		state.Search = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:search:unavailable", nil))
 		state.Extract = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:crawler:unavailable", nil))
-		return cfg, state
+		return cfg, state, nil
 	}
-	return BuildSearchRuntimeConfigWithState(services)
+	cfg, state := BuildSearchRuntimeConfigWithState(services)
+	return cfg, state, nil
 }
 
 func (s *ChannelService) ResolveMinerUOCRConfig() MinerUOCRConfig {

@@ -686,21 +686,29 @@ func (r *ConfigRepository) GetStringContext(ctx context.Context, key, fallback s
 
 // GetBool 读取布尔配置，兼容 JSON true/false 与字符串 "true"/"1"。
 func (r *ConfigRepository) GetBool(key string, fallback bool) bool {
-	item, err := r.Get(key)
+	value, _ := r.GetBoolContext(context.Background(), key, fallback)
+	return value
+}
+
+func (r *ConfigRepository) GetBoolContext(ctx context.Context, key string, fallback bool) (bool, error) {
+	item, err := r.GetContext(ctx, key)
 	if err != nil {
-		return fallback
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fallback, ctxErr
+		}
+		return fallback, nil
 	}
 	var b bool
 	if err := json.Unmarshal(item.Value, &b); err == nil {
-		return b
+		return b, nil
 	}
 	var s string
 	if err := json.Unmarshal(item.Value, &s); err == nil {
 		if parsed, err := strconv.ParseBool(s); err == nil {
-			return parsed
+			return parsed, nil
 		}
 	}
-	return fallback
+	return fallback, nil
 }
 
 func (r *ConfigRepository) GetStringSlice(key string, fallback []string) []string {
@@ -716,11 +724,23 @@ func (r *ConfigRepository) GetStringSlice(key string, fallback []string) []strin
 }
 
 func (r *ConfigRepository) GetMemoryLimits() sessionmemory.Limits {
+	limits, _ := r.GetMemoryLimitsContext(context.Background())
+	return limits
+}
+
+func (r *ConfigRepository) GetMemoryLimitsContext(ctx context.Context) (sessionmemory.Limits, error) {
 	maxChars := sessionmemory.MaxChars
-	if r != nil {
-		maxChars = r.GetInt("memory_max_chars", maxChars)
+	if err := ctx.Err(); err != nil {
+		return sessionmemory.NormalizeLimits(maxChars, 0), err
 	}
-	return sessionmemory.NormalizeLimits(maxChars, 0)
+	if r != nil {
+		var err error
+		maxChars, err = r.GetIntContext(ctx, "memory_max_chars", maxChars)
+		if err != nil {
+			return sessionmemory.NormalizeLimits(maxChars, 0), err
+		}
+	}
+	return sessionmemory.NormalizeLimits(maxChars, 0), nil
 }
 
 func (r *ConfigRepository) Update(key string, value json.RawMessage) error {

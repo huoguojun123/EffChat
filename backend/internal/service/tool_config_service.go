@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -49,10 +50,17 @@ func DefaultToolConfigs() []*model.ToolConfig {
 }
 
 func (s *ToolConfigService) List() ([]*model.ToolConfig, error) {
+	return s.ListContext(context.Background())
+}
+
+func (s *ToolConfigService) ListContext(ctx context.Context) ([]*model.ToolConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s == nil || s.repo == nil {
 		return DefaultToolConfigs(), nil
 	}
-	rows, err := s.repo.List()
+	rows, err := s.repo.ListContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -76,13 +84,26 @@ func (s *ToolConfigService) RuntimeConfigSet() ToolRuntimeConfigSet {
 }
 
 func (s *ToolConfigService) ResolveRuntimeConfig() (ToolRuntimeConfigSet, RuntimeConfigState) {
+	runtime, state, _ := s.ResolveRuntimeConfigContext(context.Background())
+	return runtime, state
+}
+
+func (s *ToolConfigService) ResolveRuntimeConfigContext(ctx context.Context) (ToolRuntimeConfigSet, RuntimeConfigState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, RuntimeConfigState{}, err
+	}
 	if s == nil || s.repo == nil {
 		items := DefaultToolConfigs()
-		return toolRuntimeConfigSet(items), runtimeConfigState(RuntimeStateDefault, "builtin_default", toolConfigVersion(items))
+		return toolRuntimeConfigSet(items), runtimeConfigState(RuntimeStateDefault, "builtin_default", toolConfigVersion(items)), nil
 	}
-	rows, err := s.repo.List()
+	rows, err := s.repo.ListContext(ctx)
 	if err != nil {
-		return disabledToolRuntimeConfigSet(), runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("tools:unavailable", nil))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, RuntimeConfigState{}, ctxErr
+		}
+		runtime := disabledToolRuntimeConfigSet()
+		state := runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("tools:unavailable", nil))
+		return runtime, state, nil
 	}
 	items := mergeToolConfigDefaults(rows)
 	state := RuntimeStateReady
@@ -91,7 +112,7 @@ func (s *ToolConfigService) ResolveRuntimeConfig() (ToolRuntimeConfigSet, Runtim
 		state = RuntimeStateDefault
 		cause = "builtin_default"
 	}
-	return toolRuntimeConfigSet(items), runtimeConfigState(state, cause, toolConfigVersion(items))
+	return toolRuntimeConfigSet(items), runtimeConfigState(state, cause, toolConfigVersion(items)), nil
 }
 
 func toolRuntimeConfigSet(items []*model.ToolConfig) ToolRuntimeConfigSet {

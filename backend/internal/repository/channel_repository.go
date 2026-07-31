@@ -38,14 +38,18 @@ func scanAIChannel(s interface {
 }
 
 func (r *ChannelRepository) ListAIChannels(includeDisabled bool) ([]*model.AIChannel, error) {
+	return r.ListAIChannelsContext(context.Background(), includeDisabled)
+}
+
+func (r *ChannelRepository) ListAIChannelsContext(ctx context.Context, includeDisabled bool) ([]*model.AIChannel, error) {
 	query := `SELECT ` + aiChannelColumns + ` FROM ai_channels WHERE deleted_at IS NULL`
 	if !includeDisabled {
 		query += ` AND enabled = true`
 	}
 	query += ` ORDER BY sort_order ASC, channel_key ASC`
-	rows, err := r.db.Query(query)
+	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("list ai channels: %w", err)
+		return nil, fmt.Errorf("list ai channels: %w", channelContextError(ctx, err))
 	}
 	defer rows.Close()
 
@@ -58,18 +62,22 @@ func (r *ChannelRepository) ListAIChannels(includeDisabled bool) ([]*model.AICha
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate ai channels: %w", err)
+		return nil, fmt.Errorf("iterate ai channels: %w", channelContextError(ctx, err))
 	}
 	return out, nil
 }
 
 func (r *ChannelRepository) GetAIChannel(key string) (*model.AIChannel, error) {
-	item, err := scanAIChannel(r.db.QueryRow(`SELECT `+aiChannelColumns+` FROM ai_channels WHERE channel_key = $1 AND deleted_at IS NULL`, normalizeConfigKey(key)))
+	return r.GetAIChannelContext(context.Background(), key)
+}
+
+func (r *ChannelRepository) GetAIChannelContext(ctx context.Context, key string) (*model.AIChannel, error) {
+	item, err := scanAIChannel(r.db.QueryRowContext(ctx, `SELECT `+aiChannelColumns+` FROM ai_channels WHERE channel_key = $1 AND deleted_at IS NULL`, normalizeConfigKey(key)))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get ai channel: %w", err)
+		return nil, fmt.Errorf("get ai channel: %w", channelContextError(ctx, err))
 	}
 	return item, nil
 }
@@ -146,14 +154,18 @@ func scanExternalService(s interface {
 }
 
 func (r *ChannelRepository) ListExternalServices(includeDisabled bool) ([]*model.ExternalService, error) {
+	return r.ListExternalServicesContext(context.Background(), includeDisabled)
+}
+
+func (r *ChannelRepository) ListExternalServicesContext(ctx context.Context, includeDisabled bool) ([]*model.ExternalService, error) {
 	query := `SELECT ` + externalServiceColumns + ` FROM external_services WHERE deleted_at IS NULL`
 	if !includeDisabled {
 		query += ` AND enabled = true`
 	}
 	query += ` ORDER BY sort_order ASC, service_key ASC`
-	rows, err := r.db.Query(query)
+	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("list external services: %w", err)
+		return nil, fmt.Errorf("list external services: %w", channelContextError(ctx, err))
 	}
 	defer rows.Close()
 
@@ -166,7 +178,7 @@ func (r *ChannelRepository) ListExternalServices(includeDisabled bool) ([]*model
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate external services: %w", err)
+		return nil, fmt.Errorf("iterate external services: %w", channelContextError(ctx, err))
 	}
 	return out, nil
 }
@@ -181,7 +193,7 @@ func (r *ChannelRepository) GetExternalServiceContext(ctx context.Context, key s
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get external service: %w", err)
+		return nil, fmt.Errorf("get external service: %w", channelContextError(ctx, err))
 	}
 	return item, nil
 }

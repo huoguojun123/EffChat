@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -31,11 +32,21 @@ func scanToolConfig(s interface {
 }
 
 func (r *ToolConfigRepository) List() ([]*model.ToolConfig, error) {
+	return r.ListContext(context.Background())
+}
+
+func (r *ToolConfigRepository) ListContext(ctx context.Context) ([]*model.ToolConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("tool config repository is unavailable")
 	}
-	rows, err := r.db.Query(`SELECT ` + toolConfigColumns + ` FROM tool_configs ORDER BY sort_order ASC, tool_key ASC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT `+toolConfigColumns+` FROM tool_configs ORDER BY sort_order ASC, tool_key ASC`)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("list tool configs: %w", err)
 	}
 	defer rows.Close()
@@ -49,6 +60,9 @@ func (r *ToolConfigRepository) List() ([]*model.ToolConfig, error) {
 		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("iterate tool configs: %w", err)
 	}
 	return out, nil

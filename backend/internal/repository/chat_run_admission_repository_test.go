@@ -344,6 +344,13 @@ func TestAdmitEditedRetryWaitsForThePreviousRunToFinish(t *testing.T) {
 	if _, err := quotaRepo.ReserveChatRun(context.Background(), active); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := quotaRepo.db.Exec(`
+		UPDATE chat_run_reservations
+		SET expires_at = NOW() - INTERVAL '1 second'
+		WHERE run_id = $1
+	`, active.RunID); err != nil {
+		t.Fatalf("age active edited-retry reservation: %v", err)
+	}
 	runID := fmt.Sprintf("edit-active-%d", time.Now().UnixNano())
 	input := admissionInput(userID, session.ID, runID, "retry", "v1:edit-active", true)
 	input.RetryTargetMessageID = source.ID

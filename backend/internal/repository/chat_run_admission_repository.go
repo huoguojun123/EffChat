@@ -51,7 +51,9 @@ func reserveChatRunInTx(ctx context.Context, tx *sql.Tx, input ChatRunReservatio
 			COUNT(*),
 			COUNT(*) FILTER (WHERE message_reserved)
 		FROM chat_run_reservations
-		WHERE user_id = $1 AND released_at IS NULL AND expires_at > NOW()
+		WHERE user_id = $1
+		  AND status = 'running'
+		  AND released_at IS NULL
 	`, input.UserID).Scan(&activeRuns, &pendingMessages); err != nil {
 		return ChatRunReservation{}, fmt.Errorf("load active chat reservations: %w", err)
 	}
@@ -266,7 +268,6 @@ func (r *QuotaRepository) AdmitEditedRetryChatRun(ctx context.Context, input Cha
 			  AND run_id <> $2
 			  AND status = 'running'
 			  AND released_at IS NULL
-			  AND expires_at > NOW()
 		)
 	`, input.SessionID, input.RunID).Scan(&anotherRunActive); err != nil {
 		return ChatRunAdmission{}, fmt.Errorf("inspect active edited retry runs: %w", err)

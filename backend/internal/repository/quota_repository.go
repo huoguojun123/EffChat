@@ -62,7 +62,9 @@ type ChatRunReservationInput struct {
 	RuntimeSnapshot      json.RawMessage
 	ReserveMessage       bool
 	AcceptedAt           time.Time
-	ExpiresAt            time.Time
+	// ExpiresAt is retained for terminal replay cleanup and schema compatibility.
+	// Running quota ownership is status-based and deliberately ignores it.
+	ExpiresAt time.Time
 }
 
 type ChatRunReservation struct {

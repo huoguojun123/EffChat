@@ -167,6 +167,16 @@ func TestQuotaRepositoryReserveChatRunEnforcesDailyMessageAndConcurrentLimits(t 
 	}); err != nil {
 		t.Fatalf("admit first run: %v", err)
 	}
+	// expires_at is replay-retention metadata, not a running lease. A model
+	// stream that has already started may legitimately outlive the original
+	// estimate and must keep owning its concurrency slot until terminal state.
+	if _, err := db.Exec(`
+		UPDATE chat_run_reservations
+		SET expires_at = NOW() - INTERVAL '1 second'
+		WHERE run_id = $1
+	`, firstInput.RunID); err != nil {
+		t.Fatalf("age active reservation: %v", err)
+	}
 	if _, err := repo.ReserveChatRun(context.Background(), ChatRunReservationInput{UserID: userID, AuthVersion: 1, SessionID: second.ID, RunID: "quota-run-2", ReserveMessage: true, ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
 		t.Fatal("concurrent reservation should be rejected")
 	} else if quotaErr := new(ToolQuotaExceeded); !errors.As(err, &quotaErr) || quotaErr.Code != "concurrent_run_limit_exceeded" {

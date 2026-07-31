@@ -26,16 +26,34 @@ func TestLoadAIConfigCompressionThreshold(t *testing.T) {
 	}
 }
 
-func TestLoadRunConfig(t *testing.T) {
-	t.Setenv("RUN_MAX_TOTAL_DURATION", "25m")
-	t.Setenv("SSE_HEARTBEAT_INTERVAL", "8s")
-
-	cfg := Load()
-
-	if cfg.Run.MaxTotalDuration != 25*time.Minute {
-		t.Errorf("MaxTotalDuration = %v", cfg.Run.MaxTotalDuration)
+func TestLoadRunConfigFirstOutputTimeout(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "Go duration", value: "25m", want: 25 * time.Minute},
+		{name: "plain seconds", value: "90", want: 90 * time.Second},
+		{name: "explicit zero", value: "0"},
+		{name: "invalid value uses handler defaults", value: "invalid"},
+		{name: "unset uses handler defaults"},
 	}
-	if cfg.Run.HeartbeatInterval != 8*time.Second {
-		t.Errorf("HeartbeatInterval = %v", cfg.Run.HeartbeatInterval)
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("RUN_FIRST_OUTPUT_TIMEOUT", testCase.value)
+
+			cfg := Load()
+			if cfg.Run.FirstOutputTimeout != testCase.want {
+				t.Errorf("FirstOutputTimeout = %v, want %v", cfg.Run.FirstOutputTimeout, testCase.want)
+			}
+		})
+	}
+}
+
+func TestLoadRunConfigHeartbeat(t *testing.T) {
+	t.Setenv("SSE_HEARTBEAT_INTERVAL", "8s")
+	if got := Load().Run.HeartbeatInterval; got != 8*time.Second {
+		t.Errorf("HeartbeatInterval = %v, want 8s", got)
 	}
 }

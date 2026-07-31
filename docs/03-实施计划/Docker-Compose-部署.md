@@ -40,7 +40,9 @@ cp .env.docker.example .env.docker
 - `DB_HOST` / `DB_PORT` / `DB_NAME`
 - `CORS_EXTRA_ORIGINS`（同源公共反代一般不填；前后端不同域名才填）
 - `TRUST_PROXY_HEADERS`（使用内置 Web 反代时保持 `true`；后端可能绕过可信代理时设为 `false`）
-- `RUN_*` / `SSE_HEARTBEAT_INTERVAL`
+- `RUN_FIRST_OUTPUT_TIMEOUT` / `SSE_HEARTBEAT_INTERVAL`
+
+`RUN_FIRST_OUTPUT_TIMEOUT` 支持 Go duration（如 `90s`、`25m`）或纯秒数，只限制模型返回首个有效文本、思考内容或具名工具调用前的等待。一旦有效输出开始，后端会继续读取流直到 EOF；用户停止、服务排空、账号或会话失效仍可取消任务。值为 `0` 时使用聊天 15 分钟、压缩 5 分钟的内建首包默认值。
 
 ### 朋友拿源码后的最短启动流程
 

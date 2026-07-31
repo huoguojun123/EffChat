@@ -50,8 +50,8 @@ type JWTConfig struct {
 const DefaultJWTSecret = "your-secret-key-change-this"
 
 type RunConfig struct {
-	MaxTotalDuration  time.Duration
-	HeartbeatInterval time.Duration
+	FirstOutputTimeout time.Duration
+	HeartbeatInterval  time.Duration
 }
 
 type SecurityConfig struct {
@@ -99,8 +99,8 @@ func Load() *Config {
 		},
 		AI: loadAIConfig(),
 		Run: RunConfig{
-			MaxTotalDuration:  getEnvDuration("RUN_MAX_TOTAL_DURATION", 0),
-			HeartbeatInterval: getEnvDuration("SSE_HEARTBEAT_INTERVAL", 12*time.Second),
+			FirstOutputTimeout: getEnvDuration("RUN_FIRST_OUTPUT_TIMEOUT", 0),
+			HeartbeatInterval:  getEnvDuration("SSE_HEARTBEAT_INTERVAL", 12*time.Second),
 		},
 		Security: SecurityConfig{
 			TrustProxyHeaders: getEnvBool("TRUST_PROXY_HEADERS", false),

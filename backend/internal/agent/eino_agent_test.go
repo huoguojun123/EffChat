@@ -778,7 +778,7 @@ func TestConsumeAssistantEvent_StreamingReassembly(t *testing.T) {
 	}
 
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, emit)
+	full, err := a.consumeAssistantEvent(t.Context(), mv, emit)
 	if err != nil {
 		t.Fatalf("consumeAssistantEvent: %v", err)
 	}
@@ -897,7 +897,7 @@ func TestConsumeAssistantEvent_InlineThinkSplit(t *testing.T) {
 	}
 
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, emit)
+	full, err := a.consumeAssistantEvent(t.Context(), mv, emit)
 	if err != nil {
 		t.Fatalf("consumeAssistantEvent: %v", err)
 	}
@@ -936,7 +936,7 @@ func TestConsumeAssistantEvent_NonStreaming(t *testing.T) {
 		return nil
 	}
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, emit)
+	full, err := a.consumeAssistantEvent(t.Context(), mv, emit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +955,7 @@ func TestConsumeAssistantEvent_EmitCancelStopsStream(t *testing.T) {
 		Role:        schema.Assistant,
 	}
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, func(string, interface{}) error {
+	full, err := a.consumeAssistantEvent(t.Context(), mv, func(string, interface{}) error {
 		return context.Canceled
 	})
 	if err != context.Canceled {
@@ -976,7 +976,7 @@ func TestConsumeAssistantEvent_CanceledStreamReturnsPartialMessage(t *testing.T)
 	mv := &adk.MessageVariant{IsStreaming: true, MessageStream: reader, Role: schema.Assistant}
 
 	var reset bool
-	full, err := (&EinoAgent{}).consumeAssistantEvent(mv, func(event string, _ interface{}) error {
+	full, err := (&EinoAgent{}).consumeAssistantEvent(t.Context(), mv, func(event string, _ interface{}) error {
 		reset = reset || event == streaming.EventAttemptReset
 		return nil
 	})
@@ -1002,7 +1002,7 @@ func TestConsumeAssistantEvent_RetryResetsPartialAttempt(t *testing.T) {
 
 	var events []string
 	var reset streaming.AttemptResetEvent
-	full, err := (&EinoAgent{}).consumeAssistantEvent(mv, func(event string, data interface{}) error {
+	full, err := (&EinoAgent{}).consumeAssistantEvent(t.Context(), mv, func(event string, data interface{}) error {
 		events = append(events, event)
 		if event == streaming.EventAttemptReset {
 			reset = data.(streaming.AttemptResetEvent)
@@ -1033,7 +1033,7 @@ func TestConsumeAssistantEvent_TerminalErrorPreservesPartialAttempt(t *testing.T
 	mv := &adk.MessageVariant{IsStreaming: true, MessageStream: reader, Role: schema.Assistant}
 
 	var reset bool
-	full, err := (&EinoAgent{}).consumeAssistantEvent(mv, func(event string, data interface{}) error {
+	full, err := (&EinoAgent{}).consumeAssistantEvent(t.Context(), mv, func(event string, data interface{}) error {
 		if event == streaming.EventAttemptReset {
 			reset = true
 		}

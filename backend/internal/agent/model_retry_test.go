@@ -40,6 +40,19 @@ func TestTransientModelRetryConfigRetriesOnlyZeroOutputTransientErrors(t *testin
 		{name: "user canceled", err: context.Canceled, wantRun: false},
 		{name: "partial content", err: errors.New("connection reset"), output: &schema.Message{Content: "partial"}, wantRun: false},
 		{name: "partial reasoning", err: errors.New("connection reset"), output: &schema.Message{ReasoningContent: "partial"}, wantRun: false},
+		{
+			name:    "named tool call",
+			err:     errors.New("connection reset"),
+			output:  &schema.Message{ToolCalls: []schema.ToolCall{{Function: schema.FunctionCall{Name: "web_search"}}}},
+			wantRun: false,
+		},
+		{
+			name:     "incomplete tool shell",
+			err:      errors.New("connection reset"),
+			output:   &schema.Message{ToolCalls: []schema.ToolCall{{ID: "call_1"}}},
+			wantRun:  true,
+			category: RuntimeErrorConnection,
+		},
 	}
 
 	for _, testCase := range cases {

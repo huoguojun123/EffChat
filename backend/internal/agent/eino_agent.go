@@ -439,7 +439,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		}
 
 		// 助手事件
-		fullMsg, err := a.consumeAssistantEvent(mv, emit)
+		fullMsg, err := a.consumeAssistantEvent(ctx, mv, emit)
 		if err != nil {
 			if fullMsg != nil {
 				produced = append(produced, messageToData(fullMsg))

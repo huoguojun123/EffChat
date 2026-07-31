@@ -1,13 +1,14 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"unicode/utf8"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
@@ -15,6 +16,7 @@ import (
 // 返回拼接还原后的完整消息（含 tool_calls / reasoning / response_meta）。
 // 流被重试错误中断时返回 nil（调用方丢弃）。
 func (a *EinoAgent) consumeAssistantEvent(
+	ctx context.Context,
 	mv *adk.MessageVariant,
 	emit func(string, interface{}) error,
 ) (*schema.Message, error) {
@@ -77,6 +79,7 @@ func (a *EinoAgent) consumeAssistantEvent(
 		if msg == nil {
 			return nil, nil
 		}
+		modelstream.ObserveMessage(ctx, msg)
 		if msg.ReasoningContent != "" {
 			if err := emitDelta(streaming.EventThinkingDelta, streaming.ThinkingDeltaEvent{Delta: msg.ReasoningContent}); err != nil {
 				return nil, err
@@ -95,57 +98,42 @@ func (a *EinoAgent) consumeAssistantEvent(
 	}
 
 	stream := mv.MessageStream
-	defer stream.Close()
-
-	chunks := make([]*schema.Message, 0, 16)
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			var willRetry *adk.WillRetryError
-			if errors.As(err, &willRetry) {
-				if resetErr := resetEmittedAttempt(); resetErr != nil {
-					return nil, resetErr
-				}
-				return nil, nil // 重试中，丢弃这段部分流
-			}
-			if flushErr := flushContent(); flushErr != nil {
-				return nil, flushErr
-			}
-			if len(chunks) == 0 {
-				return nil, err
-			}
-			full, concatErr := schema.ConcatMessages(chunks)
-			if concatErr != nil {
-				return nil, fmt.Errorf("failed to concat interrupted message stream: %w", concatErr)
-			}
-			stripInlineThink(full)
-			return full, fmt.Errorf("stream error: %w", err)
-		}
-		chunks = append(chunks, chunk)
+	full, err := modelstream.Consume(ctx, stream, func(chunk *schema.Message) error {
 		if chunk.ReasoningContent != "" {
 			if err := emitDelta(streaming.EventThinkingDelta, streaming.ThinkingDeltaEvent{Delta: chunk.ReasoningContent}); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if chunk.Content != "" {
 			if err := emitContent(chunk.Content); err != nil {
-				return nil, err
+				return err
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		var willRetry *adk.WillRetryError
+		if errors.As(err, &willRetry) {
+			if resetErr := resetEmittedAttempt(); resetErr != nil {
+				return nil, resetErr
+			}
+			return nil, nil // 重试中，丢弃这段部分流
+		}
+		if flushErr := flushContent(); flushErr != nil {
+			return nil, flushErr
+		}
+		if full == nil {
+			return nil, err
+		}
+		stripInlineThink(full)
+		return full, fmt.Errorf("stream error: %w", err)
 	}
 	if err := flushContent(); err != nil {
 		return nil, err
 	}
 
-	if len(chunks) == 0 {
+	if full == nil {
 		return nil, nil
-	}
-	full, err := schema.ConcatMessages(chunks)
-	if err != nil {
-		return nil, fmt.Errorf("failed to concat message stream: %w", err)
 	}
 	stripInlineThink(full)
 	return full, nil

@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/service"
 	"github.com/huoguojun123/EffChat/internal/tool"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
@@ -139,15 +140,16 @@ func runtimeReqForAdapter(req *ChatRequest, protocolProvider string) *ChatReques
 }
 
 func (a *EinoAgent) wrapUsageModel(cm einoModel.ToolCallingChatModel, req *ChatRequest) einoModel.ToolCallingChatModel {
-	if a == nil || req == nil || req.SkipUsage || a.usageService == nil {
-		return cm
+	cm = modelstream.ObserveChatModel(cm)
+	if a != nil && req != nil && !req.SkipUsage && a.usageService != nil {
+		cm = modelusage.WrapChatModel(cm, a.usageService, modelusage.Meta{
+			UserID:    req.UserID,
+			SessionID: req.SessionID,
+			Provider:  req.Provider,
+			ModelID:   req.ModelID,
+		})
 	}
-	return modelusage.WrapChatModel(cm, a.usageService, modelusage.Meta{
-		UserID:    req.UserID,
-		SessionID: req.SessionID,
-		Provider:  req.Provider,
-		ModelID:   req.ModelID,
-	})
+	return cm
 }
 
 func (a *EinoAgent) buildUtilityModelWithInfo(ctx context.Context, modelID string) (einoModel.ToolCallingChatModel, *modelbank.ModelInfo, error) {

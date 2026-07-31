@@ -18,6 +18,7 @@ import (
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"google.golang.org/genai"
 )
 
@@ -401,8 +402,5 @@ func modelUpstreamDiagnostic(status int, reason, detail string) string {
 }
 
 func hasModelOutput(message *schema.Message) bool {
-	if message == nil {
-		return false
-	}
-	return strings.TrimSpace(message.Content) != "" || strings.TrimSpace(message.ReasoningContent) != "" || len(message.ToolCalls) > 0
+	return modelstream.HasMeaningfulOutput(message)
 }

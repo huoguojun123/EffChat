@@ -493,6 +493,32 @@ func TestFinishRunSetupDoesNotReclassifySuccessfulSetupAsTimeout(t *testing.T) {
 	runHub.Complete(run.RunID, nil, nil)
 }
 
+func TestFinishRunSetupPreservesParentCancellationCause(t *testing.T) {
+	runHub := service.NewRunHub(time.Minute, 1<<20)
+	run, err := runHub.StartWithFirstOutputTimeout(7, 9, 0, "setup-success-parent-cancel", service.RunKindChat, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	runContext, err := runHub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, setupCancel := newRunSetupContext(runContext, 500*time.Millisecond)
+	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelServerDrain) {
+		t.Fatal("failed to cancel durable parent")
+	}
+	if !finishRunSetup(nil, nil, runHub, run.RunID, runContext, setupCancel) {
+		t.Fatal("successful setup boundary ignored durable parent cancellation")
+	}
+	snapshot, ok := runHub.Get(run.RunID, 7, 9)
+	if !ok || snapshot.Status != service.RunStatusCanceled || snapshot.CancelCause != string(service.RunCancelServerDrain) || snapshot.ErrorCode != "server_draining" {
+		t.Fatalf("successful setup parent terminal = %+v", snapshot)
+	}
+}
+
 func TestRunSetupInterruptionPreservesParentCancellationCause(t *testing.T) {
 	tests := []struct {
 		name      string

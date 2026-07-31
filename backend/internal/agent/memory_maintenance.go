@@ -44,7 +44,6 @@ type memoryMaintenanceDecision struct {
 
 const (
 	MemoryMaintenanceFirstOutputTimeout = 90 * time.Second
-	memoryMaintenanceMaxOutputTokens    = 4096
 	memoryMaintenanceControlTimeout     = 10 * time.Second
 	memoryMaintenancePersistenceTimeout = 10 * time.Second
 )
@@ -294,7 +293,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 	}
 
 	setupCtx, setupCancel := memoryMaintenanceControlContext(ctx)
-	chatModel, provider, modelID, err := a.buildMemoryMaintenanceModel(setupCtx, req)
+	chatModel, provider, modelID, err := a.buildMemoryMaintenanceModel(setupCtx, req, limits)
 	setupCancel()
 	if err != nil {
 		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
@@ -304,11 +303,13 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 			RunID:        req.RunID,
 			Source:       taskSource,
 			Status:       repository.ModelTaskStatusFailed,
+			Provider:     provider,
+			ModelID:      modelID,
 			TargetType:   "memory",
 			TargetID:     fmt.Sprint(req.SessionID),
-			ErrorType:    modelusage.ErrorType(err),
+			ErrorType:    memoryMaintenanceTaskErrorType(err),
 			ErrorMessage: err.Error(),
-			RetryAfter:   retryAfterForTask(taskSource),
+			RetryAfter:   retryAfterForMemoryTask(taskSource, err),
 			StartedAt:    started,
 			FinishedAt:   time.Now(),
 		})
@@ -340,9 +341,9 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 			ModelID:      modelID,
 			TargetType:   "memory",
 			TargetID:     fmt.Sprint(req.SessionID),
-			ErrorType:    modelusage.ErrorType(err),
+			ErrorType:    memoryMaintenanceTaskErrorType(err),
 			ErrorMessage: err.Error(),
-			RetryAfter:   retryAfterForTask(taskSource),
+			RetryAfter:   retryAfterForMemoryTask(taskSource, err),
 			StartedAt:    started,
 			FinishedAt:   time.Now(),
 		})
@@ -621,11 +622,14 @@ func validateMemoryMaintenanceLanguage(doc sessionmemory.Document) error {
 	return nil
 }
 
-func (a *EinoAgent) buildMemoryMaintenanceModel(ctx context.Context, req MemoryMaintenanceRequest) (einoModel.ToolCallingChatModel, string, string, error) {
+func (a *EinoAgent) buildMemoryMaintenanceModel(ctx context.Context, req MemoryMaintenanceRequest, limits sessionmemory.Limits) (einoModel.ToolCallingChatModel, string, string, error) {
 	if req.ModelRequest == nil || strings.TrimSpace(req.ModelRequest.ModelID) == "" || strings.TrimSpace(req.ModelRequest.Provider) == "" {
 		return nil, "", "", fmt.Errorf("memory maintenance requires the active chat model configuration")
 	}
-	modelReq := taskModelRequest(req.ModelRequest, memoryMaintenanceMaxOutputTokens)
+	modelReq, err := prepareMemoryMaintenanceModelRequest(req.ModelRequest, limits)
+	if err != nil {
+		return nil, req.ModelRequest.Provider, req.ModelRequest.ModelID, err
+	}
 	modelReq.UserID = req.UserID
 	modelReq.SessionID = req.SessionID
 	modelReq.SkipUsage = false
@@ -829,6 +833,12 @@ func generateMemoryMaintenanceText(ctx context.Context, chatModel einoModel.Tool
 		}
 		return "", err
 	}
+	if result.ResponseMeta != nil {
+		normalized := normalizeProviderFinishReason(result.ResponseMeta.FinishReason, len(result.ToolCalls) > 0)
+		if normalized.Canonical == FinishReasonOutputLimit {
+			return "", memoryMaintenanceOutputLimitError(normalized.Raw)
+		}
+	}
 	output := strings.TrimSpace(result.Content)
 	if output == "" {
 		return "", fmt.Errorf("memory maintenance returned empty output")
@@ -911,6 +921,16 @@ func retryAfterForTask(source string) *time.Time {
 	}
 	t := time.Now().Add(30 * time.Minute)
 	return &t
+}
+
+func retryAfterForMemoryTask(source string, err error) *time.Time {
+	// A declared output-capability mismatch cannot recover with time alone.
+	// Leaving it out of cooldown lets a later model/capacity configuration
+	// change take effect on the next eligible turn instead of waiting 30 minutes.
+	if errors.Is(err, ErrMemoryMaintenanceOutputBudgetInsufficient) {
+		return nil
+	}
+	return retryAfterForTask(source)
 }
 
 func (a *EinoAgent) memoryLimitsContext(ctx context.Context) (sessionmemory.Limits, error) {

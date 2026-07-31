@@ -438,10 +438,10 @@ var AdminEditableConfig = map[string]AdminConfigMeta{
 		ConfigType:  "select",
 		Default:     json.RawMessage(`4000`),
 		Options: []ConfigOption{
-			{Value: 4000, Label: "4K · 默认"},
-			{Value: 8000, Label: "8K · 更长会话状态"},
-			{Value: 12000, Label: "12K · 大量项目记录"},
-			{Value: 16000, Label: "16K · 高上下文模型"},
+			{Value: 4000, Label: "4K · 需 ≥8,192 输出 token"},
+			{Value: 8000, Label: "8K · 需 ≥12,288 输出 token"},
+			{Value: 12000, Label: "12K · 需 ≥16,384 输出 token"},
+			{Value: 16000, Label: "16K · 需 ≥20,480 输出 token"},
 		},
 	},
 	"compression_context_threshold": {

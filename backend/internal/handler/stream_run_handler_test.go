@@ -694,6 +694,27 @@ func TestRunCompactionTasksMemoryOutputDoesNotDisarmCompressionGuard(t *testing.
 	}
 }
 
+func TestShouldRetryMemoryMaintenanceBeforeCompaction(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "success", err: nil, want: false},
+		{name: "answer selection changed", err: repository.ErrAnswerSelectionRevisionConflict, want: false},
+		{name: "declared output capacity", err: fmt.Errorf("wrapped: %w", agent.ErrMemoryMaintenanceOutputBudgetInsufficient), want: false},
+		{name: "provider output limit", err: fmt.Errorf("wrapped: %w", agent.ErrMemoryMaintenanceOutputLimit), want: true},
+		{name: "transient model failure", err: errors.New("temporary model failure"), want: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := shouldRetryMemoryMaintenanceBeforeCompaction(testCase.err); got != testCase.want {
+				t.Fatalf("shouldRetryMemoryMaintenanceBeforeCompaction(%v) = %t, want %t", testCase.err, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestAgentErrorPayload_GenericError(t *testing.T) {
 	payload := agentErrorPayload(errors.New("sql: password=secret plain failure"), "req-generic")
 	if payload["error"] != "模型请求失败，请稍后重试" {

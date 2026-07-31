@@ -1240,7 +1240,7 @@ func runCompactionWithMemoryGate(ctx context.Context, einoAgent *agent.EinoAgent
 		err = nil
 		for i := 0; i < 2; i++ {
 			err = einoAgent.MaintainSessionMemory(taskCtx, memReq)
-			if err == nil || errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
+			if !shouldRetryMemoryMaintenanceBeforeCompaction(err) {
 				break
 			}
 			if taskCtx.Err() != nil {
@@ -1251,6 +1251,16 @@ func runCompactionWithMemoryGate(ctx context.Context, einoAgent *agent.EinoAgent
 	}, func(taskCtx context.Context) (*agent.CompressionCheckpoint, error) {
 		return einoAgent.RunPreparedCompaction(taskCtx, preparedCompaction)
 	})
+}
+
+func shouldRetryMemoryMaintenanceBeforeCompaction(err error) bool {
+	if err == nil || errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
+		return false
+	}
+	// Retrying cannot change the model's declared maximum output. Stop after the
+	// first audited failure so compaction does not duplicate a deterministic
+	// task-run row or delay the user before surfacing the configuration error.
+	return !errors.Is(err, agent.ErrMemoryMaintenanceOutputBudgetInsufficient)
 }
 
 func runCompactionTasks(ctx context.Context, maintainMemory func(context.Context) error, compact func(context.Context) (*agent.CompressionCheckpoint, error)) (*agent.CompressionCheckpoint, error) {

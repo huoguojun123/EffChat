@@ -14,6 +14,7 @@ import (
 	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 	"github.com/huoguojun123/EffChat/internal/middleware"
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 )
@@ -177,6 +178,10 @@ func CompactSessionMemoryHandler(sessionService *service.SessionService, authSer
 				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
 				return
 			}
+			if payload, ok := memoryMaintenanceFailurePayload(err); ok {
+				c.JSON(http.StatusBadRequest, payload)
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to compact memory", "code": "memory_compact_failed"})
 			return
 		}
@@ -239,6 +244,10 @@ func RetrySessionMemoryHandler(sessionService *service.SessionService, authServi
 				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
 				return
 			}
+			if payload, ok := memoryMaintenanceFailurePayload(err); ok {
+				c.JSON(http.StatusBadRequest, payload)
+				return
+			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to retry memory maintenance", "code": "memory_retry_failed"})
 			return
 		}
@@ -264,6 +273,25 @@ func sessionMemoryConflictPayload() gin.H {
 		"error":     "会话记忆已在后台更新，请重新加载后再操作",
 		"code":      "session_memory_conflict",
 		"retryable": true,
+	}
+}
+
+func memoryMaintenanceFailurePayload(err error) (gin.H, bool) {
+	switch {
+	case errors.Is(err, agent.ErrMemoryMaintenanceOutputBudgetInsufficient):
+		return gin.H{
+			"error":     err.Error(),
+			"code":      "memory_output_budget_insufficient",
+			"retryable": false,
+		}, true
+	case errors.Is(err, agent.ErrMemoryMaintenanceOutputLimit):
+		return gin.H{
+			"error":     "模型达到输出上限，会话记忆没有变化；请降低记忆容量或切换到更高输出模型后重试",
+			"code":      "memory_output_limit",
+			"retryable": true,
+		}, true
+	default:
+		return nil, false
 	}
 }
 
@@ -308,6 +336,7 @@ func memoryModelRequest(session *model.Session, userID int64, userPreferences []
 	if session == nil {
 		return nil
 	}
+	modelInfo := modelbank.GetOrDefault(session.ModelID, session.Provider)
 	req := &agent.ChatRequest{
 		UserID:          userID,
 		SessionID:       session.ID,
@@ -316,6 +345,13 @@ func memoryModelRequest(session *model.Session, userID int64, userPreferences []
 		MessageFormat:   session.MessageFormat,
 		MemoryEnabled:   session.MemoryEnabled,
 		UserPreferences: userPreferences,
+		ContextWindow:   modelInfo.Capabilities.ContextWindow,
+		ModelMaxOutput:  modelInfo.Capabilities.MaxOutput,
+		Vision:          modelInfo.Capabilities.Vision,
+		ToolUse:         modelInfo.Capabilities.ToolUse,
+		Reasoning:       modelInfo.Capabilities.Reasoning,
+		ThinkingFormat:  modelInfo.ThinkingFormat,
+		SearchImpl:      modelInfo.Capabilities.SearchImpl,
 	}
 	if session.SystemPrompt != nil {
 		req.SystemPrompt = *session.SystemPrompt

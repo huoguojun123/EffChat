@@ -1,6 +1,9 @@
 package repository
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // clampToOptions 应把不在档位内的值夹紧到最近的合法档位，档位内的值原样返回，
 // 无档位定义的 key 不受影响。这是防止压缩阈值被误设成过小值（如 1000）的兜底。
@@ -67,5 +70,10 @@ func TestAdminEditableConfig_SeparatesUtilityMemorySettings(t *testing.T) {
 	}
 	if limitMeta.Category != "会话记忆" || limitMeta.ConfigType != "select" || len(limitMeta.Options) == 0 {
 		t.Fatalf("memory_max_chars meta = %+v", limitMeta)
+	}
+	for _, option := range limitMeta.Options {
+		if !strings.Contains(option.Label, "输出 token") {
+			t.Fatalf("memory_max_chars option does not disclose output requirement: %+v", option)
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/huoguojun123/EffChat/internal/agent"
 	"github.com/huoguojun123/EffChat/internal/middleware"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
@@ -55,6 +56,34 @@ func TestMemoryUndoErrorPayloadUsesStablePublicMessage(t *testing.T) {
 	notFound := memoryUndoErrorPayload(repository.ErrMemoryChangeNotFound)
 	if notFound["code"] != "memory_change_not_found" {
 		t.Fatalf("not found code = %v", notFound["code"])
+	}
+}
+
+func TestMemoryMaintenanceFailurePayloadUsesStableCodes(t *testing.T) {
+	budget, ok := memoryMaintenanceFailurePayload(fmt.Errorf("capacity detail: %w", agent.ErrMemoryMaintenanceOutputBudgetInsufficient))
+	if !ok || budget["code"] != "memory_output_budget_insufficient" || budget["retryable"] != false {
+		t.Fatalf("budget payload = %#v", budget)
+	}
+
+	outputLimit, ok := memoryMaintenanceFailurePayload(fmt.Errorf("finish detail: %w", agent.ErrMemoryMaintenanceOutputLimit))
+	if !ok || outputLimit["code"] != "memory_output_limit" || outputLimit["retryable"] != true {
+		t.Fatalf("output-limit payload = %#v", outputLimit)
+	}
+}
+
+func TestMemoryModelRequestCarriesRegisteredCapabilities(t *testing.T) {
+	req := memoryModelRequest(&model.Session{
+		ID:            9,
+		ModelID:       "gpt-5.6-terra",
+		Provider:      "openai",
+		MessageFormat: "v1",
+		MemoryEnabled: true,
+	}, 7, []byte(`{"locale":"zh-CN"}`))
+	if req == nil {
+		t.Fatal("memoryModelRequest returned nil")
+	}
+	if req.ModelMaxOutput != 128000 || !req.Reasoning || req.ContextWindow != 1050000 {
+		t.Fatalf("manual memory request lost model capabilities: %+v", req)
 	}
 }
 

@@ -225,3 +225,64 @@ func TestApplyGeminiThinkingAuto(t *testing.T) {
 		t.Fatalf("thinking budget = %#v, want 4096", cfg.ThinkingConfig.ThinkingBudget)
 	}
 }
+
+func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.T) {
+	t.Run("openai compatible", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "qwen3-max"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider:         "openai",
+			ModelID:          "qwen3-max",
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		if len(cfg.ExtraFields) != 0 || cfg.ReasoningEffort != "" {
+			t.Fatalf("suppressed utility thinking fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
+		}
+	})
+
+	t.Run("openai reasoning token field", func(t *testing.T) {
+		req := &ChatRequest{
+			Provider:         "openai",
+			ModelID:          "gpt-5.6",
+			MaxTokens:        4096,
+			Reasoning:        true,
+			ThinkingFormat:   string(modelbank.ThinkingFormatOpenAIGPT56),
+			SuppressThinking: true,
+		}
+		cfg := &openai.ChatModelConfig{Model: req.ModelID}
+		applyOpenAITokenLimit(req, cfg)
+		applyOpenAICompatibleThinking(req, cfg)
+		if cfg.MaxCompletionTokens == nil || *cfg.MaxCompletionTokens != 4096 || cfg.MaxTokens != nil {
+			t.Fatalf("suppressed reasoning token fields = max:%v completion:%v", cfg.MaxTokens, cfg.MaxCompletionTokens)
+		}
+		if len(cfg.ExtraFields) != 0 || cfg.ReasoningEffort != "" {
+			t.Fatalf("suppressed reasoning fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
+		}
+	})
+
+	t.Run("anthropic", func(t *testing.T) {
+		cfg := &claude.Config{Model: "claude-sonnet-4-5", MaxTokens: 4096}
+		applyClaudeThinking(&ChatRequest{
+			Provider:         "anthropic",
+			ModelID:          "claude-sonnet-4-5",
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		if cfg.Thinking != nil || len(cfg.AdditionalRequestFields) != 0 || cfg.MaxTokens != 4096 {
+			t.Fatalf("suppressed Claude config = thinking:%#v additional:%#v max:%d", cfg.Thinking, cfg.AdditionalRequestFields, cfg.MaxTokens)
+		}
+	})
+
+	t.Run("gemini", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-2.5-pro"}
+		applyGeminiThinking(&ChatRequest{
+			Provider:         "google",
+			ModelID:          "gemini-2.5-pro",
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		if cfg.ThinkingConfig != nil {
+			t.Fatalf("suppressed Gemini thinking config = %#v", cfg.ThinkingConfig)
+		}
+	})
+}

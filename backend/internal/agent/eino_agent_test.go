@@ -863,6 +863,7 @@ func TestTaskModelRequestClonesAndOwnsOutputLimit(t *testing.T) {
 		ModelID:         "gpt-5.6-terra",
 		Provider:        "openai",
 		MaxTokens:       64000,
+		ModelMaxOutput:  2048,
 		Reasoning:       true,
 		ThinkingFormat:  string(modelbank.ThinkingFormatOpenAIGPT56),
 		ThinkingEffort:  string(modelbank.ThinkingEffortHigh),
@@ -876,14 +877,23 @@ func TestTaskModelRequestClonesAndOwnsOutputLimit(t *testing.T) {
 	if got.UserID != original.UserID || got.SessionID != original.SessionID || got.ModelID != original.ModelID || got.Provider != original.Provider || got.RuntimeResolved != original.RuntimeResolved {
 		t.Fatalf("runtime identity changed: %#v", got)
 	}
-	if got.MaxTokens != 4096 {
-		t.Fatalf("MaxTokens = %d, want 4096", got.MaxTokens)
+	if got.MaxTokens != original.ModelMaxOutput {
+		t.Fatalf("MaxTokens = %d, want model cap %d", got.MaxTokens, original.ModelMaxOutput)
 	}
 	if got.Reasoning != original.Reasoning || got.ThinkingFormat != original.ThinkingFormat || got.ThinkingEffort != original.ThinkingEffort {
 		t.Fatalf("task thinking fields changed: reasoning:%t format:%q effort:%q", got.Reasoning, got.ThinkingFormat, got.ThinkingEffort)
 	}
 	if original.MaxTokens != 64000 || !original.Reasoning || original.ThinkingFormat != string(modelbank.ThinkingFormatOpenAIGPT56) {
 		t.Fatalf("original request was mutated: %#v", original)
+	}
+
+	requestedSmaller := taskModelRequest(&ChatRequest{ModelMaxOutput: 2048}, 512)
+	if requestedSmaller.MaxTokens != 512 {
+		t.Fatalf("smaller task limit = %d, want 512", requestedSmaller.MaxTokens)
+	}
+	unknownModelLimit := taskModelRequest(&ChatRequest{}, 512)
+	if unknownModelLimit.MaxTokens != 512 {
+		t.Fatalf("unknown model limit changed task limit to %d", unknownModelLimit.MaxTokens)
 	}
 }
 

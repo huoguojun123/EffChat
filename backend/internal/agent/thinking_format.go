@@ -20,6 +20,9 @@ const (
 // 关键点：这里不能只看 provider。用户可能把 DeepSeek V4 接在 provider=openai
 // 或 NewAPI 的 OpenAI 兼容通道下；真正决定请求体形状的是 model_id + 管理员覆盖项。
 func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig) {
+	if req != nil && req.SuppressThinking {
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
@@ -62,6 +65,9 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 }
 
 func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
+	if req != nil && req.SuppressThinking {
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
@@ -85,6 +91,9 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 }
 
 func applyGeminiThinking(req *ChatRequest, cfg *gemini.Config) {
+	if req != nil && req.SuppressThinking {
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	if format == modelbank.ThinkingFormatGeminiThinking {

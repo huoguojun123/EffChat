@@ -3,10 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino-ext/components/model/gemini"
@@ -15,7 +11,6 @@ import (
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/service"
-	"github.com/huoguojun123/EffChat/internal/tool"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 	"google.golang.org/genai"
 )
@@ -148,6 +143,9 @@ func taskModelRequest(req *ChatRequest, maxTokens int) *ChatRequest {
 		req = &ChatRequest{}
 	}
 	clone := *req
+	if clone.ModelMaxOutput > 0 && (maxTokens <= 0 || clone.ModelMaxOutput < maxTokens) {
+		maxTokens = clone.ModelMaxOutput
+	}
 	clone.MaxTokens = maxTokens
 	return &clone
 }
@@ -163,117 +161,6 @@ func (a *EinoAgent) wrapUsageModel(cm einoModel.ToolCallingChatModel, req *ChatR
 		})
 	}
 	return cm
-}
-
-func (a *EinoAgent) buildUtilityModelWithInfo(ctx context.Context, modelID string) (einoModel.ToolCallingChatModel, *modelbank.ModelInfo, error) {
-	info, err := a.resolveUtilityModelInfo(modelID)
-	if err != nil {
-		return nil, nil, err
-	}
-	cm, err := a.buildChatModel(ctx, &ChatRequest{
-		ModelID:  info.ID,
-		Provider: info.Provider,
-	}, modelbank.SearchDecision{})
-	if err != nil {
-		return nil, info, err
-	}
-	return cm, info, nil
-}
-
-func (a *EinoAgent) resolveUtilityModelInfo(preferredModelID string) (*modelbank.ModelInfo, error) {
-	channelAvailability := make(map[string]bool)
-	isChannelAvailable := func(channelKey string) bool {
-		channelKey = strings.TrimSpace(channelKey)
-		if channelKey == "" {
-			return false
-		}
-		available, ok := channelAvailability[channelKey]
-		if ok {
-			return available
-		}
-		available = a.utilityChannelAvailable(channelKey)
-		channelAvailability[channelKey] = available
-		return available
-	}
-
-	preferredModelID = strings.TrimSpace(preferredModelID)
-	if preferredModelID != "" {
-		if info := modelbank.Get(preferredModelID); info != nil && info.Enabled && isChannelAvailable(info.Provider) {
-			return info, nil
-		}
-	}
-
-	candidates := modelbank.List()
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].Provider == candidates[j].Provider {
-			return candidates[i].ID < candidates[j].ID
-		}
-		return candidates[i].Provider < candidates[j].Provider
-	})
-	for _, info := range candidates {
-		if info != nil && info.Enabled && isChannelAvailable(info.Provider) {
-			return info, nil
-		}
-	}
-	if preferredModelID == "" {
-		return nil, fmt.Errorf("no enabled utility model has an available channel")
-	}
-	return nil, fmt.Errorf("utility model %q is unavailable and no fallback model has an available channel", preferredModelID)
-}
-
-func (a *EinoAgent) utilityChannelAvailable(channelKey string) bool {
-	if a == nil || a.channelService == nil || strings.TrimSpace(channelKey) == "" {
-		return false
-	}
-	_, err := a.channelService.ResolveAIChannel(channelKey)
-	return err == nil
-}
-
-// buildExtractSummarizer 按配置构造网页提炼器：
-// 读 extract_summary_enabled（默认 true）/ extract_summary_model（默认 claude-haiku-4-5）。
-// 关闭或小模型构造失败时返回 (nil, false)，工具据此降级到截断，不阻断主流程。
-func (a *EinoAgent) buildExtractSummarizer(ctx context.Context) (tool.Summarizer, bool) {
-	enabled := true
-	modelID := "claude-haiku-4-5"
-	if a.configRepo != nil {
-		enabled = a.configRepo.GetBool("extract_summary_enabled", true)
-		modelID = a.configRepo.GetString("extract_summary_model", modelID)
-	}
-	if !enabled {
-		return nil, false
-	}
-	cm, info, err := a.buildUtilityModelWithInfo(ctx, modelID)
-	if err != nil {
-		log.Printf("[web_extract] 提炼小模型构造失败，降级到截断: model=%s err=%v", modelID, err)
-		return nil, false
-	}
-	return &extractSummarizer{
-		chatModel: cm, taskRuns: a.taskRunRepo, provider: info.Provider, modelID: info.ID,
-		runtimeVersion: a.extractSummarizerRuntimeVersion(modelID, info),
-	}, true
-}
-
-func (a *EinoAgent) extractSummarizerRuntimeVersion(configuredModelID string, info *modelbank.ModelInfo) string {
-	parts := []string{strings.TrimSpace(configuredModelID)}
-	if info != nil {
-		parts = append(parts, info.Provider, info.ID)
-		if a != nil && a.channelService != nil {
-			if channel, err := a.channelService.ResolveAIChannel(info.Provider); err == nil && channel != nil {
-				parts = append(parts, channel.UpdatedAt.UTC().Format(time.RFC3339Nano))
-			}
-		}
-	}
-	if a != nil && a.configRepo != nil {
-		for _, key := range []string{"extract_summary_enabled", "extract_summary_model"} {
-			item, err := a.configRepo.Get(key)
-			if err != nil || item == nil {
-				parts = append(parts, key, "unavailable")
-				continue
-			}
-			parts = append(parts, key, item.UpdatedAt.UTC().Format(time.RFC3339Nano))
-		}
-	}
-	return checksumValue("extract-refinement-runtime", parts)
 }
 
 func ptrFloat32(f *float64) *float32 {

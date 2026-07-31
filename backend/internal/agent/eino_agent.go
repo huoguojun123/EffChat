@@ -125,11 +125,21 @@ type ChatRequest struct {
 	RuntimeToolConfigState   service.RuntimeConfigState
 	RuntimeSearchConfig      service.SearchRuntimeConfig
 	RuntimeSearchConfigState service.SearchRuntimeConfigState
-	ContextWindow            int
-	ModelMaxOutput           int
-	Vision                   bool
-	ToolUse                  bool
-	SearchImpl               modelbank.SearchImpl
+	// RuntimeExtractSummary* are the refinement policy and concrete utility
+	// dependencies accepted with the run. ModelInfo and channel stay in memory;
+	// the durable snapshot contains only their checksum, never channel secrets.
+	// PrepareChat must consume these values after snapshot validation instead of
+	// reopening live configuration and silently changing the content-sharing
+	// boundary between durable admission and execution.
+	RuntimeExtractSummaryEnabled   bool
+	RuntimeExtractSummaryModel     string
+	RuntimeExtractSummaryModelInfo *modelbank.ModelInfo
+	RuntimeExtractSummaryChannel   *model.AIChannel
+	ContextWindow                  int
+	ModelMaxOutput                 int
+	Vision                         bool
+	ToolUse                        bool
+	SearchImpl                     modelbank.SearchImpl
 
 	// Reasoning 来自模型配置，用于 auto thinking_format 判断双模式模型是否应开启思考。
 	Reasoning bool
@@ -137,6 +147,11 @@ type ChatRequest struct {
 	ThinkingFormat string
 	// ThinkingEffort 是本轮消息选择的思考投入。空/auto 表示使用当前格式的默认档位。
 	ThinkingEffort string
+	// SuppressThinking is reserved for latency- and cost-bounded utility calls.
+	// Adapters still select the model family's correct token-limit field, but
+	// they must not attach optional thinking budgets that can expand or consume
+	// the utility output allowance before the requested payload is produced.
+	SuppressThinking bool
 
 	// SearchMode 搜索模式：off / auto / on，默认 auto
 	SearchMode modelbank.SearchMode
@@ -313,7 +328,10 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 		if toolRuntime.IsEnabled("web_extract") {
 			// 网页提炼：默认用独立小模型把抓取正文按 goal 提炼成要点（仿 Claude Code），
 			// 避免整页正文塞满上下文。配置关闭或小模型构造失败时降级到截断（工具内默认 4000）。
-			summarizer, summaryEnabled := a.buildExtractSummarizer(setupCtx)
+			summarizer, summaryEnabled, err := a.buildExtractSummarizer(setupCtx, req)
+			if err != nil {
+				return nil, fmt.Errorf("prepare web extract refinement: %w", err)
+			}
 			webExtractTool := tool.NewWebExtractTool(tool.WebExtractConfig{
 				CrawlerImpl:      searchRuntime.CrawlerImpl,
 				CrawlerProviders: searchRuntime.CrawlerProviders,

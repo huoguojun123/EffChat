@@ -16,6 +16,7 @@ files remain under their respective upstream licenses.
 | --- | --- | --- |
 | Anthropic Go SDK | MIT | <https://github.com/anthropics/anthropic-sdk-go> |
 | CloudWeGo Eino and Eino extensions | Apache-2.0 | <https://github.com/cloudwego/eino> |
+| Local Eino Claude adapter patch (`backend/third_party/eino-claude`) | Apache-2.0 | Upstream `components/model/claude` v0.1.20; original license and patch scope retained in that directory |
 | Gin and gin-contrib/cors | MIT | <https://github.com/gin-gonic/gin> |
 | golang-jwt/jwt | MIT | <https://github.com/golang-jwt/jwt> |
 | google/uuid | BSD-3-Clause | <https://github.com/google/uuid> |

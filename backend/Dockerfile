@@ -15,6 +15,10 @@ RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" /etc/apk
   && apk add --no-cache ca-certificates git
 
 COPY backend/go.mod backend/go.sum ./
+# go.mod replaces the Eino Claude adapter with this audited local module.
+# Copy its module manifest before downloading dependencies so the cache stage
+# remains valid for clean clones and exported source trees.
+COPY backend/third_party/eino-claude/go.mod ./third_party/eino-claude/go.mod
 RUN go mod download
 
 COPY backend/ .

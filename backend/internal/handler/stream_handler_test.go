@@ -448,7 +448,7 @@ func TestRunAgentStreamAcknowledgesDurableTurnBeforeCancellation(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/stream", nil)
-	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
+	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, time.Second, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
 
 	body := recorder.Body.String()
 	if recorder.Code != http.StatusOK || !strings.Contains(body, streaming.EventMessageStart) || !strings.Contains(body, "first_output_timeout") {

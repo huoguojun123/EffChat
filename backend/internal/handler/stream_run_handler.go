@@ -141,6 +141,7 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 const (
 	defaultChatFirstOutputTimeout       = 15 * time.Minute
 	defaultCompactionFirstOutputTimeout = 5 * time.Minute
+	maxRunSetupTimeout                  = 30 * time.Second
 )
 
 type agentRunExecution struct {
@@ -154,6 +155,8 @@ type agentRunExecution struct {
 	runHub         *service.RunHub
 	taskRunRepo    *repository.ModelTaskRunRepository
 	runContext     context.Context
+	setupContext   context.Context
+	setupCancel    context.CancelFunc
 	sessionID      int64
 	userID         int64
 	userMessage    *model.Message
@@ -180,7 +183,91 @@ func effectiveFirstOutputTimeout(configured, fallback time.Duration) time.Durati
 	return fallback
 }
 
-func runAgentStream(c *gin.Context, messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, taskRunRepo *repository.ModelTaskRunRepository, heartbeat time.Duration, sessionID, userID int64, userMessage *model.Message, runSnapshot *service.RunSnapshot, usageKind string) {
+// effectiveRunSetupTimeout gives durable setup its own bounded budget while
+// guaranteeing that it expires before the enclosing first-output guard. The
+// outer timeout is already effective (chat/compaction fallback applied) at
+// production call sites. Non-positive values fall back to the setup cap; a
+// one-nanosecond outer guard yields an immediate setup deadline because no
+// smaller positive duration exists.
+func effectiveRunSetupTimeout(firstOutputTimeout time.Duration) time.Duration {
+	if firstOutputTimeout <= 0 {
+		return maxRunSetupTimeout
+	}
+	half := firstOutputTimeout / 2
+	if half < maxRunSetupTimeout {
+		return half
+	}
+	return maxRunSetupTimeout
+}
+
+func newRunSetupContext(runContext context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if runContext == nil {
+		runContext = context.Background()
+	}
+	return context.WithTimeout(runContext, timeout)
+}
+
+// transitionRunSetupInterruption keeps semantic RunHub cancellation ahead of
+// the child setup deadline. A setup timeout is a retryable failed run, not a
+// RunCancelCause: user stop, first-output timeout, drain, and invalidation must
+// retain their existing canceled terminal facts and public error mapping.
+func transitionRunSetupInterruption(c *gin.Context, writer *streaming.SSEWriter, runHub *service.RunHub, runID, requestID string, runContext, setupContext context.Context) bool {
+	if transitionCanceledRun(c, writer, runHub, runID, runContext) {
+		return true
+	}
+	if setupContext == nil || !errors.Is(context.Cause(setupContext), context.DeadlineExceeded) {
+		return false
+	}
+	// Close the small race where the parent is canceled after the first check
+	// but before the setup terminal is committed.
+	if transitionCanceledRun(c, writer, runHub, runID, runContext) {
+		return true
+	}
+
+	payload := gin.H{
+		"error":     "任务准备超时，请重试",
+		"code":      "run_setup_timeout",
+		"retryable": true,
+	}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	logger.Error("run setup timed out: request_id=%q run_id=%q", requestID, runID)
+	if err := writeRunTerminal(writer, runHub, runID, service.RunTerminal{
+		Status:             service.RunStatusFailed,
+		PublicErrorCode:    "run_setup_timeout",
+		PublicErrorMessage: "任务准备超时，请重试",
+		Event:              streaming.EventError,
+		Data:               payload,
+	}); err != nil {
+		logger.Error("persist run setup timeout failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
+		if writer == nil && c != nil && !c.Writer.Written() {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":     "任务状态保存失败，请重试",
+				"code":      "run_terminal_failed",
+				"retryable": true,
+			})
+		}
+		return true
+	}
+	if writer == nil && c != nil && !c.Writer.Written() {
+		c.JSON(http.StatusGatewayTimeout, payload)
+	}
+	return true
+}
+
+// finishRunSetup defines the success side of the setup race. Once the final
+// setup operation returns successfully, canceling the child must not inspect
+// its deadline again: only a semantic cancellation on the durable parent may
+// still prevent the model phase from starting.
+func finishRunSetup(c *gin.Context, writer *streaming.SSEWriter, runHub *service.RunHub, runID string, runContext context.Context, setupCancel context.CancelFunc) bool {
+	if setupCancel != nil {
+		setupCancel()
+	}
+	return transitionCanceledRun(c, writer, runHub, runID, runContext)
+}
+
+func runAgentStream(c *gin.Context, messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, firstOutputTimeout time.Duration, sessionID, userID int64, userMessage *model.Message, runSnapshot *service.RunSnapshot, usageKind string) {
 	exec := agentRunExecution{
 		requestID:      c.GetString("request_id"),
 		messageService: messageService,
@@ -209,6 +296,7 @@ func runAgentStream(c *gin.Context, messageService *service.MessageService, sess
 		return
 	}
 	exec.runContext = runContext
+	exec.setupContext, exec.setupCancel = newRunSetupContext(runContext, effectiveRunSetupTimeout(firstOutputTimeout))
 	// Launch immediately after ownership. The worker records message_start as
 	// its first operation, before any setup or model output, so SSE may attach
 	// later without becoming part of the execution ownership chain.
@@ -312,25 +400,32 @@ func executeAgentRun(exec agentRunExecution) {
 		transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext)
 		return
 	}
-	session, err := sessionService.GetByIDContext(runContext, sessionID, userID)
+	setupContext := exec.setupContext
+	setupCancel := exec.setupCancel
+	if setupContext == nil || setupCancel == nil {
+		setupContext, setupCancel = newRunSetupContext(runContext, effectiveRunSetupTimeout(defaultChatFirstOutputTimeout))
+	}
+	defer setupCancel()
+
+	session, err := sessionService.GetByIDContext(setupContext, sessionID, userID)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "session_load_failed", "会话加载失败，请重试", true, err)
 		return
 	}
-	user, err := authService.GetProfileContext(runContext, userID)
+	user, err := authService.GetProfileContext(setupContext, userID)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "user_profile_load_failed", "用户信息加载失败，请重试", true, err)
 		return
 	}
-	enabledSkills, err := skillService.EnabledInstructionsForSessionContext(runContext, user, session.Metadata)
+	enabledSkills, err := skillService.EnabledInstructionsForSessionContext(setupContext, user, session.Metadata)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "skill_context_load_failed", "Skill 上下文加载失败，请重试", true, err)
@@ -338,9 +433,9 @@ func executeAgentRun(exec agentRunExecution) {
 	}
 
 	// 重试只发送到原用户消息为止，不能把旧回答当作新答案的上下文。
-	messages, err := loadRunConversationMessages(runContext, messageService, sessionID, userID, runSnapshot, usageKind)
+	messages, err := loadRunConversationMessages(setupContext, messageService, sessionID, userID, runSnapshot, usageKind)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		logger.Error("load conversation history failed: request_id=%q run_id=%q session=%d err=%v", requestID, runSnapshot.RunID, sessionID, err)
@@ -357,7 +452,10 @@ func executeAgentRun(exec agentRunExecution) {
 
 	agentReq := buildAgentRequestFromSession(session, user, messages, titleService, enabledSkills, thinkingEffortFromMessage(userMessage))
 	agentReq.SchemaVersion = userMessage.SchemaVersion
-	if err := einoAgent.ValidateAcceptedRuntimeSnapshot(runContext, agentReq, runSnapshot.RuntimeSnapshot); err != nil {
+	if err := einoAgent.ValidateAcceptedRuntimeSnapshot(setupContext, agentReq, runSnapshot.RuntimeSnapshot); err != nil {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
+			return
+		}
 		payload := gin.H{
 			"error":     runtimeSnapshotPublicMessage(err),
 			"code":      "runtime_dependency_changed",
@@ -367,6 +465,11 @@ func executeAgentRun(exec agentRunExecution) {
 			Status: service.RunStatusFailed, PublicErrorCode: "runtime_dependency_changed", PublicErrorMessage: payload["error"].(string),
 			Event: streaming.EventError, Data: payload,
 		})
+		return
+	}
+	// Cancel only the setup child. The durable parent remains armed for first
+	// model output and owns StreamChat plus all later persistence.
+	if finishRunSetup(nil, nil, runHub, runSnapshot.RunID, runContext, setupCancel) {
 		return
 	}
 

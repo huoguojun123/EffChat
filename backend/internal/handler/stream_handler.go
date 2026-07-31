@@ -385,7 +385,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 		}
 		userMessage = admission.Message
 
-		runAgentStream(c, messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, taskRunRepo, heartbeat, sessionID, userID, userMessage, runSnapshot, modelusage.KindChat)
+		runAgentStream(c, messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, taskRunRepo, heartbeat, firstOutputTimeout, sessionID, userID, userMessage, runSnapshot, modelusage.KindChat)
 	}
 }
 
@@ -632,7 +632,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 		}
 		userMessage := admission.Message
 
-		runAgentStream(c, messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, taskRunRepo, heartbeat, sessionID, userID, userMessage, runSnapshot, modelusage.KindRetry)
+		runAgentStream(c, messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, taskRunRepo, heartbeat, firstOutputTimeout, sessionID, userID, userMessage, runSnapshot, modelusage.KindRetry)
 	}
 }
 
@@ -953,6 +953,8 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			return
 		}
 		runContext = executionContext
+		setupContext, setupCancel := newRunSetupContext(runContext, effectiveRunSetupTimeout(firstOutputTimeout))
+		defer setupCancel()
 
 		var writer *streaming.SSEWriter
 		defer func() {
@@ -968,27 +970,27 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			}
 		}()
 
-		session, err = sessionService.GetByIDContext(runContext, sessionID, userID)
+		session, err = sessionService.GetByIDContext(setupContext, sessionID, userID)
 		if err != nil {
-			if transitionCanceledRun(c, writer, runHub, runSnapshot.RunID, runContext) {
+			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
 				return
 			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "session_load_failed", "会话加载失败，请重试", err)
 			c.JSON(http.StatusInternalServerError, payload)
 			return
 		}
-		user, err := authService.GetProfileContext(runContext, userID)
+		user, err := authService.GetProfileContext(setupContext, userID)
 		if err != nil {
-			if transitionCanceledRun(c, writer, runHub, runSnapshot.RunID, runContext) {
+			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
 				return
 			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "user_profile_load_failed", "用户信息加载失败，请重试", err)
 			c.JSON(http.StatusInternalServerError, payload)
 			return
 		}
-		enabledSkills, err := skillService.EnabledInstructionsForSessionContext(runContext, user, session.Metadata)
+		enabledSkills, err := skillService.EnabledInstructionsForSessionContext(setupContext, user, session.Metadata)
 		if err != nil {
-			if transitionCanceledRun(c, writer, runHub, runSnapshot.RunID, runContext) {
+			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
 				return
 			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "skill_context_load_failed", "Skill 上下文加载失败，请重试", err)
@@ -998,16 +1000,16 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		var messages []*model.Message
 		var memoryMessages []*model.Message
 		if preserveMessageID > 0 {
-			messages, err = messageService.ListForCompactionBeforeMessageContext(runContext, sessionID, userID, preserveMessageID)
+			messages, err = messageService.ListForCompactionBeforeMessageContext(setupContext, sessionID, userID, preserveMessageID)
 			if err == nil {
-				memoryMessages, err = messageService.ListForAgentThroughMessageContext(runContext, sessionID, userID, preserveMessageID)
+				memoryMessages, err = messageService.ListForAgentThroughMessageContext(setupContext, sessionID, userID, preserveMessageID)
 			}
 		} else {
-			messages, err = messageService.ListForAgentContext(runContext, sessionID, userID)
+			messages, err = messageService.ListForAgentContext(setupContext, sessionID, userID)
 			memoryMessages = messages
 		}
 		if err != nil {
-			if transitionCanceledRun(c, writer, runHub, runSnapshot.RunID, runContext) {
+			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
 				return
 			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "conversation_history_load_failed", "会话历史加载失败，请重试", err)
@@ -1017,6 +1019,9 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 
 		writer, err = streaming.NewSSEWriter(c)
 		if err != nil {
+			if transitionRunSetupInterruption(c, nil, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
+				return
+			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "stream_unavailable", "当前连接不支持流式响应", err)
 			c.JSON(http.StatusInternalServerError, payload)
 			return
@@ -1034,6 +1039,9 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		_ = writer.WriteEvent(streaming.EventCompactionStart, gin.H{"run_id": runSnapshot.RunID, "source": source})
 
 		if len(messages) == 0 {
+			if finishRunSetup(c, writer, runHub, runSnapshot.RunID, runContext, setupCancel) {
+				return
+			}
 			recordCompressionTaskRun(taskRunRepo, sessionID, userID, runSnapshot.RunID, taskSource, repository.ModelTaskStatusSkipped, "", nil, time.Now(), "", "")
 			payload := gin.H{"reason": "no history to compact"}
 			_ = writeRunTerminal(writer, runHub, runSnapshot.RunID, service.RunTerminal{
@@ -1066,7 +1074,10 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 
 		agentReq := buildAgentRequestFromSession(session, user, messages, titleService, enabledSkills, thinkingEffort)
 		agentReq.SchemaVersion = session.MessageFormat
-		if err := einoAgent.ValidateAcceptedRuntimeSnapshot(runContext, agentReq, runSnapshot.RuntimeSnapshot); err != nil {
+		if err := einoAgent.ValidateAcceptedRuntimeSnapshot(setupContext, agentReq, runSnapshot.RuntimeSnapshot); err != nil {
+			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
+				return
+			}
 			recordCompressionTaskRun(taskRunRepo, sessionID, userID, runSnapshot.RunID, taskSource, repository.ModelTaskStatusFailed, err.Error(), err, taskStarted, "", "")
 			payload := gin.H{
 				"error":     runtimeSnapshotPublicMessage(err),
@@ -1077,6 +1088,9 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 				Status: service.RunStatusFailed, PublicErrorCode: "runtime_dependency_changed", PublicErrorMessage: payload["error"].(string),
 				Event: streaming.EventError, Data: payload,
 			})
+			return
+		}
+		if finishRunSetup(c, writer, runHub, runSnapshot.RunID, runContext, setupCancel) {
 			return
 		}
 		expectedAnswerSelectionRevision := session.AnswerSelectionRevision

@@ -856,6 +856,37 @@ func TestResolveClaudeMaxTokensProvidesPositiveDefault(t *testing.T) {
 	}
 }
 
+func TestTaskModelRequestClonesAndOwnsOutputLimit(t *testing.T) {
+	original := &ChatRequest{
+		UserID:          11,
+		SessionID:       22,
+		ModelID:         "gpt-5.6-terra",
+		Provider:        "openai",
+		MaxTokens:       64000,
+		Reasoning:       true,
+		ThinkingFormat:  string(modelbank.ThinkingFormatOpenAIGPT56),
+		ThinkingEffort:  string(modelbank.ThinkingEffortHigh),
+		RuntimeResolved: true,
+	}
+
+	got := taskModelRequest(original, 4096)
+	if got == original {
+		t.Fatal("taskModelRequest must clone the active chat request")
+	}
+	if got.UserID != original.UserID || got.SessionID != original.SessionID || got.ModelID != original.ModelID || got.Provider != original.Provider || got.RuntimeResolved != original.RuntimeResolved {
+		t.Fatalf("runtime identity changed: %#v", got)
+	}
+	if got.MaxTokens != 4096 {
+		t.Fatalf("MaxTokens = %d, want 4096", got.MaxTokens)
+	}
+	if got.Reasoning != original.Reasoning || got.ThinkingFormat != original.ThinkingFormat || got.ThinkingEffort != original.ThinkingEffort {
+		t.Fatalf("task thinking fields changed: reasoning:%t format:%q effort:%q", got.Reasoning, got.ThinkingFormat, got.ThinkingEffort)
+	}
+	if original.MaxTokens != 64000 || !original.Reasoning || original.ThinkingFormat != string(modelbank.ThinkingFormatOpenAIGPT56) {
+		t.Fatalf("original request was mutated: %#v", original)
+	}
+}
+
 func TestTemperaturePointerPreservesExplicitZero(t *testing.T) {
 	zero := 0.0
 	if got := ptrFloat32(nil); got != nil {

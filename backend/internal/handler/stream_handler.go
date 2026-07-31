@@ -1090,6 +1090,19 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			})
 			return
 		}
+		preparedCompaction, err := einoAgent.PrepareCompaction(setupContext, agentReq)
+		if err != nil {
+			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
+				return
+			}
+			recordCompressionTaskRun(taskRunRepo, sessionID, userID, runSnapshot.RunID, taskSource, repository.ModelTaskStatusFailed, err.Error(), err, taskStarted, "", "")
+			payload := compactionErrorPayload()
+			_ = writeRunTerminal(writer, runHub, runSnapshot.RunID, service.RunTerminal{
+				Status: service.RunStatusFailed, PublicErrorCode: "compaction_failed", PublicErrorMessage: payload["error"].(string),
+				Event: streaming.EventError, Data: payload,
+			})
+			return
+		}
 		if finishRunSetup(c, writer, runHub, runSnapshot.RunID, runContext, setupCancel) {
 			return
 		}
@@ -1101,7 +1114,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			RunID:     runSnapshot.RunID,
 			Kind:      modelusage.KindCompression,
 		})
-		checkpoint, err := runCompactionWithMemoryGate(ctx, einoAgent, session, userID, runSnapshot.RunID, source, agentReq, memoryMessages, &expectedAnswerSelectionRevision)
+		checkpoint, err := runCompactionWithMemoryGate(ctx, einoAgent, session, userID, runSnapshot.RunID, source, agentReq, preparedCompaction, memoryMessages, &expectedAnswerSelectionRevision)
 		cancelCause := effectiveRunCancelCause(runHub, runSnapshot.RunID, ctx)
 		if cancelCause == "" && errors.Is(err, context.Canceled) {
 			cancelCause = service.RunCancelUpstream
@@ -1201,7 +1214,7 @@ func compactionErrorPayload() gin.H {
 	}
 }
 
-func runCompactionWithMemoryGate(ctx context.Context, einoAgent *agent.EinoAgent, session *model.Session, userID int64, runID, source string, agentReq *agent.ChatRequest, memoryMessages []*model.Message, expectedAnswerSelectionRevision *int64) (*agent.CompressionCheckpoint, error) {
+func runCompactionWithMemoryGate(ctx context.Context, einoAgent *agent.EinoAgent, session *model.Session, userID int64, runID, source string, agentReq *agent.ChatRequest, preparedCompaction *agent.PreparedCompactionRun, memoryMessages []*model.Message, expectedAnswerSelectionRevision *int64) (*agent.CompressionCheckpoint, error) {
 	return runCompactionTasks(ctx, func(taskCtx context.Context) error {
 		if len(memoryMessages) == 0 {
 			memoryMessages = agentReq.Messages
@@ -1236,7 +1249,7 @@ func runCompactionWithMemoryGate(ctx context.Context, einoAgent *agent.EinoAgent
 		}
 		return err
 	}, func(taskCtx context.Context) (*agent.CompressionCheckpoint, error) {
-		return einoAgent.CompactConversation(taskCtx, agentReq)
+		return einoAgent.RunPreparedCompaction(taskCtx, preparedCompaction)
 	})
 }
 

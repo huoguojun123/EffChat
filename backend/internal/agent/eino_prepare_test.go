@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -157,5 +160,100 @@ func TestPreparedChatRejectsMissingLifecycleInputs(t *testing.T) {
 	}
 	if _, err := einoAgent.RunPreparedChat(nil, &PreparedChatRun{}); err == nil {
 		t.Fatal("RunPreparedChat accepted a nil durable context")
+	}
+}
+
+func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
+	providerCalled := make(chan struct{}, 1)
+	requestBodies := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case requestBodies <- body:
+		default:
+		}
+		select {
+		case providerCalled <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"compaction-boundary-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"<summary>继续上下文</summary>\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	einoAgent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	req := &ChatRequest{
+		ModelID:         "compaction-boundary-model",
+		Provider:        "compaction-boundary-channel",
+		MaxTokens:       64000,
+		ContextWindow:   128000,
+		ModelMaxOutput:  64000,
+		RuntimeResolved: true,
+		RuntimeChannel: &model.AIChannel{
+			Key:     "compaction-boundary-channel",
+			Adapter: service.AdapterOpenAICompatible,
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+		Messages: []*model.Message{{
+			ID:          41,
+			MessageData: []byte(`{"role":"user","content":"需要压缩的历史"}`),
+		}},
+	}
+	setupCtx, cancelSetup := context.WithCancel(t.Context())
+	prepared, err := einoAgent.PrepareCompaction(setupCtx, req)
+	if err != nil {
+		t.Fatalf("PrepareCompaction() error = %v", err)
+	}
+	cancelSetup()
+
+	checkpoint, err := einoAgent.RunPreparedCompaction(t.Context(), prepared)
+	if err != nil {
+		t.Fatalf("RunPreparedCompaction() error = %v", err)
+	}
+	select {
+	case <-providerCalled:
+	default:
+		t.Fatal("compaction provider stream was not started with the durable context")
+	}
+	var providerRequest map[string]interface{}
+	select {
+	case body := <-requestBodies:
+		if err := json.Unmarshal(body, &providerRequest); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+	default:
+		t.Fatal("compaction provider request body was not captured")
+	}
+	if got, _ := providerRequest["max_tokens"].(float64); int(got) != compactionMaxOutputTokens {
+		t.Fatalf("provider max_tokens = %v, want %d", providerRequest["max_tokens"], compactionMaxOutputTokens)
+	}
+	if checkpoint == nil || checkpoint.CompressBefore != 42 || checkpoint.Provider != req.Provider || checkpoint.ModelID != req.ModelID {
+		t.Fatalf("checkpoint = %#v", checkpoint)
+	}
+	if !strings.Contains(string(checkpoint.SummaryData), "继续上下文") {
+		t.Fatalf("summary data = %s", checkpoint.SummaryData)
+	}
+	if req.MaxTokens != 64000 {
+		t.Fatalf("PrepareCompaction mutated the active request MaxTokens = %d", req.MaxTokens)
+	}
+}
+
+func TestPreparedCompactionRejectsMissingLifecycleInputs(t *testing.T) {
+	einoAgent := &EinoAgent{}
+	if _, err := einoAgent.PrepareCompaction(nil, &ChatRequest{}); err == nil {
+		t.Fatal("PrepareCompaction accepted a nil setup context")
+	}
+	if _, err := einoAgent.PrepareCompaction(t.Context(), nil); err == nil {
+		t.Fatal("PrepareCompaction accepted a nil request")
+	}
+	if _, err := einoAgent.RunPreparedCompaction(nil, &PreparedCompactionRun{}); err == nil {
+		t.Fatal("RunPreparedCompaction accepted a nil durable context")
 	}
 }

@@ -139,6 +139,19 @@ func runtimeReqForAdapter(req *ChatRequest, protocolProvider string) *ChatReques
 	return &clone
 }
 
+// taskModelRequest keeps provider, channel, runtime, and thinking ownership
+// from the active chat while giving a background task its own output-cost
+// boundary. The clone prevents title/compaction/memory/probe preparation from
+// mutating the request later used by the main conversation.
+func taskModelRequest(req *ChatRequest, maxTokens int) *ChatRequest {
+	if req == nil {
+		req = &ChatRequest{}
+	}
+	clone := *req
+	clone.MaxTokens = maxTokens
+	return &clone
+}
+
 func (a *EinoAgent) wrapUsageModel(cm einoModel.ToolCallingChatModel, req *ChatRequest) einoModel.ToolCallingChatModel {
 	cm = modelstream.ObserveChatModel(cm)
 	if a != nil && req != nil && !req.SkipUsage && a.usageService != nil {

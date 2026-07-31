@@ -96,34 +96,58 @@ func writeOpenAIPartialTransportFailure(w http.ResponseWriter, _ *http.Request) 
 }
 
 type adkRunRegressionHarness struct {
-	env    *testEnv
-	router *gin.Engine
-	runHub *service.RunHub
-	usage  *modelusage.Service
+	env            *testEnv
+	router         *gin.Engine
+	runHub         *service.RunHub
+	usage          *modelusage.Service
+	modelID        string
+	provider       string
+	thinkingEffort string
 }
 
 func newADKRunRegressionHarness(t *testing.T, env *testEnv, provider *scriptedOpenAIProvider) *adkRunRegressionHarness {
 	t.Helper()
+	return newADKRunRegressionHarnessForProvider(t, env, adkProviderHarnessConfig{
+		Adapter:     service.AdapterOpenAICompatible,
+		BaseURL:     provider.server.URL + "/v1",
+		ModelID:     "gpt-4o-mini",
+		DisplayName: "ADK handler regression",
+	})
+}
+
+type adkProviderHarnessConfig struct {
+	Adapter            string
+	BaseURL            string
+	ModelID            string
+	DisplayName        string
+	Reasoning          bool
+	ThinkingFormat     string
+	ThinkingEffort     string
+	FirstOutputTimeout time.Duration
+}
+
+func newADKRunRegressionHarnessForProvider(t *testing.T, env *testEnv, cfg adkProviderHarnessConfig) *adkRunRegressionHarness {
+	t.Helper()
 	channelService := service.NewChannelService(repository.NewChannelRepository(env.db))
 	enabled := true
 	if _, err := channelService.SaveAIChannel(&service.AIChannelInput{
-		Key: env.channelKey, DisplayName: "ADK handler regression", Adapter: service.AdapterOpenAICompatible,
-		BaseURL: provider.server.URL + "/v1", APIKey: "test-key", Enabled: &enabled,
+		Key: env.channelKey, DisplayName: cfg.DisplayName, Adapter: cfg.Adapter,
+		BaseURL: cfg.BaseURL, APIKey: "test-key", Enabled: &enabled,
 	}); err != nil {
 		t.Fatalf("configure scripted model channel: %v", err)
 	}
 	if err := repository.NewModelRepository(env.db).Upsert(&model.Model{
-		ID: "gpt-4o-mini", DisplayName: "ADK handler regression", Provider: env.channelKey,
-		ContextWindow: 32768, MaxOutput: 4096, Enabled: true, ThinkingFormat: "auto",
+		ID: cfg.ModelID, DisplayName: cfg.DisplayName, Provider: env.channelKey,
+		ContextWindow: 32768, MaxOutput: 4096, Enabled: true, Reasoning: cfg.Reasoning, ThinkingFormat: cfg.ThinkingFormat,
 	}); err != nil {
 		t.Fatalf("configure scripted model capacity: %v", err)
 	}
 
-	previous := modelbank.Get("gpt-4o-mini")
+	previous := modelbank.Get(cfg.ModelID)
 	modelbank.Register(&modelbank.ModelInfo{
-		ID: "gpt-4o-mini", DisplayName: "ADK handler regression", Provider: env.channelKey, Enabled: true,
-		ThinkingFormat: "auto",
-		Capabilities:   modelbank.ModelCapabilities{ContextWindow: 32768, MaxOutput: 4096},
+		ID: cfg.ModelID, DisplayName: cfg.DisplayName, Provider: env.channelKey, Enabled: true,
+		ThinkingFormat: cfg.ThinkingFormat,
+		Capabilities:   modelbank.ModelCapabilities{ContextWindow: 32768, MaxOutput: 4096, Reasoning: cfg.Reasoning},
 	})
 	if previous != nil {
 		t.Cleanup(func() { modelbank.Register(previous) })
@@ -150,20 +174,23 @@ func newADKRunRegressionHarness(t *testing.T, env *testEnv, provider *scriptedOp
 		quotaService,
 		nil,
 		0,
-		0,
+		cfg.FirstOutputTimeout,
 	))
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = usageService.Drain(ctx)
 	})
-	return &adkRunRegressionHarness{env: env, router: router, runHub: runHub, usage: usageService}
+	return &adkRunRegressionHarness{
+		env: env, router: router, runHub: runHub, usage: usageService,
+		modelID: cfg.ModelID, provider: env.channelKey, thinkingEffort: cfg.ThinkingEffort,
+	}
 }
 
 func (h *adkRunRegressionHarness) createSession(t *testing.T, title string) *model.Session {
 	t.Helper()
 	created := h.env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
-		"model_id": "gpt-4o-mini", "provider": h.env.channelKey, "title": title,
+		"model_id": h.modelID, "provider": h.provider, "title": title,
 	})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create regression session: status=%d body=%s", created.Code, created.Body.String())
@@ -177,7 +204,11 @@ func (h *adkRunRegressionHarness) createSession(t *testing.T, title string) *mod
 
 func (h *adkRunRegressionHarness) send(t *testing.T, sessionID int64, runID, content string) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(map[string]string{"content": content, "client_run_id": runID})
+	payload := map[string]interface{}{"content": content, "client_run_id": runID}
+	if h.thinkingEffort != "" {
+		payload["thinking_effort"] = h.thinkingEffort
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}

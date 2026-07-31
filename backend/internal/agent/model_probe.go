@@ -2,11 +2,19 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
+	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+)
+
+const (
+	modelProbeFirstOutputTimeout = 30 * time.Second
+	modelProbeMaxOutputTokens    = 16
 )
 
 // ModelProbeResult 是后台“模型连通性探测”的最小结果。
@@ -14,6 +22,14 @@ import (
 type ModelProbeResult struct {
 	Output     string
 	DurationMs int64
+}
+
+// PreparedModelProbe carries a fully resolved provider across the bounded
+// setup boundary without retaining the setup context.
+type PreparedModelProbe struct {
+	chatModel einoModel.ToolCallingChatModel
+	request   *ChatRequest
+	startedAt time.Time
 }
 
 // TestModel 复用正式对话的 provider 构造链路，对指定模型发起一次极短连通性探测。
@@ -25,9 +41,23 @@ type ModelProbeResult struct {
 //
 // 探测不是用户业务对话，因此 SkipUsage=true，避免调试配置污染模型用量统计。
 func (a *EinoAgent) TestModel(ctx context.Context, req *ChatRequest) (*ModelProbeResult, error) {
+	prepared, err := a.PrepareModelProbe(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return a.RunPreparedModelProbe(ctx, prepared)
+}
+
+// PrepareModelProbe resolves the provider under a short control-plane context.
+// The caller may cancel setupCtx immediately after this method succeeds.
+func (a *EinoAgent) PrepareModelProbe(setupCtx context.Context, req *ChatRequest) (*PreparedModelProbe, error) {
+	if setupCtx == nil {
+		return nil, fmt.Errorf("model probe setup context is required")
+	}
 	if req == nil {
 		req = &ChatRequest{}
 	}
+	req = taskModelRequest(req, modelProbeMaxOutputTokens)
 	req.SkipUsage = true
 	// 可用性检测只验证“provider + baseURL + key + model_id 能否完成最小文本回复”。
 	// 不下发 thinking 字段，避免 Claude manual budget 等格式在检测时放大 max_tokens，
@@ -35,20 +65,33 @@ func (a *EinoAgent) TestModel(ctx context.Context, req *ChatRequest) (*ModelProb
 	req.Reasoning = false
 	req.ThinkingFormat = string(modelbank.ThinkingFormatNone)
 	req.ThinkingEffort = ""
-	if req.MaxTokens <= 0 {
-		req.MaxTokens = 16
-	}
-
 	startedAt := time.Now()
-	chatModel, err := a.buildChatModel(ctx, req, modelbank.SearchDecision{})
+	chatModel, err := a.buildChatModel(setupCtx, req, modelbank.SearchDecision{})
 	if err != nil {
 		return nil, err
 	}
-	resp, err := chatModel.Generate(ctx, []*schema.Message{
+	return &PreparedModelProbe{
+		chatModel: chatModel,
+		request:   req,
+		startedAt: startedAt,
+	}, nil
+}
+
+// RunPreparedModelProbe owns the provider stream with the request context.
+// Its fixed timeout waits only for meaningful output; once output starts the
+// stream is drained to EOF unless the request is canceled or the provider fails.
+func (a *EinoAgent) RunPreparedModelProbe(runCtx context.Context, prepared *PreparedModelProbe) (*ModelProbeResult, error) {
+	if runCtx == nil {
+		return nil, fmt.Errorf("model probe run context is required")
+	}
+	if prepared == nil || prepared.chatModel == nil || prepared.request == nil {
+		return nil, fmt.Errorf("prepared model probe is required")
+	}
+	resp, err := modelstream.Collect(runCtx, prepared.chatModel, []*schema.Message{
 		schema.UserMessage("Reply with exactly: OK"),
-	})
+	}, modelProbeFirstOutputTimeout)
 	if err != nil {
-		return nil, sanitizeModelRuntimeError(req.Provider, req.ModelID, err)
+		return nil, sanitizeModelRuntimeError(prepared.request.Provider, prepared.request.ModelID, err)
 	}
 	output := ""
 	if resp != nil {
@@ -56,7 +99,7 @@ func (a *EinoAgent) TestModel(ctx context.Context, req *ChatRequest) (*ModelProb
 	}
 	return &ModelProbeResult{
 		Output:     truncateProbeOutput(output),
-		DurationMs: time.Since(startedAt).Milliseconds(),
+		DurationMs: time.Since(prepared.startedAt).Milliseconds(),
 	}, nil
 }
 

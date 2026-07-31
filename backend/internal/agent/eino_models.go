@@ -30,7 +30,7 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 	channel := req.RuntimeChannel
 	if channel == nil {
 		var err error
-		channel, err = a.channelService.ResolveAIChannel(req.Provider)
+		channel, err = a.channelService.ResolveAIChannelContext(ctx, req.Provider)
 		if err != nil {
 			return nil, err
 		}

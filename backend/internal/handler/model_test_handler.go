@@ -15,6 +15,8 @@ type testModelRequest struct {
 	Provider string `json:"provider"`
 }
 
+const modelProbeSetupTimeout = 10 * time.Second
+
 // TestModelHandler 执行管理员模型的最小连通性探测。
 //
 // 返回约定：
@@ -40,13 +42,22 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-		defer cancel()
-
-		result, err := einoAgent.TestModel(ctx, &agent.ChatRequest{
+		setupCtx, setupCancel := context.WithTimeout(c.Request.Context(), modelProbeSetupTimeout)
+		prepared, err := einoAgent.PrepareModelProbe(setupCtx, &agent.ChatRequest{
 			ModelID:  modelID,
 			Provider: provider,
 		})
+		setupCancel()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"ok":       false,
+				"model_id": modelID,
+				"provider": provider,
+				"error":    truncateModelTestError(err.Error()),
+			})
+			return
+		}
+		result, err := einoAgent.RunPreparedModelProbe(c.Request.Context(), prepared)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"ok":       false,

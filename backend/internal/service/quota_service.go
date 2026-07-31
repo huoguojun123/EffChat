@@ -11,8 +11,11 @@ import (
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
+const defaultQuotaOperationTimeout = 5 * time.Second
+
 type QuotaService struct {
-	repo quotaStore
+	repo             quotaStore
+	operationTimeout time.Duration
 }
 
 type quotaStore interface {
@@ -28,7 +31,25 @@ type quotaStore interface {
 }
 
 func NewQuotaService(repo quotaStore) *QuotaService {
-	return &QuotaService{repo: repo}
+	return newQuotaService(repo, defaultQuotaOperationTimeout)
+}
+
+func newQuotaService(repo quotaStore, operationTimeout time.Duration) *QuotaService {
+	if operationTimeout <= 0 {
+		operationTimeout = defaultQuotaOperationTimeout
+	}
+	return &QuotaService{repo: repo, operationTimeout: operationTimeout}
+}
+
+// operationContext bounds one quota control-plane operation. It is deliberately
+// unrelated to model execution or run liveness: an admitted run remains owned
+// by its durable status until terminal transition, while a blocked quota query
+// or transaction must return control to the caller promptly.
+func (s *QuotaService) operationContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, s.operationTimeout)
 }
 
 type QuotaCheck struct {
@@ -65,7 +86,10 @@ type ChatRunQuotaInput struct {
 	RuntimeSnapshot json.RawMessage
 	ReserveMessage  bool
 	AcceptedAt      time.Time
-	ExpiresAt       time.Time
+	// ExpiresAt is terminal replay/retention metadata. A running reservation
+	// owns quota by status until an atomic completed/failed/canceled transition;
+	// admission must never treat this timestamp as a run liveness lease.
+	ExpiresAt time.Time
 }
 
 type ChatRunAdmission struct {
@@ -85,6 +109,8 @@ func (s *QuotaService) CheckBeforeRun(ctx context.Context, userID int64, check Q
 	if s == nil || s.repo == nil {
 		return nil
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	limits, err := s.repo.LimitsForUser(ctx, userID)
 	if err != nil {
 		return err
@@ -124,6 +150,8 @@ func (s *QuotaService) checkOCRQuota(ctx context.Context, userID int64, pages in
 	if s == nil || s.repo == nil {
 		return nil
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	if pages < 0 {
 		pages = 0
 	}
@@ -163,6 +191,8 @@ func (s *QuotaService) ReserveToolCall(ctx context.Context, input ToolCallQuotaI
 	if s == nil || s.repo == nil || input.UserID <= 0 {
 		return ToolCallQuotaReservation{}, nil
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	reservation, err := s.repo.ReserveToolCall(ctx, repository.ToolCallReservationInput{
 		UserID:    input.UserID,
 		SessionID: input.SessionID,
@@ -180,6 +210,8 @@ func (s *QuotaService) ReserveChatRun(ctx context.Context, input ChatRunQuotaInp
 	if s == nil || s.repo == nil {
 		return repository.ChatRunRecord{}, nil
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	reservation, err := s.repo.ReserveChatRun(ctx, repositoryChatRunInput(input))
 	return reservation.Record, mapRepositoryQuotaError(err)
 }
@@ -188,6 +220,8 @@ func (s *QuotaService) AdmitChatMessage(ctx context.Context, input ChatRunQuotaI
 	if s == nil || s.repo == nil {
 		return ChatRunAdmission{}, fmt.Errorf("chat run admission is unavailable")
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	admission, err := s.repo.AdmitChatMessage(ctx, repositoryChatRunInput(input), message)
 	if err != nil {
 		return ChatRunAdmission{}, mapRepositoryQuotaError(err)
@@ -199,6 +233,8 @@ func (s *QuotaService) AdmitRetryChatRun(ctx context.Context, input ChatRunQuota
 	if s == nil || s.repo == nil {
 		return ChatRunAdmission{}, fmt.Errorf("retry admission is unavailable")
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	admission, err := s.repo.AdmitRetryChatRun(ctx, repositoryChatRunInput(input), targetMessageID)
 	if err != nil {
 		return ChatRunAdmission{}, mapRepositoryQuotaError(err)
@@ -210,6 +246,8 @@ func (s *QuotaService) AdmitEditedRetryChatRun(ctx context.Context, input ChatRu
 	if s == nil || s.repo == nil {
 		return ChatRunAdmission{}, fmt.Errorf("edited retry admission is unavailable")
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	admission, err := s.repo.AdmitEditedRetryChatRun(ctx, repositoryChatRunInput(input), targetMessageID, replacement)
 	if err != nil {
 		return ChatRunAdmission{}, mapRepositoryQuotaError(err)
@@ -221,6 +259,8 @@ func (s *QuotaService) MatchChatRun(ctx context.Context, input ChatRunQuotaInput
 	if s == nil || s.repo == nil || input.RunID == "" {
 		return repository.ChatRunRecord{}, repository.ErrNotFound
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	record, err := s.repo.GetChatRun(ctx, input.RunID)
 	if err != nil {
 		return repository.ChatRunRecord{}, err
@@ -244,6 +284,8 @@ func (s *QuotaService) GetChatRunForSession(ctx context.Context, userID, session
 	if s == nil || s.repo == nil || runID == "" {
 		return repository.ChatRunRecord{}, repository.ErrNotFound
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	record, err := s.repo.GetChatRun(ctx, runID)
 	if err != nil {
 		return repository.ChatRunRecord{}, err
@@ -276,6 +318,8 @@ func (s *QuotaService) ReserveOCRSubmission(ctx context.Context, fileID, userID 
 	if s == nil || s.repo == nil {
 		return true, nil
 	}
+	ctx, cancel := s.operationContext(ctx)
+	defer cancel()
 	reserved, err := s.repo.ReserveOCRSubmission(ctx, fileID, userID, pageCount)
 	return reserved, mapRepositoryQuotaError(err)
 }

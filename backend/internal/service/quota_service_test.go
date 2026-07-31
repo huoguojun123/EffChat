@@ -19,6 +19,30 @@ type fakeQuotaStore struct {
 	runErr         error
 }
 
+type blockingQuotaStore struct {
+	fakeQuotaStore
+	operation string
+	started   chan struct{}
+}
+
+func (f blockingQuotaStore) LimitsForUser(ctx context.Context, userID int64) (repository.UserQuotaLimits, error) {
+	if f.operation != "limits" {
+		return f.fakeQuotaStore.LimitsForUser(ctx, userID)
+	}
+	close(f.started)
+	<-ctx.Done()
+	return repository.UserQuotaLimits{}, ctx.Err()
+}
+
+func (f blockingQuotaStore) AdmitChatMessage(ctx context.Context, input repository.ChatRunReservationInput, message *model.Message) (repository.ChatRunAdmission, error) {
+	if f.operation != "admission" {
+		return f.fakeQuotaStore.AdmitChatMessage(ctx, input, message)
+	}
+	close(f.started)
+	<-ctx.Done()
+	return repository.ChatRunAdmission{}, ctx.Err()
+}
+
 func (f fakeQuotaStore) LimitsForUser(ctx context.Context, userID int64) (repository.UserQuotaLimits, error) {
 	if f.err != nil {
 		return repository.UserQuotaLimits{}, f.err
@@ -192,5 +216,75 @@ func TestQuotaServiceGetChatRunForSessionScopesTheDurableRecord(t *testing.T) {
 	}
 	if _, err := svc.GetChatRunForSession(context.Background(), 1, 3, "run-status"); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("wrong session error = %v", err)
+	}
+}
+
+func TestQuotaServiceBoundsControlPlaneReadsIndependently(t *testing.T) {
+	started := make(chan struct{})
+	svc := newQuotaService(blockingQuotaStore{
+		operation: "limits",
+		started:   started,
+	}, 20*time.Millisecond)
+
+	start := time.Now()
+	err := svc.CheckBeforeRun(context.Background(), 1, QuotaCheck{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CheckBeforeRun() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("control-plane read took %s, want bounded exit", elapsed)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("quota store was not called")
+	}
+}
+
+func TestQuotaServicePreservesShorterCallerDeadline(t *testing.T) {
+	started := make(chan struct{})
+	svc := newQuotaService(blockingQuotaStore{
+		operation: "limits",
+		started:   started,
+	}, time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := svc.CheckBeforeRun(ctx, 1, QuotaCheck{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CheckBeforeRun() error = %v, want caller deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("quota operation ignored shorter caller deadline: %s", elapsed)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("quota store was not called")
+	}
+}
+
+func TestQuotaServiceBoundsChatAdmissionIndependently(t *testing.T) {
+	started := make(chan struct{})
+	svc := newQuotaService(blockingQuotaStore{
+		operation: "admission",
+		started:   started,
+	}, 20*time.Millisecond)
+
+	start := time.Now()
+	_, err := svc.AdmitChatMessage(context.Background(), ChatRunQuotaInput{
+		UserID: 1, SessionID: 2, RunID: "bounded-admission",
+	}, &model.Message{SessionID: 2})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("AdmitChatMessage() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("chat admission took %s, want bounded exit", elapsed)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("admission store was not called")
 	}
 }

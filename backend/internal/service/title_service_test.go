@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/testutil"
 )
@@ -18,6 +22,46 @@ import (
 func setupTitleTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	return testutil.OpenPostgresTestDB(t)
+}
+
+func newTitleStreamTestService(t *testing.T, db *sql.DB, baseURL string) *TitleService {
+	t.Helper()
+	channelKey := fmt.Sprintf("title-stream-%d", time.Now().UnixNano())
+	channels := NewChannelService(repository.NewChannelRepository(db))
+	enabled := true
+	if _, err := channels.SaveAIChannel(&AIChannelInput{
+		Key:         channelKey,
+		DisplayName: "Title stream test",
+		Adapter:     AdapterOpenAICompatible,
+		BaseURL:     baseURL,
+		APIKey:      "test-key",
+		Enabled:     &enabled,
+	}); err != nil {
+		t.Fatalf("save title test channel: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM ai_channels WHERE channel_key = $1", channelKey)
+	})
+
+	previous := modelbank.Get("gpt-4o-mini")
+	if previous == nil {
+		t.Fatal("gpt-4o-mini modelbank entry is required for title tests")
+	}
+	modelbank.Register(&modelbank.ModelInfo{
+		ID:             "gpt-4o-mini",
+		DisplayName:    "Title stream test",
+		Provider:       channelKey,
+		Enabled:        true,
+		ThinkingFormat: string(modelbank.ThinkingFormatNone),
+		Capabilities: modelbank.ModelCapabilities{
+			ContextWindow: 128000,
+			MaxOutput:     titleMaxOutputTokens,
+		},
+	})
+	t.Cleanup(func() {
+		modelbank.Register(previous)
+	})
+	return NewTitleService(nil, nil, nil, channels)
 }
 
 // createTitleTestSession 建临时用户 + 会话，返回 sessionID + userID，清理由 t.Cleanup 注册
@@ -236,6 +280,9 @@ func TestTitleTaskRunRecordIgnoresCanceledContext(t *testing.T) {
 	if latest == nil || latest.Status != repository.ModelTaskStatusFailed || latest.ErrorType == "" {
 		t.Fatalf("task run not recorded from canceled context: %+v", latest)
 	}
+	if latest.RetryAfter != nil {
+		t.Fatalf("canceled title task created provider cooldown: %+v", latest.RetryAfter)
+	}
 }
 
 func TestTitleDrainRejectsNewBackgroundTasks(t *testing.T) {
@@ -261,6 +308,135 @@ func TestTitleDrainRejectsNewBackgroundTasks(t *testing.T) {
 	}
 	if svc.startBackgroundTask() {
 		t.Fatal("title background task should be rejected after drain begins")
+	}
+}
+
+func TestTitleDrainTimeoutCancelsActiveBackgroundContext(t *testing.T) {
+	svc := &TitleService{}
+	if !svc.startBackgroundTask() {
+		t.Fatal("title background task should start before drain")
+	}
+	taskCtx := svc.backgroundTaskContext()
+	drainCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	if svc.DrainBackgroundTasks(drainCtx) {
+		t.Fatal("drain should report timeout while task is still active")
+	}
+	select {
+	case <-taskCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("drain timeout did not cancel title background context")
+	}
+	svc.backgroundTasks.Done()
+}
+
+func TestGenerateTitleWithModelStreamsAfterBoundedSetup(t *testing.T) {
+	db := setupTitleTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	requestBodies := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case requestBodies <- body:
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-title\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"流式标题\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	svc := newTitleStreamTestService(t, db, server.URL+"/v1")
+	generated, err := svc.generateTitleWithModel(t.Context(), 11, 22, "User: 测试流式标题")
+	if err != nil {
+		t.Fatalf("generateTitleWithModel() error = %v", err)
+	}
+	if generated == nil || generated.Title != "流式标题" {
+		t.Fatalf("generated title = %#v", generated)
+	}
+	var providerRequest map[string]interface{}
+	select {
+	case body := <-requestBodies:
+		if err := json.Unmarshal(body, &providerRequest); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+	default:
+		t.Fatal("title provider request was not captured")
+	}
+	maxTokens, _ := providerRequest["max_tokens"].(float64)
+	if maxTokens == 0 {
+		maxTokens, _ = providerRequest["max_completion_tokens"].(float64)
+	}
+	if int(maxTokens) != titleMaxOutputTokens {
+		t.Fatalf("title output limit = %v, want %d", maxTokens, titleMaxOutputTokens)
+	}
+}
+
+func TestResolveTitleModelProfilePreservesSetupDeadline(t *testing.T) {
+	db := setupTitleTestDB(t)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	held, err := db.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("hold database connection: %v", err)
+	}
+	defer held.Close()
+	defer db.Close()
+
+	svc := NewTitleService(nil, nil, nil, NewChannelService(repository.NewChannelRepository(db)))
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = svc.resolveTitleModelProfile(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("resolveTitleModelProfile() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("title channel resolution ignored setup deadline: %v", elapsed)
+	}
+}
+
+func TestTitleDrainCancelsStartedProviderStream(t *testing.T) {
+	db := setupTitleTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	streamStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-title-drain\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"部分\"},\"finish_reason\":null}]}\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case streamStarted <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	svc := newTitleStreamTestService(t, db, server.URL+"/v1")
+	if !svc.startBackgroundTask() {
+		t.Fatal("title background task should start before drain")
+	}
+	runErr := make(chan error, 1)
+	go func() {
+		defer svc.backgroundTasks.Done()
+		_, err := svc.generateTitleWithModel(svc.backgroundTaskContext(), 11, 22, "User: drain")
+		runErr <- err
+	}()
+	select {
+	case <-streamStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("title provider stream did not start")
+	}
+	drainCtx, cancelDrain := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelDrain()
+	if !svc.DrainBackgroundTasks(drainCtx) {
+		t.Fatal("title service did not drain after canceling the active stream")
+	}
+	if err := <-runErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("title stream error = %v, want context canceled", err)
 	}
 }
 

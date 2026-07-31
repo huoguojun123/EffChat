@@ -25,6 +25,7 @@ type SessionMemoryRepository struct {
 
 type SessionMemoryChange struct {
 	ID            int64      `json:"id"`
+	RunID         string     `json:"run_id,omitempty"`
 	SessionID     int64      `json:"session_id"`
 	UserID        int64      `json:"user_id"`
 	Source        string     `json:"source"`
@@ -116,6 +117,7 @@ func (r *SessionMemoryRepository) GetWithUpdatedAt(ctx context.Context, sessionI
 }
 
 type SaveSessionMemoryInput struct {
+	RunID                           string
 	SessionID                       int64
 	UserID                          int64
 	MemoryEnabled                   *bool
@@ -130,6 +132,22 @@ type SaveSessionMemoryInput struct {
 }
 
 func (r *SessionMemoryRepository) SaveWithChange(ctx context.Context, input SaveSessionMemoryInput) (*SessionMemoryChange, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	change, err := saveSessionMemoryWithChange(ctx, tx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return change, nil
+}
+
+func saveSessionMemoryWithChange(ctx context.Context, tx *sql.Tx, input SaveSessionMemoryInput) (*SessionMemoryChange, error) {
 	if input.SessionID <= 0 || input.UserID <= 0 {
 		return nil, fmt.Errorf("session_id and user_id are required")
 	}
@@ -143,12 +161,6 @@ func (r *SessionMemoryRepository) SaveWithChange(ctx context.Context, input Save
 	if summary == "" {
 		summary = "updated session memory"
 	}
-
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
 	answerSelectionRevision, err := lockActiveSessionAnswerSelectionRevision(ctx, tx, input.SessionID, input.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("session not found or access denied: %w", err)
@@ -179,24 +191,16 @@ func (r *SessionMemoryRepository) SaveWithChange(ctx context.Context, input Save
 		return nil, ErrSessionMemoryConflict
 	}
 	if strings.TrimSpace(before) == strings.TrimSpace(content) {
-		if input.MemoryEnabled != nil {
-			if err := tx.Commit(); err != nil {
-				return nil, err
-			}
-		}
 		return nil, nil
 	}
 	if err := upsertSessionMemory(ctx, tx, input.SessionID, content); err != nil {
 		return nil, err
 	}
-	change, err := insertSessionMemoryChange(ctx, tx, input.SessionID, input.UserID, source, action, before, content, summary)
+	change, err := insertSessionMemoryChange(ctx, tx, input.RunID, input.SessionID, input.UserID, source, action, before, content, summary)
 	if err != nil {
 		return nil, err
 	}
 	if err := pruneSessionMemoryChanges(ctx, tx, input.SessionID); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return change, nil
@@ -278,7 +282,7 @@ func (r *SessionMemoryRepository) UndoChange(ctx context.Context, sessionID, use
 	if _, err := tx.ExecContext(ctx, `UPDATE session_memory_changes SET undone_at = NOW() WHERE id = $1`, changeID); err != nil {
 		return nil, err
 	}
-	change, err := insertSessionMemoryChange(ctx, tx, sessionID, userID, "undo", "undo", current, target.BeforeContent, "undid memory change")
+	change, err := insertSessionMemoryChange(ctx, tx, "", sessionID, userID, "undo", "undo", current, target.BeforeContent, "undid memory change")
 	if err != nil {
 		return nil, err
 	}
@@ -319,14 +323,14 @@ func upsertSessionMemory(ctx context.Context, tx *sql.Tx, sessionID int64, conte
 	return nil
 }
 
-func insertSessionMemoryChange(ctx context.Context, tx *sql.Tx, sessionID, userID int64, source, action, before, after, summary string) (*SessionMemoryChange, error) {
+func insertSessionMemoryChange(ctx context.Context, tx *sql.Tx, runID string, sessionID, userID int64, source, action, before, after, summary string) (*SessionMemoryChange, error) {
 	change := &SessionMemoryChange{}
 	err := tx.QueryRowContext(ctx, `
-		INSERT INTO session_memory_changes (session_id, user_id, source, action, before_content, after_content, summary)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, session_id, user_id, source, action, before_content, after_content, summary, created_at, undone_at
-	`, sessionID, userID, source, action, before, after, summary).Scan(
-		&change.ID, &change.SessionID, &change.UserID, &change.Source, &change.Action,
+		INSERT INTO session_memory_changes (run_id, session_id, user_id, source, action, before_content, after_content, summary)
+		VALUES (NULLIF($1, ''), $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, COALESCE(run_id, ''), session_id, user_id, source, action, before_content, after_content, summary, created_at, undone_at
+	`, runID, sessionID, userID, source, action, before, after, summary).Scan(
+		&change.ID, &change.RunID, &change.SessionID, &change.UserID, &change.Source, &change.Action,
 		&change.BeforeContent, &change.AfterContent, &change.Summary, &change.CreatedAt, &change.UndoneAt,
 	)
 	if err != nil {

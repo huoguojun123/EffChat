@@ -160,8 +160,8 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				sessions.GET("/:id/export.md", ExportSessionMarkdownHandler(messageService))
 				sessions.GET("/:id/memory", GetSessionMemoryHandler(sessionService, memoryRepo, taskRunRepo, configRepo))
 				sessions.PUT("/:id/memory", SaveSessionMemoryHandler(sessionService, memoryRepo, taskRunRepo, configRepo))
-				sessions.POST("/:id/memory/compact", CompactSessionMemoryHandler(sessionService, authService, memoryRepo, taskRunRepo, configRepo, einoAgent))
-				sessions.POST("/:id/memory/retry", RetrySessionMemoryHandler(sessionService, authService, messageRepo, memoryRepo, taskRunRepo, configRepo, einoAgent))
+				sessions.POST("/:id/memory/compact", MemoryMaintenanceStreamHandler(sessionService, authService, messageRepo, memoryRepo, einoAgent, runHub, quotaService, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout, service.RunOperationMemoryCompact))
+				sessions.POST("/:id/memory/retry", MemoryMaintenanceStreamHandler(sessionService, authService, messageRepo, memoryRepo, einoAgent, runHub, quotaService, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout, service.RunOperationMemoryRetry))
 				sessions.POST("/:id/memory/changes/:change_id/undo", UndoSessionMemoryChangeHandler(sessionService, memoryRepo, taskRunRepo, configRepo))
 				// 消息路由
 				sessions.PUT("/:id/skills", UpdateSessionSkillsHandler(skillService))

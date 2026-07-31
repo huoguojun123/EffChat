@@ -47,6 +47,8 @@ func TestBuildOperationIntentsCannotCollideAcrossActions(t *testing.T) {
 	retry := BuildRetryRunIntent(42)
 	editedRetry := BuildEditRetryRunIntent(42, "changed")
 	compaction := BuildCompactionRunIntent("auto", "high", 0)
+	memoryCompact := BuildMemoryMaintenanceRunIntent(RunOperationMemoryCompact)
+	memoryRetry := BuildMemoryMaintenanceRunIntent(RunOperationMemoryRetry)
 	if retry.Operation != RunOperationRetry || retry.RetryTargetMessageID != 42 {
 		t.Fatalf("retry intent = %+v", retry)
 	}
@@ -56,9 +58,21 @@ func TestBuildOperationIntentsCannotCollideAcrossActions(t *testing.T) {
 	if editedRetry.Operation != RunOperationRetry || editedRetry.RetryTargetMessageID != 42 {
 		t.Fatalf("edited retry intent = %+v", editedRetry)
 	}
-	if retry.Hash == "" || editedRetry.Hash == "" || compaction.Hash == "" ||
-		retry.Hash == editedRetry.Hash || retry.Hash == compaction.Hash || editedRetry.Hash == compaction.Hash {
-		t.Fatalf("operation hashes = retry:%q edited:%q compaction:%q", retry.Hash, editedRetry.Hash, compaction.Hash)
+	if memoryCompact.Operation != RunOperationMemoryCompact || memoryRetry.Operation != RunOperationMemoryRetry {
+		t.Fatalf("memory intents = compact:%+v retry:%+v", memoryCompact, memoryRetry)
+	}
+	hashes := map[string]struct{}{}
+	for name, intent := range map[string]RunIntent{
+		"retry": retry, "edited retry": editedRetry, "compaction": compaction,
+		"memory compact": memoryCompact, "memory retry": memoryRetry,
+	} {
+		if intent.Hash == "" {
+			t.Fatalf("%s intent has empty hash", name)
+		}
+		if _, exists := hashes[intent.Hash]; exists {
+			t.Fatalf("%s intent reused hash %q", name, intent.Hash)
+		}
+		hashes[intent.Hash] = struct{}{}
 	}
 }
 

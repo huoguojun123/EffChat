@@ -141,125 +141,6 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 	}
 }
 
-func CompactSessionMemoryHandler(sessionService *service.SessionService, authService *service.AuthService, memoryRepo *repository.SessionMemoryRepository, taskRunRepo *repository.ModelTaskRunRepository, configRepo *repository.ConfigRepository, einoAgent *agent.EinoAgent) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID := middleware.GetUserID(c)
-		sessionID, ok := parseSessionID(c)
-		if !ok {
-			return
-		}
-		session, err := sessionService.GetByID(sessionID, userID)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-			return
-		}
-		if einoAgent == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "memory compaction is unavailable"})
-			return
-		}
-		user, err := authService.GetProfile(userID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user not found"})
-			return
-		}
-		expectedAnswerSelectionRevision := session.AnswerSelectionRevision
-		if err := einoAgent.CompactSessionMemory(c.Request.Context(), agent.MemoryMaintenanceRequest{
-			SessionID:                       sessionID,
-			UserID:                          userID,
-			ExpectedAnswerSelectionRevision: &expectedAnswerSelectionRevision,
-			Source:                          "compact",
-			ModelRequest:                    memoryModelRequest(session, userID, user.Preferences),
-		}); err != nil {
-			if errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
-				c.JSON(http.StatusConflict, answerSelectionChangedPayload())
-				return
-			}
-			if errors.Is(err, repository.ErrSessionMemoryConflict) {
-				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
-				return
-			}
-			if payload, ok := memoryMaintenanceFailurePayload(err); ok {
-				c.JSON(http.StatusBadRequest, payload)
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to compact memory", "code": "memory_compact_failed"})
-			return
-		}
-		resp, err := buildSessionMemoryResponse(c.Request.Context(), memoryRepo, taskRunRepo, configRepo, session.ID, userID, session.MemoryEnabled)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load memory", "code": "memory_load_failed"})
-			return
-		}
-		c.JSON(http.StatusOK, resp)
-	}
-}
-
-func RetrySessionMemoryHandler(sessionService *service.SessionService, authService *service.AuthService, messageRepo *repository.MessageRepository, memoryRepo *repository.SessionMemoryRepository, taskRunRepo *repository.ModelTaskRunRepository, configRepo *repository.ConfigRepository, einoAgent *agent.EinoAgent) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userID := middleware.GetUserID(c)
-		sessionID, ok := parseSessionID(c)
-		if !ok {
-			return
-		}
-		session, err := sessionService.GetByID(sessionID, userID)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
-			return
-		}
-		if !session.MemoryEnabled {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "session memory is disabled", "code": "memory_disabled"})
-			return
-		}
-		if einoAgent == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "memory maintenance is unavailable"})
-			return
-		}
-		user, err := authService.GetProfile(userID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user not found"})
-			return
-		}
-		userText, err := latestMemoryRetryUserText(messageRepo, sessionID)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "memory_retry_unavailable"})
-			return
-		}
-		expectedAnswerSelectionRevision := session.AnswerSelectionRevision
-		if err := einoAgent.RetrySessionMemory(c.Request.Context(), agent.MemoryMaintenanceRequest{
-			SessionID:                       sessionID,
-			UserID:                          userID,
-			UserText:                        userText,
-			MemoryEnabled:                   session.MemoryEnabled,
-			ExpectedAnswerSelectionRevision: &expectedAnswerSelectionRevision,
-			Source:                          "manual",
-			Force:                           true,
-			IgnoreCooldown:                  true,
-			ModelRequest:                    memoryModelRequest(session, userID, user.Preferences),
-		}); err != nil {
-			if errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
-				c.JSON(http.StatusConflict, answerSelectionChangedPayload())
-				return
-			}
-			if errors.Is(err, repository.ErrSessionMemoryConflict) {
-				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
-				return
-			}
-			if payload, ok := memoryMaintenanceFailurePayload(err); ok {
-				c.JSON(http.StatusBadRequest, payload)
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to retry memory maintenance", "code": "memory_retry_failed"})
-			return
-		}
-		resp, err := buildSessionMemoryResponse(c.Request.Context(), memoryRepo, taskRunRepo, configRepo, session.ID, userID, session.MemoryEnabled)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load memory", "code": "memory_load_failed"})
-			return
-		}
-		c.JSON(http.StatusOK, resp)
-	}
-}
-
 func answerSelectionChangedPayload() gin.H {
 	return gin.H{
 		"error":     "回答版本已变化，请重新执行记忆维护",
@@ -365,11 +246,11 @@ func memoryModelRequest(session *model.Session, userID int64, userPreferences []
 	return req
 }
 
-func latestMemoryRetryUserText(messageRepo *repository.MessageRepository, sessionID int64) (string, error) {
+func latestMemoryRetryUserText(ctx context.Context, messageRepo *repository.MessageRepository, sessionID int64) (string, error) {
 	if messageRepo == nil {
 		return "", fmt.Errorf("message repository is unavailable")
 	}
-	messages, err := messageRepo.ListBySession(sessionID)
+	messages, err := messageRepo.ListBySessionContext(ctx, sessionID)
 	if err != nil {
 		return "", err
 	}

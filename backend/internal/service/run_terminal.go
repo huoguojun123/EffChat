@@ -750,6 +750,13 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 				}
 				return terminal
 			}
+			if kind == RunKindMemoryMaintenance {
+				if terminal.Event == "" {
+					terminal.Event = "memory_maintenance_canceled"
+					terminal.Data = map[string]interface{}{"reason": "canceled"}
+				}
+				return terminal
+			}
 			if terminal.Event == "" {
 				terminal.Event = "message_complete"
 				terminal.Data = map[string]interface{}{
@@ -790,9 +797,12 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 			terminal.Data = map[string]interface{}{
 				"message_id": terminal.TerminalMessageID, "finish_reason": "stop",
 			}
-		} else {
+		} else if kind == RunKindCompaction {
 			terminal.Event = "compaction_complete"
 			terminal.Data = map[string]interface{}{"compacted": true}
+		} else {
+			terminal.Event = "memory_maintenance_complete"
+			terminal.Data = map[string]interface{}{"updated": true}
 		}
 	}
 	return terminal
@@ -868,6 +878,9 @@ func fallbackStoredTerminalEvent(record repository.ChatRunRecord) (string, inter
 	if record.Status == RunStatusCompleted {
 		if record.Operation == RunOperationCompaction || record.Kind == RunKindCompaction {
 			return "compaction_complete", map[string]interface{}{"compacted": true}
+		}
+		if record.Kind == RunKindMemoryMaintenance {
+			return "memory_maintenance_complete", map[string]interface{}{"updated": true}
 		}
 		return "message_complete", map[string]interface{}{"message_id": record.TerminalMessageID, "finish_reason": "stop"}
 	}

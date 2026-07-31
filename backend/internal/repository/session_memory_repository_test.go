@@ -1,13 +1,88 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 )
+
+func TestMemoryMaintenanceRunCommitIsAtomicAndIdempotent(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "memory_run_atomic")
+	session := &model.Session{UserID: userID, Title: "memory run atomic", ModelID: "gpt-4o", Provider: "openai", MessageFormat: "v1", MemoryEnabled: true, Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM users WHERE id = $1", userID) })
+	repo := NewSessionMemoryRepository(db)
+	if err := repo.Set(session.ID, "## Current Progress\n- Current: before."); err != nil {
+		t.Fatal(err)
+	}
+	runID := "memory-run-atomic"
+	quotaRepo := NewQuotaRepository(db)
+	if _, err := quotaRepo.ReserveChatRun(t.Context(), ChatRunReservationInput{
+		UserID: userID, AuthVersion: 1, SessionID: session.ID, RunID: runID,
+		Kind: "memory_maintenance", Operation: "memory_compact", IntentVersion: 1, IntentHash: "v1:memory-run-atomic",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	transition := ChatRunTransitionInput{
+		RunID: runID, Status: "completed", ExpiresAt: time.Now().Add(time.Minute),
+		TerminalEvent: json.RawMessage(`{"event":"memory_maintenance_complete","data":{"updated":true}}`),
+	}
+	memory := SaveSessionMemoryInput{
+		SessionID: session.ID, UserID: userID, Content: "## Current Progress\n- Current: after.",
+		Source: "compact", Action: "compact", Summary: "organized", ExpectedBefore: "## Current Progress\n- Current: before.", CheckBefore: true, MaxChars: 4000,
+	}
+	invalidTask := RecordModelTaskRunInput{TaskKey: "invalid", UserID: userID, SessionID: session.ID, RunID: runID, Source: ModelTaskSourceManual, Status: ModelTaskStatusSuccess}
+	if _, _, err := repo.CommitMaintenanceRun(t.Context(), MemoryMaintenanceRunCommitInput{Run: transition, Memory: &memory, TaskRun: invalidTask}); err == nil {
+		t.Fatal("invalid task record committed memory mutation")
+	}
+	if content, _ := repo.Get(session.ID); !strings.Contains(content, "before") || strings.Contains(content, "after") {
+		t.Fatalf("memory changed despite rollback: %q", content)
+	}
+	if run, err := quotaRepo.GetChatRun(t.Context(), runID); err != nil || run.Status != "running" {
+		t.Fatalf("run changed despite rollback: %+v err=%v", run, err)
+	}
+
+	task := RecordModelTaskRunInput{
+		TaskKey: ModelTaskMemoryMaintenance, UserID: userID, SessionID: session.ID, RunID: runID,
+		Source: ModelTaskSourceManual, Status: ModelTaskStatusSuccess, TargetType: "memory",
+		StartedAt: time.Now(), FinishedAt: time.Now(),
+	}
+	record, transitioned, err := repo.CommitMaintenanceRun(t.Context(), MemoryMaintenanceRunCommitInput{Run: transition, Memory: &memory, TaskRun: task})
+	if err != nil || !transitioned || record.Status != "completed" {
+		t.Fatalf("commit = transitioned:%v record:%+v err:%v", transitioned, record, err)
+	}
+	if content, _ := repo.Get(session.ID); !strings.Contains(content, "after") {
+		t.Fatalf("memory was not committed: %q", content)
+	}
+	var changes, tasks int
+	if err := db.QueryRow("SELECT COUNT(*) FROM session_memory_changes WHERE run_id = $1", runID).Scan(&changes); err != nil || changes != 1 {
+		t.Fatalf("memory changes=%d err=%v", changes, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM model_task_runs WHERE run_id = $1 AND task_key = 'memory_maintenance'", runID).Scan(&tasks); err != nil || tasks != 1 {
+		t.Fatalf("task runs=%d err=%v", tasks, err)
+	}
+
+	recovered, transitioned, err := repo.CommitMaintenanceRun(t.Context(), MemoryMaintenanceRunCommitInput{Run: transition, Memory: &memory, TaskRun: task})
+	if err != nil || transitioned || recovered.Status != "completed" {
+		t.Fatalf("recovery = transitioned:%v record:%+v err:%v", transitioned, recovered, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM session_memory_changes WHERE run_id = $1", runID).Scan(&changes); err != nil || changes != 1 {
+		t.Fatalf("recovery duplicated memory changes=%d err=%v", changes, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM model_task_runs WHERE run_id = $1 AND task_key = 'memory_maintenance'", runID).Scan(&tasks); err != nil || tasks != 1 {
+		t.Fatalf("recovery duplicated task runs=%d err=%v", tasks, err)
+	}
+}
 
 func TestSessionMemoryRepositoryCompareAndSetSerializesFirstWrite(t *testing.T) {
 	db := setupTestDB(t)

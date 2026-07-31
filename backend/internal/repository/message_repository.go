@@ -253,6 +253,15 @@ func (r *MessageRepository) CreateBatchAndTransitionActiveRun(ctx context.Contex
 		return ChatRunRecord{}, false, err
 	}
 	if err := lockActiveChatRun(ctx, tx, runID, sessionID, userID); err != nil {
+		if errors.Is(err, ErrChatRunTerminal) {
+			record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+			if loadErr != nil {
+				return ChatRunRecord{}, false, loadErr
+			}
+			if terminal {
+				return record, false, nil
+			}
+		}
 		return ChatRunRecord{}, false, err
 	}
 	attempt, hasAttempt, err := answerAttemptForRunTx(ctx, tx, runID)
@@ -1133,10 +1142,28 @@ func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.
 			return ChatRunRecord{}, false, err
 		}
 		if err := ensureAnswerSelectionRevision(answerSelectionRevision, expectedAnswerSelectionRevision); err != nil {
+			if errors.Is(err, ErrAnswerSelectionRevisionConflict) {
+				record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+				if loadErr != nil {
+					return ChatRunRecord{}, false, loadErr
+				}
+				if terminal {
+					return record, false, nil
+				}
+			}
 			return ChatRunRecord{}, false, err
 		}
 	}
 	if err := lockActiveChatRun(ctx, tx, runID, sessionID, userID); err != nil {
+		if errors.Is(err, ErrChatRunTerminal) {
+			record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+			if loadErr != nil {
+				return ChatRunRecord{}, false, loadErr
+			}
+			if terminal {
+				return record, false, nil
+			}
+		}
 		return ChatRunRecord{}, false, err
 	}
 	if input.Status == "completed" {

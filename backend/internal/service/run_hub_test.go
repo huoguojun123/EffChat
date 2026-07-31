@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +17,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/pkg/streaming"
+	"github.com/lib/pq"
 )
 
 type blockingChatRunStore struct {
@@ -37,6 +42,42 @@ func (p *blockingJSONPayload) MarshalJSON() ([]byte, error) {
 
 type selectiveBlockingChatRunStore struct {
 	blockedRunID string
+}
+
+type retryingChatRunStore struct {
+	mu           sync.Mutex
+	attempts     int
+	firstAttempt chan struct{}
+	recoverAfter <-chan struct{}
+}
+
+func (s *retryingChatRunStore) BindChatRunUserMessage(context.Context, string, int64) (bool, error) {
+	return true, nil
+}
+
+func (s *retryingChatRunStore) TransitionChatRun(_ context.Context, input repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, error) {
+	s.mu.Lock()
+	s.attempts++
+	firstAttempt := s.firstAttempt
+	s.mu.Unlock()
+	if firstAttempt != nil {
+		select {
+		case firstAttempt <- struct{}{}:
+		default:
+		}
+	}
+	select {
+	case <-s.recoverAfter:
+		return terminalRecord(input), true, nil
+	default:
+		return repository.ChatRunRecord{}, false, driver.ErrBadConn
+	}
+}
+
+func (s *retryingChatRunStore) AttemptCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempts
 }
 
 func (s *selectiveBlockingChatRunStore) BindChatRunUserMessage(context.Context, string, int64) (bool, error) {
@@ -720,6 +761,294 @@ func TestRunHubTerminalPersistenceRespectsCancellationOrdering(t *testing.T) {
 	snapshot, transitioned, _, err = hub.Transition(context.Background(), failing.RunID, RunTerminal{Status: RunStatusFailed, FinalizationFailure: true})
 	if err != nil || !transitioned || snapshot.Status != RunStatusFailed {
 		t.Fatalf("failed persistence terminal = snapshot:%+v transitioned:%v err:%v", snapshot, transitioned, err)
+	}
+}
+
+func TestRunHubRecoversFrozenTerminalCommitBeforePublishing(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	run, err := hub.Start(1, 2, 0, "retry-terminal-commit", RunKindChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	_, firstSubscriber, firstCleanup, _, err := hub.EventsAfter(run.RunID, 1, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstCleanup()
+	_, secondSubscriber, secondCleanup, _, err := hub.EventsAfter(run.RunID, 1, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondCleanup()
+
+	allowRecovery := make(chan struct{})
+	firstAttempt := make(chan struct{}, 1)
+	initialContext, cancelInitial := context.WithCancel(context.Background())
+	defer cancelInitial()
+	attempts := 0
+	finished := make(chan struct {
+		snapshot     *RunSnapshot
+		transitioned bool
+		event        *RunEvent
+		err          error
+	}, 1)
+	go func() {
+		snapshot, transitioned, event, transitionErr := hub.TransitionWithCommit(initialContext, run.RunID, func(commitCtx context.Context, input repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, error) {
+			attempts++
+			if attempts == 1 {
+				firstAttempt <- struct{}{}
+				cancelInitial()
+				return repository.ChatRunRecord{}, false, context.Canceled
+			}
+			if commitCtx.Err() != nil {
+				t.Errorf("terminal retry reused a canceled context: %v", commitCtx.Err())
+			}
+			if _, ok := commitCtx.Deadline(); !ok {
+				t.Error("terminal retry did not receive a bounded fresh context")
+			}
+			select {
+			case <-allowRecovery:
+				return terminalRecord(input), true, nil
+			default:
+				return repository.ChatRunRecord{}, false, driver.ErrBadConn
+			}
+		}, RunTerminal{Status: RunStatusCompleted})
+		finished <- struct {
+			snapshot     *RunSnapshot
+			transitioned bool
+			event        *RunEvent
+			err          error
+		}{snapshot, transitioned, event, transitionErr}
+	}()
+
+	select {
+	case <-firstAttempt:
+	case <-time.After(time.Second):
+		t.Fatal("terminal commit did not attempt persistence")
+	}
+	assertRunFrozenWithoutTerminal(t, hub, run.RunID, 1, 2, firstSubscriber, secondSubscriber)
+	close(allowRecovery)
+
+	result := <-finished
+	if result.err != nil || !result.transitioned || result.snapshot == nil || result.snapshot.Status != RunStatusCompleted || result.event == nil {
+		t.Fatalf("recovered terminal = %+v", result)
+	}
+	if attempts < 2 {
+		t.Fatalf("commit attempts = %d, want retry", attempts)
+	}
+	assertSubscribersReceiveSingleTerminal(t, firstSubscriber, secondSubscriber)
+	events, _, err := hub.EventsSince(run.RunID, 1, 2, 0)
+	if err != nil || len(events) != 1 || events[0].Event != streaming.EventMessageComplete {
+		t.Fatalf("stored terminal events = %+v err=%v", events, err)
+	}
+}
+
+func TestRunHubRecoversFrozenStoreTerminalBeforePublishing(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	allowRecovery := make(chan struct{})
+	store := &retryingChatRunStore{firstAttempt: make(chan struct{}, 1), recoverAfter: allowRecovery}
+	hub.SetStore(store)
+	run, err := hub.Start(1, 2, 0, "retry-terminal-store", RunKindCompaction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	finished := make(chan error, 1)
+	go func() {
+		_, _, _, transitionErr := hub.Transition(context.Background(), run.RunID, RunTerminal{Status: RunStatusCompleted})
+		finished <- transitionErr
+	}()
+	select {
+	case <-store.firstAttempt:
+	case <-time.After(time.Second):
+		t.Fatal("store terminal did not attempt persistence")
+	}
+	assertRunFrozenWithoutTerminal(t, hub, run.RunID, 1, 2, nil, nil)
+	close(allowRecovery)
+	if err := <-finished; err != nil {
+		t.Fatalf("store terminal recovery: %v", err)
+	}
+	if store.AttemptCount() < 2 {
+		t.Fatalf("store attempts = %d, want retry", store.AttemptCount())
+	}
+	snapshot, ok := hub.Get(run.RunID, 1, 2)
+	if !ok || snapshot.Status != RunStatusCompleted {
+		t.Fatalf("recovered store snapshot = %+v", snapshot)
+	}
+}
+
+func TestRunHubKeepsTerminalFrozenDuringSustainedStoreFailure(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	allowRecovery := make(chan struct{})
+	store := &retryingChatRunStore{firstAttempt: make(chan struct{}, 1), recoverAfter: allowRecovery}
+	hub.SetStore(store)
+	run, err := hub.Start(1, 2, 0, "sustained-terminal-store-failure", RunKindChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	_, subscriber, cleanup, _, err := hub.EventsAfter(run.RunID, 1, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	finished := make(chan error, 1)
+	go func() {
+		_, _, _, transitionErr := hub.Transition(context.Background(), run.RunID, RunTerminal{Status: RunStatusCompleted})
+		finished <- transitionErr
+	}()
+	select {
+	case <-store.firstAttempt:
+	case <-time.After(time.Second):
+		t.Fatal("store terminal did not attempt persistence")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for store.AttemptCount() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if attempts := store.AttemptCount(); attempts < 3 {
+		t.Fatalf("store attempts = %d, want sustained retries", attempts)
+	}
+	assertRunFrozenWithoutTerminal(t, hub, run.RunID, 1, 2, subscriber)
+	idleCtx, cancelIdle := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancelIdle()
+	if hub.WaitForIdle(idleCtx) {
+		t.Fatal("terminal-pending run was reported idle")
+	}
+
+	close(allowRecovery)
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatalf("recover sustained store failure: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal persistence did not recover")
+	}
+	assertSubscribersReceiveSingleTerminal(t, subscriber)
+}
+
+func TestRunHubFrozenTerminalUsesCanonicalAmbiguousCommitOnce(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	run, err := hub.Start(1, 2, 0, "ambiguous-terminal-commit", RunKindChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	attempts := 0
+	snapshot, transitioned, event, err := hub.TransitionWithCommit(context.Background(), run.RunID, func(_ context.Context, input repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, error) {
+		attempts++
+		if attempts == 1 {
+			return repository.ChatRunRecord{}, false, context.DeadlineExceeded
+		}
+		return terminalRecord(input), false, nil
+	}, RunTerminal{Status: RunStatusCompleted})
+	if err != nil || transitioned || snapshot == nil || snapshot.Status != RunStatusCompleted || event == nil {
+		t.Fatalf("canonical terminal = snapshot:%+v transitioned:%v event:%+v err:%v", snapshot, transitioned, event, err)
+	}
+	if attempts != 2 {
+		t.Fatalf("commit attempts = %d, want 2", attempts)
+	}
+	_, transitioned, event, err = hub.TransitionWithCommit(context.Background(), run.RunID, func(context.Context, repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, error) {
+		t.Fatal("terminal commit was repeated after canonical record")
+		return repository.ChatRunRecord{}, false, nil
+	}, RunTerminal{Status: RunStatusFailed})
+	if err != nil || transitioned || event != nil {
+		t.Fatalf("second terminal = transitioned:%v event:%+v err:%v", transitioned, event, err)
+	}
+	events, _, err := hub.EventsSince(run.RunID, 1, 2, 0)
+	if err != nil || len(events) != 1 || events[0].Event != streaming.EventMessageComplete {
+		t.Fatalf("canonical terminal events = %+v err=%v", events, err)
+	}
+}
+
+func TestRetryableTerminalPersistenceErrorClassification(t *testing.T) {
+	for _, err := range []error{
+		context.DeadlineExceeded,
+		context.Canceled,
+		driver.ErrBadConn,
+		sql.ErrConnDone,
+		io.EOF,
+		io.ErrUnexpectedEOF,
+		&net.DNSError{IsTimeout: true},
+		&pq.Error{Code: "08006"},
+		&pq.Error{Code: "40001"},
+		&pq.Error{Code: "53100"},
+		&pq.Error{Code: "57014"},
+		&pq.Error{Code: "58030"},
+	} {
+		if !isRetryableTerminalPersistenceError(err) {
+			t.Fatalf("retryable error rejected: %T %v", err, err)
+		}
+	}
+	for _, err := range []error{errors.New("invalid terminal input"), &pq.Error{Code: "23505"}} {
+		if isRetryableTerminalPersistenceError(err) {
+			t.Fatalf("domain error accepted as retryable: %T %v", err, err)
+		}
+	}
+}
+
+func assertRunFrozenWithoutTerminal(t *testing.T, hub *RunHub, runID string, sessionID, userID int64, subscribers ...<-chan RunEvent) {
+	t.Helper()
+	hub.mu.RLock()
+	state := hub.runs[runID]
+	finishing := state != nil && state.finishing
+	hub.mu.RUnlock()
+	snapshot, ok := hub.Get(runID, sessionID, userID)
+	if !ok || !finishing || snapshot.Status != RunStatusRunning {
+		t.Fatalf("frozen run = snapshot:%+v finishing:%v", snapshot, finishing)
+	}
+	if hub.Cancel(runID, sessionID, userID) {
+		t.Fatal("cancel was accepted after terminal freeze")
+	}
+	if hub.Record(runID, streaming.EventContentDelta, streaming.ContentDeltaEvent{Delta: "late"}) {
+		t.Fatal("event was accepted after terminal freeze")
+	}
+	for _, subscriber := range subscribers {
+		if subscriber == nil {
+			continue
+		}
+		select {
+		case event := <-subscriber:
+			t.Fatalf("terminal event published before recovery: %+v", event)
+		default:
+		}
+	}
+}
+
+func assertSubscribersReceiveSingleTerminal(t *testing.T, subscribers ...<-chan RunEvent) {
+	t.Helper()
+	for _, subscriber := range subscribers {
+		select {
+		case event, ok := <-subscriber:
+			if !ok || event.Event != streaming.EventMessageComplete {
+				t.Fatalf("subscriber terminal event = %+v open=%v", event, ok)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("subscriber did not receive terminal event")
+		}
+		select {
+		case _, ok := <-subscriber:
+			if ok {
+				t.Fatal("subscriber received more than one terminal event")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("subscriber was not closed after terminal event")
+		}
 	}
 }
 

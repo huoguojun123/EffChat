@@ -127,3 +127,40 @@ func TestRunHubRestoresDurableTerminalEvent(t *testing.T) {
 		t.Fatalf("restored events = %+v channel=%v", events, ch)
 	}
 }
+
+func TestRunHubRestoresServerRestartReconciliation(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	intent := BuildSendRunIntent(&model.Session{MessageFormat: "v1"}, &SendMessageRequest{Content: "resume after restart"})
+	now := time.Now()
+	event, err := json.Marshal(map[string]interface{}{
+		"event": "error",
+		"data": map[string]interface{}{
+			"error": "服务已重启，请重试", "code": "server_restarted", "retryable": true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := repository.ChatRunRecord{
+		RunID: "reconciled-terminal", UserID: 2, SessionID: 1, Kind: RunKindChat,
+		Operation: intent.Operation, IntentVersion: intent.Version, IntentHash: intent.Hash,
+		Status: RunStatusFailed, PublicErrorCode: "server_restarted", PublicErrorMessage: "服务已重启，请重试",
+		TerminalEvent: event, AcceptedAt: now, TerminalAt: &now, ExpiresAt: now.Add(time.Minute),
+	}
+
+	snapshot, err := hub.RestoreTerminal(record, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != RunStatusFailed || snapshot.ErrorCode != "server_restarted" || snapshot.Error != "服务已重启，请重试" {
+		t.Fatalf("restored restart snapshot = %+v", snapshot)
+	}
+	events, subscriber, cleanup, _, err := hub.EventsAfter(record.RunID, record.SessionID, record.UserID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if subscriber != nil || len(events) != 1 || events[0].Event != "error" {
+		t.Fatalf("restored restart events = %+v channel=%v", events, subscriber)
+	}
+}

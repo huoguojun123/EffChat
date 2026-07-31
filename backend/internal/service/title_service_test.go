@@ -417,6 +417,47 @@ func TestAnthropicTitleModelDoesNotHideSDKRetry(t *testing.T) {
 	}
 }
 
+func TestGoogleTitleModelDoesNotHideSDKRetry(t *testing.T) {
+	db := setupTitleTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if !strings.HasPrefix(r.URL.Path, "/v1beta/models/") || !strings.HasSuffix(r.URL.Path, ":streamGenerateContent") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = fmt.Fprint(w, `{"error":{"code":503,"message":"temporarily unavailable","status":"UNAVAILABLE"}}`)
+	}))
+	defer server.Close()
+
+	channelKey := fmt.Sprintf("title-google-%d", time.Now().UnixNano())
+	channels := NewChannelService(repository.NewChannelRepository(db))
+	enabled := true
+	if _, err := channels.SaveAIChannel(&AIChannelInput{
+		Key: channelKey, DisplayName: "Google title retry ownership", Adapter: AdapterGoogle,
+		BaseURL: server.URL, APIKey: "test-key", Enabled: &enabled,
+	}); err != nil {
+		t.Fatalf("save Google title channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM ai_channels WHERE channel_key = $1", channelKey) })
+
+	svc := NewTitleService(nil, nil, nil, channels)
+	chatModel, err := svc.buildTitleChatModel(t.Context(), channelKey, "gemini-2.5-pro")
+	if err != nil {
+		t.Fatalf("build Google title model: %v", err)
+	}
+	_, err = modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("title")}, time.Second)
+	if err == nil {
+		t.Fatal("Google 503 unexpectedly succeeded")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("Google title SDK performed %d hidden attempts, want 1", got)
+	}
+}
+
 func TestResolveTitleModelProfilePreservesSetupDeadline(t *testing.T) {
 	db := setupTitleTestDB(t)
 	db.SetMaxOpenConns(1)

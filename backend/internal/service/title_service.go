@@ -19,6 +19,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 	"google.golang.org/genai"
@@ -551,9 +552,10 @@ func (s *TitleService) buildTitleChatModel(ctx context.Context, channelKey, mode
 		return openai.NewChatModel(ctx, buildTitleOpenAIConfig(channel, modelID))
 	case AdapterAnthropic:
 		cfg := &claude.Config{
-			APIKey:    channel.APIKey,
-			Model:     modelID,
-			MaxTokens: titleMaxOutputTokens,
+			APIKey:     channel.APIKey,
+			Model:      modelID,
+			MaxTokens:  titleMaxOutputTokens,
+			HTTPClient: providerhttp.NewAnthropicSingleAttemptClient(nil),
 		}
 		if channel.BaseURL != "" {
 			baseURL := channel.BaseURL

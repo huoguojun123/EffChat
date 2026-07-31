@@ -10,11 +10,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/testutil"
 )
@@ -370,6 +373,47 @@ func TestGenerateTitleWithModelStreamsAfterBoundedSetup(t *testing.T) {
 	}
 	if int(maxTokens) != titleMaxOutputTokens {
 		t.Fatalf("title output limit = %v, want %d", maxTokens, titleMaxOutputTokens)
+	}
+}
+
+func TestAnthropicTitleModelDoesNotHideSDKRetry(t *testing.T) {
+	db := setupTitleTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"api_error","message":"temporarily unavailable"}}`)
+	}))
+	defer server.Close()
+
+	channelKey := fmt.Sprintf("title-anthropic-%d", time.Now().UnixNano())
+	channels := NewChannelService(repository.NewChannelRepository(db))
+	enabled := true
+	if _, err := channels.SaveAIChannel(&AIChannelInput{
+		Key: channelKey, DisplayName: "Anthropic title retry ownership", Adapter: AdapterAnthropic,
+		BaseURL: server.URL, APIKey: "test-key", Enabled: &enabled,
+	}); err != nil {
+		t.Fatalf("save Anthropic title channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM ai_channels WHERE channel_key = $1", channelKey) })
+
+	svc := NewTitleService(nil, nil, nil, channels)
+	chatModel, err := svc.buildTitleChatModel(t.Context(), channelKey, "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("build Anthropic title model: %v", err)
+	}
+	_, err = modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("title")}, time.Second)
+	if err == nil {
+		t.Fatal("Anthropic 503 unexpectedly succeeded")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("Anthropic title SDK performed %d hidden attempts, want 1", got)
 	}
 }
 

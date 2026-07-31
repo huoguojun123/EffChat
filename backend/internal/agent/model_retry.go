@@ -19,6 +19,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
 	"google.golang.org/genai"
 )
 
@@ -122,6 +123,16 @@ func classifyModelRuntimeError(err error) modelErrorClassification {
 
 	status, headers, detail := structuredModelHTTPError(err)
 	if status > 0 {
+		if providerhttp.IsAnthropicTransportError(headers) {
+			return modelErrorClassification{
+				Code:       "model_connection_failed",
+				Message:    "连接模型服务失败，请稍后重试",
+				Diagnostic: modelUpstreamDiagnostic(status, "上游连接失败", ""),
+				Category:   RuntimeErrorConnection,
+				Retryable:  true,
+				HTTPStatus: status,
+			}
+		}
 		if status == http.StatusRequestEntityTooLarge || isModelContextErrorText(detail) {
 			return modelErrorClassification{
 				Code:       "model_context_exceeded",

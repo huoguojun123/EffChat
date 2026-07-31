@@ -64,8 +64,11 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 		Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
 			return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
 				started := time.Now()
+				if cause := semanticToolParentCause(ctx); cause != nil {
+					return nil, cause
+				}
 				timeout := runtime.Timeout(input.Name)
-				callCtx, cancel := context.WithTimeout(ctx, timeout)
+				callCtx, cancel := toolCallContext(ctx, input.Name, timeout)
 				defer cancel()
 				meta := modelusage.MetaFromContext(ctx)
 
@@ -75,6 +78,9 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 				if budget != nil {
 					arguments, grant, blocked = budget.prepareToolCall(input.Name, input.Arguments)
 					if blocked != "" {
+						if cause := semanticToolParentCause(ctx); cause != nil {
+							return nil, cause
+						}
 						return &compose.ToolOutput{Result: budget.accountUnreservedResult(input.Name, blocked)}, nil
 					}
 				}
@@ -83,6 +89,14 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 				reservation, err := reserveToolCall(ctx, quotaService, meta, input)
 				if err != nil {
 					duration := time.Since(started)
+					if cause := semanticToolParentCause(ctx); cause != nil {
+						if budget != nil {
+							budget.cancelToolGrant(grant, true)
+						}
+						log.Printf("[tool_governance] call_canceled user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s stage=quota",
+							meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), toolUsageErrorType(cause, ctx))
+						return nil, cause
+					}
 					errText, code := quotaErrorText(err)
 					result := marshalToolQuotaError(input.Name, code, errText)
 					if budget != nil {
@@ -93,8 +107,14 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), code)
 					return &compose.ToolOutput{Result: result}, nil
 				}
+				if cause := semanticToolParentCause(ctx); cause != nil {
+					return nil, finishCanceledToolCall(usageService, budget, grant, reservation, meta, input, started, cause, ctx, true)
+				}
 				output, err := next(callCtx, &preparedInput)
 				duration := time.Since(started)
+				if cause := semanticToolParentCause(ctx); cause != nil {
+					return nil, finishCanceledToolCall(usageService, budget, grant, reservation, meta, input, started, cause, ctx, false)
+				}
 				if err != nil {
 					errText := err.Error()
 					retryable := false
@@ -142,6 +162,53 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 			}
 		},
 	}
+}
+
+func semanticToolParentCause(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return context.Cause(ctx)
+}
+
+// finishCanceledToolCall closes every durable side effect before returning the
+// semantic parent cause to Eino. Cancellation must not become Tool JSON because
+// that would let the ReAct loop continue after user stop, RunHub drain, or run
+// invalidation. The reserved usage row is still finalized through its own
+// bounded background context, and any undelivered context grant is released.
+func finishCanceledToolCall(
+	usageService *modelusage.Service,
+	budget *toolBudgetMiddleware,
+	grant toolContextGrant,
+	reservation service.ToolCallQuotaReservation,
+	meta modelusage.Meta,
+	input *compose.ToolInput,
+	started time.Time,
+	cause error,
+	parent context.Context,
+	releaseCall bool,
+) error {
+	if budget != nil {
+		budget.cancelToolGrant(grant, releaseCall)
+	}
+	duration := time.Since(started)
+	errorType := toolUsageErrorType(cause, parent)
+	log.Printf("[tool_governance] call_canceled user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s",
+		meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), errorType)
+	finishToolUsage(usageService, reservation, meta, input, false, 0, false, duration, errorType, cause.Error())
+	return cause
+}
+
+// toolCallContext keeps ordinary Tools under an absolute execution timeout.
+// web_extract is different because it owns two independently bounded phases:
+// crawler fallback first, then a streaming model refinement whose timeout only
+// waits for first output. Wrapping both phases in another absolute deadline
+// would make refinement inherit only the crawler's leftover time.
+func toolCallContext(parent context.Context, toolName string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if toolName == "web_extract" {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func inspectToolTerminalOutcome(result string) toolTerminalOutcome {
@@ -341,6 +408,9 @@ func quotaErrorText(err error) (string, string) {
 }
 
 func toolUsageErrorType(err error, ctx context.Context) string {
+	if modelusage.ErrorType(err) == "first_output_timeout" {
+		return "first_output_timeout"
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "timeout"
 	}

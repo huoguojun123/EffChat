@@ -18,6 +18,7 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 // Summarizer 把抓取到的网页正文按 goal 提炼成要点。由 agent 层注入（独立小模型）。
@@ -201,8 +202,9 @@ func (t *WebExtractTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (t *WebExtractTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	started := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, t.timeout)
-	defer cancel()
+	if cause := toolParentCause(ctx); cause != nil {
+		return "", cause
+	}
 	var input WebExtractInput
 	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
 		return "", fmt.Errorf("invalid input: %w", err)
@@ -230,17 +232,31 @@ func (t *WebExtractTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	}
 	log.Printf("[web_extract] run_start url_chars=%d goal_chars=%d crawlers=%s summary_enabled=%t", toolLogRuneCount(pageURL), toolLogRuneCount(input.Goal), strings.Join(t.crawlerProviders, ","), t.summaryEnabled && t.summarizer != nil)
 
+	// Crawling is a finite external-service phase and keeps an absolute budget.
+	// Refinement starts only after source text exists and receives the semantic
+	// parent context; its own streaming collector then applies a fresh
+	// first-output timeout without inheriting crawler time already spent.
+	crawlCtx, cancelCrawl := context.WithTimeout(ctx, t.timeout)
+	defer cancelCrawl()
+
 	failures := make([]string, 0, len(t.crawlerProviders))
 	attempted := make([]string, 0, len(t.crawlerProviders))
 	var lastStatus int
 	for index, crawler := range t.crawlerProviders {
+		if cause := toolParentCause(ctx); cause != nil {
+			return "", cause
+		}
 		attempted = append(attempted, crawler)
 		crawlerStarted := time.Now()
-		budget := fallbackServiceBudget(ctx, t.timeout, index, len(t.crawlerProviders))
+		budget := fallbackServiceBudget(crawlCtx, t.timeout, index, len(t.crawlerProviders))
 		log.Printf("[web_extract] crawler_start url_chars=%d crawler=%s attempt=%d/%d budget_ms=%d", toolLogRuneCount(pageURL), crawler, len(attempted), len(t.crawlerProviders), budget.Milliseconds())
-		crawlerCtx, cancel := context.WithTimeout(ctx, budget)
+		crawlerCtx, crawlerCancel := context.WithTimeout(crawlCtx, budget)
 		output := t.extractWithCrawler(crawlerCtx, crawler, pageURL)
-		cancel()
+		crawlerErr := context.Cause(crawlerCtx)
+		crawlerCancel()
+		if cause := toolParentCause(ctx); cause != nil {
+			return "", cause
+		}
 		if output.StatusCode != 0 {
 			lastStatus = output.StatusCode
 		}
@@ -251,24 +267,32 @@ func (t *WebExtractTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 			if len(failures) > 0 {
 				log.Printf("[web_extract] fallback_succeeded url_chars=%d source=%s attempted=%s previous_failures=%s", toolLogRuneCount(pageURL), crawler, strings.Join(attempted, ","), strings.Join(failures, ","))
 			}
-			finalized := t.finalizeContent(ctx, output, input.Goal, detail)
+			cancelCrawl()
+			finalized, err := t.finalizeContent(ctx, output, input.Goal, detail)
+			if err != nil {
+				log.Printf("[web_extract] run_canceled url_chars=%d source=%s attempted=%s duration_ms=%d error_type=canceled", toolLogRuneCount(pageURL), output.Source, strings.Join(attempted, ","), toolLogDurationMS(started))
+				return "", err
+			}
 			log.Printf("[web_extract] run_success url_chars=%d source=%s attempted=%s summarized=%t content_chars=%d duration_ms=%d", toolLogRuneCount(pageURL), finalized.Source, strings.Join(attempted, ","), finalized.Summarized, toolLogRuneCount(finalized.Content), toolLogDurationMS(started))
 			return marshalExtractOutput(finalized)
 		}
-		log.Printf("[web_extract] crawler_failed url_chars=%d crawler=%s status=%d duration_ms=%d error_type=%s", toolLogRuneCount(pageURL), crawler, output.StatusCode, toolLogDurationMS(crawlerStarted), webErrorCode(crawlerCtx, nil))
+		log.Printf("[web_extract] crawler_failed url_chars=%d crawler=%s status=%d duration_ms=%d error_type=%s", toolLogRuneCount(pageURL), crawler, output.StatusCode, toolLogDurationMS(crawlerStarted), webErrorCode(crawlerCtx, crawlerErr))
 		failures = append(failures, crawler)
-		if ctx.Err() != nil {
+		if crawlCtx.Err() != nil {
 			break
 		}
 	}
-	log.Printf("[web_extract] run_failed url_chars=%d crawlers=%s duration_ms=%d error_type=%s failures=%s", toolLogRuneCount(pageURL), strings.Join(attempted, ","), toolLogDurationMS(started), webErrorCode(ctx, ctx.Err()), strings.Join(failures, ","))
+	if cause := toolParentCause(ctx); cause != nil {
+		return "", cause
+	}
+	log.Printf("[web_extract] run_failed url_chars=%d crawlers=%s duration_ms=%d error_type=%s failures=%s", toolLogRuneCount(pageURL), strings.Join(attempted, ","), toolLogDurationMS(started), webErrorCode(crawlCtx, crawlCtx.Err()), strings.Join(failures, ","))
 	return marshalExtractOutput(WebExtractOutput{
 		OK:               false,
 		URL:              pageURL,
 		AttemptedSources: attempted,
 		StatusCode:       lastStatus,
-		ErrorCode:        webErrorCode(ctx, ctx.Err()),
-		Error:            webErrorMessage(ctx, ctx.Err()),
+		ErrorCode:        webErrorCode(crawlCtx, crawlCtx.Err()),
+		Error:            webErrorMessage(crawlCtx, crawlCtx.Err()),
 		Retryable:        true,
 	})
 }
@@ -276,7 +300,14 @@ func (t *WebExtractTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 // finalizeContent 把抓取到的原文收口为最终返回正文：
 // 开启提炼且有提炼器时，用小模型按 goal 提炼成要点；提炼失败或关闭提炼时，
 // 降级到按 maxContent 截断。两条路径都保证返回体量可控，不再单页塞满上下文。
-func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractOutput, goal, detail string) WebExtractOutput {
+//
+// 只有 refinement 自己的 provider/transport/首包失败允许降级。父 context
+// 表示用户停止、RunHub service drain 或运行失效，必须原样作为 Go error 向上传播，
+// 不能伪装成 source 成功或 degraded Tool JSON。
+func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractOutput, goal, detail string) (WebExtractOutput, error) {
+	if cause := toolParentCause(ctx); cause != nil {
+		return output, cause
+	}
 	output.Detail = detail
 	limit := t.maxContent
 	if detail == extractDetailDetailed {
@@ -286,7 +317,10 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		var truncated bool
 		output.Content, truncated = truncateRunesWithStatus(output.Content, sourceContentLimit)
 		output.Truncated = output.Truncated || truncated
-		return output
+		if cause := toolParentCause(ctx); cause != nil {
+			return output, cause
+		}
+		return output, nil
 	}
 	if t.summaryEnabled && t.summarizer != nil {
 		sourceTruncated := output.Truncated
@@ -294,6 +328,10 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		summarizeStarted := time.Now()
 		log.Printf("[web_extract] summarize_start url_chars=%d source=%s detail=%s goal_chars=%d input_chars=%d", toolLogRuneCount(output.URL), output.Source, detail, toolLogRuneCount(goal), toolLogRuneCount(output.Content))
 		summary, err := t.summarizer.Summarize(ctx, goal, output.Title, output.Content, detail)
+		if cause := toolParentCause(ctx); cause != nil {
+			log.Printf("[web_extract] summarize_canceled url_chars=%d source=%s duration_ms=%d error_type=canceled", toolLogRuneCount(output.URL), output.Source, toolLogDurationMS(summarizeStarted))
+			return output, cause
+		}
 		if err == nil && strings.TrimSpace(summary) != "" {
 			var summaryTruncated bool
 			output.Content, summaryTruncated = truncateRunesWithStatus(strings.TrimSpace(summary), limit)
@@ -304,11 +342,15 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 				output.DegradationReason = RefinementSourceTruncated
 			}
 			log.Printf("[web_extract] summarize_success url_chars=%d source=%s output_chars=%d duration_ms=%d", toolLogRuneCount(output.URL), output.Source, toolLogRuneCount(output.Content), toolLogDurationMS(summarizeStarted))
-			return output
+			return output, nil
 		}
 		output.Degraded = true
 		output.DegradationReason = refinementReason(err)
-		log.Printf("[web_extract] summarize_failed url_chars=%d source=%s duration_ms=%d error_type=summarize_error fallback=truncate", toolLogRuneCount(output.URL), output.Source, toolLogDurationMS(summarizeStarted))
+		errorType := modelusage.ErrorType(err)
+		if errorType == "" {
+			errorType = "empty_result"
+		}
+		log.Printf("[web_extract] summarize_failed url_chars=%d source=%s duration_ms=%d error_type=%s fallback=truncate", toolLogRuneCount(output.URL), output.Source, toolLogDurationMS(summarizeStarted), errorType)
 	} else {
 		output.Degraded = true
 		if t.summaryEnabled {
@@ -324,7 +366,17 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 	if output.Truncated {
 		log.Printf("[web_extract] content_truncated url_chars=%d source=%s before_chars=%d after_chars=%d", toolLogRuneCount(output.URL), output.Source, before, toolLogRuneCount(output.Content))
 	}
-	return output
+	if cause := toolParentCause(ctx); cause != nil {
+		return output, cause
+	}
+	return output, nil
+}
+
+func toolParentCause(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return context.Cause(ctx)
 }
 
 func refinementReason(err error) string {

@@ -2,10 +2,13 @@ package usage
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 )
 
 type fakeStore struct {
@@ -77,6 +80,28 @@ func TestWithMetaMergesContext(t *testing.T) {
 	meta := MetaFromContext(ctx)
 	if meta.UserID != 1 || meta.Kind != KindRetry || meta.Provider != "openai" || meta.ModelID != "gpt-4o" {
 		t.Fatalf("merged meta mismatch: %#v", meta)
+	}
+}
+
+func TestErrorTypeDistinguishesFirstOutputTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "first output timeout", err: modelstream.ErrFirstOutputTimeout, want: "first_output_timeout"},
+		{name: "wrapped first output timeout", err: fmt.Errorf("stream failed: %w", modelstream.ErrFirstOutputTimeout), want: "first_output_timeout"},
+		{name: "semantic cancellation", err: context.Canceled, want: "canceled"},
+		{name: "ordinary timeout", err: context.DeadlineExceeded, want: "timeout"},
+		{name: "model failure", err: errors.New("provider failed"), want: "model_error"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := ErrorType(testCase.err); got != testCase.want {
+				t.Fatalf("ErrorType(%v) = %q, want %q", testCase.err, got, testCase.want)
+			}
+		})
 	}
 }
 

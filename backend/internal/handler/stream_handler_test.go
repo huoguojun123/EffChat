@@ -441,7 +441,7 @@ func TestRunAgentStreamAcknowledgesDurableTurnBeforeCancellation(t *testing.T) {
 	if err := runHub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelDeadline) {
+	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelFirstOutputTimeout) {
 		t.Fatal("failed to cancel admitted run")
 	}
 
@@ -451,7 +451,7 @@ func TestRunAgentStreamAcknowledgesDurableTurnBeforeCancellation(t *testing.T) {
 	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
 
 	body := recorder.Body.String()
-	if recorder.Code != http.StatusOK || !strings.Contains(body, streaming.EventMessageStart) || !strings.Contains(body, "run_deadline_exceeded") {
+	if recorder.Code != http.StatusOK || !strings.Contains(body, streaming.EventMessageStart) || !strings.Contains(body, "first_output_timeout") {
 		t.Fatalf("admitted cancellation stream status=%d body=%s", recorder.Code, body)
 	}
 }
@@ -500,7 +500,7 @@ func TestWriteRunTerminalMapsCancellationCauses(t *testing.T) {
 		wantCode  string
 	}{
 		{name: "user stop", cause: service.RunCancelUserStop, wantEvent: streaming.EventMessageComplete},
-		{name: "deadline", cause: service.RunCancelDeadline, wantEvent: streaming.EventError, wantCode: "run_deadline_exceeded"},
+		{name: "first output timeout", cause: service.RunCancelFirstOutputTimeout, wantEvent: streaming.EventError, wantCode: "first_output_timeout"},
 		{name: "server drain", cause: service.RunCancelServerDrain, wantEvent: streaming.EventError, wantCode: "server_draining"},
 		{name: "account changed", cause: service.RunCancelAccountChanged, wantEvent: streaming.EventError, wantCode: "account_changed"},
 		{name: "session deleted", cause: service.RunCancelSessionDeleted, wantEvent: streaming.EventError, wantCode: "session_deleted"},
@@ -582,7 +582,7 @@ func TestWriteRunTerminalPreservesExplicitPartialCompletionAcrossCancellation(t 
 func TestShouldPersistCanceledPartial(t *testing.T) {
 	for _, cause := range []service.RunCancelCause{
 		service.RunCancelUserStop,
-		service.RunCancelDeadline,
+		service.RunCancelFirstOutputTimeout,
 		service.RunCancelServerDrain,
 		service.RunCancelAccountChanged,
 		service.RunCancelUpstream,

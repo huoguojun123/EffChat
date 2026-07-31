@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 )
 
 const maxErrorMessageRunes = 500
@@ -270,6 +272,9 @@ func rangeStart(now time.Time, rangeValue string) time.Time {
 func ErrorType(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, modelstream.ErrFirstOutputTimeout) {
+		return "first_output_timeout"
 	}
 	if errors.Is(err, context.Canceled) {
 		return "canceled"

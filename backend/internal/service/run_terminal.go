@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
@@ -17,8 +18,10 @@ const runFinalizationTimeout = 5 * time.Second
 type RunCancelCause string
 
 const (
-	RunCancelUserStop       RunCancelCause = "user_stop"
-	RunCancelDeadline       RunCancelCause = "deadline"
+	RunCancelUserStop           RunCancelCause = "user_stop"
+	RunCancelFirstOutputTimeout RunCancelCause = "first_output_timeout"
+	// Deprecated: remove after all RunHub callers migrate to the precise cause.
+	RunCancelDeadline       RunCancelCause = RunCancelFirstOutputTimeout
 	RunCancelServerDrain    RunCancelCause = "server_draining"
 	RunCancelAccountChanged RunCancelCause = "account_changed"
 	RunCancelSessionDeleted RunCancelCause = "session_deleted"
@@ -31,6 +34,17 @@ type runCancellationError struct {
 
 func (e runCancellationError) Error() string {
 	return string(e.Cause)
+}
+
+// Unwrap keeps the durable RunHub cause while preserving the standard error
+// family expected by provider adapters, usage accounting, and Tool runtimes.
+// A first-output timeout is a real timeout; every other RunHub cause is a
+// semantic cancellation rather than a provider/model failure.
+func (e runCancellationError) Unwrap() error {
+	if e.Cause == RunCancelFirstOutputTimeout {
+		return modelstream.ErrFirstOutputTimeout
+	}
+	return context.Canceled
 }
 
 type chatRunStore interface {
@@ -223,14 +237,14 @@ func storedRunMatchesState(record repository.ChatRunRecord, state *runState) boo
 
 func newRunContext(timeout time.Duration) (context.Context, context.CancelCauseFunc, context.CancelFunc) {
 	parent := context.Background()
-	deadlineCancel := func() {}
+	timeoutCancel := func() {}
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		parent, cancel = context.WithTimeoutCause(parent, timeout, runCancellationError{Cause: RunCancelDeadline})
-		deadlineCancel = cancel
+		parent, cancel = context.WithTimeoutCause(parent, timeout, runCancellationError{Cause: RunCancelFirstOutputTimeout})
+		timeoutCancel = cancel
 	}
 	ctx, cancelCause := context.WithCancelCause(parent)
-	return ctx, cancelCause, deadlineCancel
+	return ctx, cancelCause, timeoutCancel
 }
 
 func RunCancelCauseFromContext(ctx context.Context) RunCancelCause {
@@ -661,8 +675,8 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 
 func RunCancellationPublicError(cause RunCancelCause) (string, string, bool) {
 	switch cause {
-	case RunCancelDeadline:
-		return "run_deadline_exceeded", "任务超时，请重试", true
+	case RunCancelFirstOutputTimeout:
+		return "first_output_timeout", "等待模型首个输出超时，请重试", true
 	case RunCancelServerDrain:
 		return "server_draining", "服务正在更新，请重试", true
 	case RunCancelAccountChanged:

@@ -514,6 +514,23 @@ func TestCanonicalizeProducedMessages_ReordersParallelToolResults(t *testing.T) 
 	}
 }
 
+func TestCanonicalizePartialProducedMessagesDropsMetadataOnlyAssistant(t *testing.T) {
+	produced := []map[string]interface{}{
+		{"role": "assistant", "content": "", "response_meta": map[string]interface{}{"usage": map[string]interface{}{"prompt_tokens": 5}}},
+	}
+	if got := canonicalizePartialProducedMessages(produced); len(got) != 0 {
+		t.Fatalf("metadata-only partial messages = %#v, want none", got)
+	}
+
+	meaningful := []map[string]interface{}{
+		{"role": "assistant", "content": "", "reasoning_content": "partial thought"},
+	}
+	got := canonicalizePartialProducedMessages(meaningful)
+	if len(got) != 1 || got[0]["reasoning_content"] != "partial thought" {
+		t.Fatalf("meaningful reasoning partial = %#v", got)
+	}
+}
+
 // TestConvertToEinoMessages_InvalidJSON 验证坏数据返回错误而非 panic。
 func TestConvertToEinoMessages_InvalidJSON(t *testing.T) {
 	_, err := convertToEinoMessages([]*model.Message{{ID: 3, MessageData: []byte("{not json")}}, true)

@@ -453,7 +453,24 @@ func canonicalizeProducedMessages(messages []map[string]interface{}) []map[strin
 }
 
 func canonicalizePartialProducedMessages(messages []map[string]interface{}) []map[string]interface{} {
-	return canonicalizeProducedMessagesWithPartial(messages, true)
+	normalized := canonicalizeProducedMessagesWithPartial(messages, true)
+	if len(normalized) == 0 {
+		return normalized
+	}
+	filtered := make([]map[string]interface{}, 0, len(normalized))
+	for _, message := range normalized {
+		if message["role"] == "assistant" &&
+			!hasDisplayableAssistantOutput([]map[string]interface{}{message}) &&
+			!assistantHasReasoning(message) {
+			// Provider metadata frames can materialize as an empty assistant
+			// message when a stream is canceled before its first meaningful
+			// output. Such frames must not turn a first-output timeout into a
+			// persisted blank incomplete answer.
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered
 }
 
 func canonicalizeProducedMessagesWithPartial(messages []map[string]interface{}, preservePartial bool) []map[string]interface{} {

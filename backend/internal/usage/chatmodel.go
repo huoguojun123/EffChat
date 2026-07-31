@@ -9,6 +9,7 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 )
 
 // 本包把“模型调用用量”定义为上游 LLM API 审计日志，而不是业务统计报表。
@@ -47,6 +48,11 @@ func (m *recordingChatModel) Stream(ctx context.Context, input []*schema.Message
 	startedAt := time.Now()
 	reader, err := m.base.Stream(ctx, input, opts...)
 	if err != nil {
+		m.record(ctx, input, nil, err, time.Since(startedAt))
+		return nil, err
+	}
+	if reader == nil {
+		err = modelstream.ErrNilReader
 		m.record(ctx, input, nil, err, time.Since(startedAt))
 		return nil, err
 	}

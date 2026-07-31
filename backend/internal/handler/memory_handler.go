@@ -122,7 +122,7 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 			MaxChars:       limits.MaxChars,
 		}); err != nil {
 			if errors.Is(err, repository.ErrSessionMemoryConflict) {
-				c.JSON(http.StatusConflict, gin.H{"error": "会话记忆已在后台更新，请重新加载后再保存", "code": "session_memory_conflict", "retryable": true})
+				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to save memory", "code": "memory_save_failed"})
@@ -161,10 +161,8 @@ func CompactSessionMemoryHandler(sessionService *service.SessionService, authSer
 			c.JSON(http.StatusBadRequest, gin.H{"error": "user not found"})
 			return
 		}
-		ctx, cancel := context.WithTimeout(c.Request.Context(), agent.MemoryMaintenanceTimeout)
-		defer cancel()
 		expectedAnswerSelectionRevision := session.AnswerSelectionRevision
-		if err := einoAgent.CompactSessionMemory(ctx, agent.MemoryMaintenanceRequest{
+		if err := einoAgent.CompactSessionMemory(c.Request.Context(), agent.MemoryMaintenanceRequest{
 			SessionID:                       sessionID,
 			UserID:                          userID,
 			ExpectedAnswerSelectionRevision: &expectedAnswerSelectionRevision,
@@ -173,6 +171,10 @@ func CompactSessionMemoryHandler(sessionService *service.SessionService, authSer
 		}); err != nil {
 			if errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
 				c.JSON(http.StatusConflict, answerSelectionChangedPayload())
+				return
+			}
+			if errors.Is(err, repository.ErrSessionMemoryConflict) {
+				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to compact memory", "code": "memory_compact_failed"})
@@ -217,10 +219,8 @@ func RetrySessionMemoryHandler(sessionService *service.SessionService, authServi
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "memory_retry_unavailable"})
 			return
 		}
-		ctx, cancel := context.WithTimeout(c.Request.Context(), agent.MemoryMaintenanceTimeout)
-		defer cancel()
 		expectedAnswerSelectionRevision := session.AnswerSelectionRevision
-		if err := einoAgent.RetrySessionMemory(ctx, agent.MemoryMaintenanceRequest{
+		if err := einoAgent.RetrySessionMemory(c.Request.Context(), agent.MemoryMaintenanceRequest{
 			SessionID:                       sessionID,
 			UserID:                          userID,
 			UserText:                        userText,
@@ -233,6 +233,10 @@ func RetrySessionMemoryHandler(sessionService *service.SessionService, authServi
 		}); err != nil {
 			if errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
 				c.JSON(http.StatusConflict, answerSelectionChangedPayload())
+				return
+			}
+			if errors.Is(err, repository.ErrSessionMemoryConflict) {
+				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
 				return
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to retry memory maintenance", "code": "memory_retry_failed"})
@@ -251,6 +255,14 @@ func answerSelectionChangedPayload() gin.H {
 	return gin.H{
 		"error":     "回答版本已变化，请重新执行记忆维护",
 		"code":      "answer_selection_changed",
+		"retryable": true,
+	}
+}
+
+func sessionMemoryConflictPayload() gin.H {
+	return gin.H{
+		"error":     "会话记忆已在后台更新，请重新加载后再操作",
+		"code":      "session_memory_conflict",
 		"retryable": true,
 	}
 }

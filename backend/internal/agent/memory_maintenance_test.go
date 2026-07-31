@@ -102,6 +102,26 @@ func TestMemoryDrainRejectsNewBackgroundTasks(t *testing.T) {
 	}
 }
 
+func TestMemoryDrainTimeoutCancelsActiveBackgroundContext(t *testing.T) {
+	agent := &EinoAgent{}
+	if !agent.startMemoryBackgroundTask() {
+		t.Fatal("memory task should start before drain")
+	}
+	taskCtx := agent.backgroundTaskContext()
+	drainCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	if agent.DrainMemoryTasks(drainCtx) {
+		t.Fatal("drain should report timeout while task is still active")
+	}
+	select {
+	case <-taskCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("drain timeout did not cancel memory background context")
+	}
+	agent.memoryTasks.Done()
+}
+
 func TestMemoryMaintenanceInstructionRoutesFictionalPersona(t *testing.T) {
 	instruction := buildMemoryMaintenanceInstruction(sessionmemory.DefaultLimits())
 	if !strings.Contains(instruction, "fictional") || !strings.Contains(instruction, "Project Context") || !strings.Contains(instruction, "not User Background") {

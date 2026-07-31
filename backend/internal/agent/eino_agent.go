@@ -42,6 +42,8 @@ type EinoAgent struct {
 	backgroundMu       sync.Mutex
 	backgroundDraining bool
 	memoryTasks        sync.WaitGroup
+	backgroundCtx      context.Context
+	backgroundCancel   context.CancelFunc
 }
 
 // NewEinoAgent 创建 Eino Agent 实例。
@@ -56,6 +58,7 @@ func NewEinoAgent(channelService *service.ChannelService, toolService *service.T
 	if err := adk.SetLanguage(adk.LanguageChinese); err != nil {
 		log.Printf("[eino] 设置 ADK 中文提示词失败（保持英文）: %v", err)
 	}
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	return &EinoAgent{
 		channelService:    channelService,
 		toolService:       toolService,
@@ -66,6 +69,8 @@ func NewEinoAgent(channelService *service.ChannelService, toolService *service.T
 		fileRepo:          fileRepo,
 		usageService:      usageService,
 		quotaService:      quotaService,
+		backgroundCtx:     backgroundCtx,
+		backgroundCancel:  backgroundCancel,
 	}
 }
 
@@ -249,7 +254,11 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 
 	// memory 工具：仅在会话开启记忆开关时挂载，让模型跨轮记住关键事实。
 	if memoryOn {
-		tools = append(tools, tool.NewMemoryToolWithMaxChars(a.memoryRepo, req.SessionID, req.UserID, a.memoryLimits().MaxChars))
+		limits, err := a.memoryLimitsContext(setupCtx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve memory limits: %w", err)
+		}
+		tools = append(tools, tool.NewMemoryToolWithMaxChars(a.memoryRepo, req.SessionID, req.UserID, limits.MaxChars))
 	}
 	// 文件工作区工具：文本附件默认只给模型一份清单，不再全文注入上下文。
 	// 模型应先 file_list/file_search 定位，再 file_read 读取片段，避免大文件一轮塞爆。

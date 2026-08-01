@@ -492,6 +492,82 @@ func TestMessageCreationFailureClassifiesUserInput(t *testing.T) {
 	}
 }
 
+func TestMessageMutationEndpointsUseSessionNotFoundContract(t *testing.T) {
+	env := setupTestEnv(t)
+	router := gin.New()
+	auth := router.Group("/api/v1")
+	auth.Use(middleware.AuthMiddleware(env.authService))
+	auth.POST("/sessions/:id/send", SendMessageStreamHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil, nil, nil, 0, 0))
+	auth.POST("/sessions/:id/messages/:message_id/retry", RetryMessageStreamHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil, nil, nil, 0, 0))
+	auth.POST("/sessions/:id/preflight", MessagePreflightHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil))
+	auth.POST("/sessions/:id/compact", CompactSessionHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil, nil, nil, 0, 0))
+	auth.POST("/sessions/:id/undo", UndoCompactionHandler(env.messageService))
+
+	for _, endpoint := range []struct {
+		path string
+		body []byte
+	}{
+		{path: "/api/v1/sessions/9999999999/send", body: []byte(`{"content":"fictional message"}`)},
+		{path: "/api/v1/sessions/9999999999/messages/1/retry"},
+		{path: "/api/v1/sessions/9999999999/preflight", body: []byte(`{"content":"fictional message"}`)},
+		{path: "/api/v1/sessions/9999999999/compact"},
+		{path: "/api/v1/sessions/9999999999/undo"},
+	} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, endpoint.path, bytes.NewReader(endpoint.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+env.token)
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d, want 404; body=%s", endpoint.path, recorder.Code, recorder.Body.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("%s decode response: %v", endpoint.path, err)
+		}
+		if payload["code"] != "session_not_found" || payload["retryable"] != false {
+			t.Fatalf("%s response=%#v", endpoint.path, payload)
+		}
+	}
+}
+
+func TestMessagePreflightReportsCompactionStateRepositoryFailure(t *testing.T) {
+	env := setupTestEnv(t)
+	created := env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
+		"model_id": "gpt-4o-mini",
+		"provider": env.channelKey,
+		"title":    "Preflight failure",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create session: status=%d body=%s", created.Code, created.Body.String())
+	}
+	var session model.Session
+	if err := json.Unmarshal(created.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	taskDB := setupHandlerTestDB(t)
+	taskRepo := repository.NewModelTaskRunRepository(taskDB)
+	if err := taskDB.Close(); err != nil {
+		t.Fatalf("close task database: %v", err)
+	}
+	_, failure := evaluateMessagePreflight(
+		t.Context(),
+		env.messageService,
+		env.authService,
+		service.NewSkillService(nil, nil, nil),
+		newCompactionGateTestAgent(t, env),
+		nil,
+		taskRepo,
+		&session,
+		env.userID,
+		&service.SendMessageRequest{Content: "fictional message"},
+	)
+	if failure == nil || failure.status != http.StatusInternalServerError || failure.code != "compaction_state_load_failed" || failure.cause == nil {
+		t.Fatalf("failure = %+v", failure)
+	}
+}
+
 func TestWriteRunTerminalMapsCancellationCauses(t *testing.T) {
 	tests := []struct {
 		name      string

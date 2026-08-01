@@ -163,13 +163,13 @@ func UndoCompactionHandler(messageService *service.MessageService) gin.HandlerFu
 
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		restored, err := messageService.UndoLastCompaction(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeCompactionUndoError(c, err)
 			return
 		}
 

@@ -26,6 +26,9 @@ var (
 	ErrMessageUnchanged         = repository.ErrMessageUnchanged
 	ErrChatRunActive            = repository.ErrChatRunActive
 	ErrConversationTurnNotFound = errors.New("conversation turn not found")
+	ErrCompactionNotFound       = repository.ErrCompactionNotFound
+	ErrCompactionUndoDenied     = repository.ErrCompactionUndoDenied
+	ErrCompactionUndoStale      = repository.ErrCompactionUndoStale
 )
 
 const (
@@ -152,7 +155,7 @@ func (s *MessageService) BuildUserMessagePreview(sessionID, userID int64, req *S
 func (s *MessageService) BuildUserMessagePreviewContext(ctx context.Context, sessionID, userID int64, req *SendMessageRequest) (*model.Message, error) {
 	session, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	return s.buildUserMessage(ctx, session, userID, req)
 }
@@ -618,7 +621,7 @@ func (s *MessageService) ListForAgentContext(ctx context.Context, sessionID, use
 func (s *MessageService) listForAgentContext(ctx context.Context, sessionID, userID, preserveUserMessageID int64, replacement *model.Message) ([]*model.Message, error) {
 	_, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 
 	messages, err := s.messageRepo.ListBySessionContext(ctx, sessionID)
@@ -674,6 +677,9 @@ func (s *MessageService) RetryAgentContext(ctx context.Context, sessionID, userI
 func (s *MessageService) EditRetryAgentContext(ctx context.Context, sessionID, userID, targetMessageID int64, content, clientRunID string) (*model.Message, []*model.Message, error) {
 	source, err := s.messageRepo.PrepareEditRetryForActiveSession(ctx, sessionID, userID, targetMessageID)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil, ErrSessionNotFound
+		}
 		return nil, nil, err
 	}
 	replacement, err := buildEditedRetryMessage(source, content, clientRunID)
@@ -1111,6 +1117,9 @@ func (s *MessageService) PrepareRetry(sessionID, userID, targetMessageID int64) 
 func (s *MessageService) PrepareRetryContext(ctx context.Context, sessionID, userID, targetMessageID int64) (*model.Message, error) {
 	message, err := s.messageRepo.PrepareRetryForActiveSession(ctx, sessionID, userID, targetMessageID)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrSessionNotFound
+		}
 		return nil, err
 	}
 	return message, nil
@@ -1207,7 +1216,11 @@ func (s *MessageService) GetMessageCount(sessionID int64) (int, error) {
 // UndoLastCompaction 撤销会话最近一次压缩检查点：恢复被压消息、软删摘要。
 // 找不到可撤销的压缩摘要时返回错误。返回恢复的消息条数。
 func (s *MessageService) UndoLastCompaction(sessionID, userID int64) (int64, error) {
-	return s.messageRepo.UndoLatestManualCheckpointForActiveSession(context.Background(), sessionID, userID)
+	restored, err := s.messageRepo.UndoLatestManualCheckpointForActiveSession(context.Background(), sessionID, userID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return 0, ErrSessionNotFound
+	}
+	return restored, err
 }
 
 // isCompactionSummaryMessage 判断消息是否为压缩摘要（metadata.compaction_summary=true）。

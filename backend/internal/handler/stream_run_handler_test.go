@@ -27,6 +27,18 @@ import (
 	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
+type failingHandlerChatRunStore struct {
+	err error
+}
+
+func (s *failingHandlerChatRunStore) BindChatRunUserMessage(context.Context, string, int64) (bool, error) {
+	return false, s.err
+}
+
+func (s *failingHandlerChatRunStore) TransitionChatRun(context.Context, repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, error) {
+	return repository.ChatRunRecord{}, false, s.err
+}
+
 func TestSlowTCPConsumerDoesNotBlockRunCompletion(t *testing.T) {
 	if os.Getenv("EFFCHAT_LONG_STREAM_TEST") != "1" {
 		t.Skip("set EFFCHAT_LONG_STREAM_TEST=1 to run the 60-second TCP acceptance test")
@@ -420,6 +432,91 @@ func TestRunSetupDeadlineTransitionsChatAndCompactionAsSetupTimeout(t *testing.T
 				t.Fatalf("setup timeout payload = %#v", events[0].Data)
 			}
 		})
+	}
+}
+
+func TestRunTerminalFallbackResponsesKeepRequestCorrelation(t *testing.T) {
+	tests := []struct {
+		name       string
+		transition func(*gin.Context, *service.RunHub, *service.RunSnapshot, context.Context) bool
+	}{
+		{
+			name: "cancellation",
+			transition: func(c *gin.Context, runHub *service.RunHub, run *service.RunSnapshot, runContext context.Context) bool {
+				runHub.CancelWithCause(run.RunID, run.SessionID, run.UserID, service.RunCancelUserStop)
+				return transitionCanceledRun(c, nil, runHub, run.RunID, runContext)
+			},
+		},
+		{
+			name: "setup timeout",
+			transition: func(c *gin.Context, runHub *service.RunHub, run *service.RunSnapshot, runContext context.Context) bool {
+				setupContext, setupCancel := context.WithCancelCause(runContext)
+				setupCancel(context.DeadlineExceeded)
+				return transitionRunSetupInterruption(c, nil, runHub, run.RunID, "req-terminal", runContext, setupContext)
+			},
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runHub := service.NewRunHub(time.Minute, 1<<20)
+			run, err := runHub.Start(int64(index+1), 9, 0, "terminal-fallback-"+strings.ReplaceAll(test.name, " ", "-"), service.RunKindChat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			runHub.SetStore(&failingHandlerChatRunStore{err: errors.New("postgres://fixture:secret@db.example/effchat /srv/private/terminal")})
+			runContext, err := runHub.BeginExecution(run.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/messages/stream", nil)
+			ctx.Set("request_id", "req-terminal")
+
+			if !test.transition(ctx, runHub, run, runContext) {
+				t.Fatal("terminal failure was not classified")
+			}
+
+			assertRunFallbackError(t, recorder, "run_terminal_failed", "req-terminal")
+		})
+	}
+}
+
+func TestAcceptedRunStreamUnavailableKeepsRecoveryMetadata(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/messages/stream", nil)
+	ctx.Set("request_id", "req-stream")
+
+	writeAcceptedRunStreamUnavailable(ctx, "run-fixture", errors.New("transport secret /srv/private/stream"))
+
+	assertRunFallbackError(t, recorder, "stream_unavailable", "req-stream")
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["run_id"] != "run-fixture" {
+		t.Fatalf("run_id = %#v", body["run_id"])
+	}
+}
+
+func assertRunFallbackError(t *testing.T, recorder *httptest.ResponseRecorder, code, requestID string) {
+	t.Helper()
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != code || body["retryable"] != true || body["request_id"] != requestID {
+		t.Fatalf("response = %#v", body)
+	}
+	if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/srv/private") {
+		t.Fatalf("response leaked internal cause: %s", recorder.Body.String())
 	}
 }
 

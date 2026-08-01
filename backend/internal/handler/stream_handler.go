@@ -141,15 +141,20 @@ func failRunWithPublicErrorRetryable(c *gin.Context, runHub *service.RunHub, run
 
 func failRunWithRequestID(runHub *service.RunHub, runID, requestID, code, message string, retryable bool, err error) gin.H {
 	logger.Error("run failed: request_id=%q run_id=%q code=%s err=%v", requestID, runID, code, err)
-	payload := gin.H{"error": message, "code": code, "retryable": retryable}
-	if requestID != "" {
-		payload["request_id"] = requestID
-	}
+	payload := runPublicErrorPayload(requestID, code, message, retryable)
 	if _, transitionErr := transitionRun(runHub, runID, service.RunTerminal{
 		Status: service.RunStatusFailed, PublicErrorCode: code, PublicErrorMessage: message,
 		Event: streaming.EventError, Data: payload,
 	}); transitionErr != nil {
 		logger.Error("persist run failure failed: request_id=%q run_id=%q code=%s err=%v", requestID, runID, code, transitionErr)
+	}
+	return payload
+}
+
+func runPublicErrorPayload(requestID, code, message string, retryable bool) gin.H {
+	payload := gin.H{"error": message, "code": code, "retryable": retryable}
+	if requestID != "" {
+		payload["request_id"] = requestID
 	}
 	return payload
 }
@@ -202,9 +207,13 @@ func transitionCanceledRun(c *gin.Context, writer *streaming.SSEWriter, runHub *
 	}
 	event, err := transitionRun(runHub, runID, service.RunTerminal{Status: service.RunStatusCanceled, CancelCause: cause})
 	if err != nil {
-		logger.Error("persist run cancellation failed: run_id=%q cause=%s err=%v", runID, cause, err)
+		requestID := ""
+		if c != nil {
+			requestID = c.GetString("request_id")
+		}
+		logger.Error("persist run cancellation failed: request_id=%q run_id=%q cause=%s err=%v", requestID, runID, cause, err)
 		if writer == nil && c != nil && !c.Writer.Written() {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "任务取消状态保存失败，请重试", "code": "run_terminal_failed", "retryable": true})
+			c.JSON(http.StatusInternalServerError, runPublicErrorPayload(requestID, "run_terminal_failed", "任务取消状态保存失败，请重试", true))
 		}
 		return true
 	}
@@ -224,10 +233,7 @@ func transitionCanceledRun(c *gin.Context, writer *streaming.SSEWriter, runHub *
 		} else if cause == service.RunCancelSessionDeleted {
 			status = http.StatusGone
 		}
-		payload := gin.H{"error": message, "code": code, "retryable": retryable}
-		if requestID := c.GetString("request_id"); requestID != "" {
-			payload["request_id"] = requestID
-		}
+		payload := runPublicErrorPayload(c.GetString("request_id"), code, message, retryable)
 		c.JSON(status, payload)
 	}
 	return true

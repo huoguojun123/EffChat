@@ -224,14 +224,7 @@ func transitionRunSetupInterruption(c *gin.Context, writer *streaming.SSEWriter,
 		return true
 	}
 
-	payload := gin.H{
-		"error":     "任务准备超时，请重试",
-		"code":      "run_setup_timeout",
-		"retryable": true,
-	}
-	if requestID != "" {
-		payload["request_id"] = requestID
-	}
+	payload := runPublicErrorPayload(requestID, "run_setup_timeout", "任务准备超时，请重试", true)
 	logger.Error("run setup timed out: request_id=%q run_id=%q", requestID, runID)
 	if err := writeRunTerminal(writer, runHub, runID, service.RunTerminal{
 		Status:             service.RunStatusFailed,
@@ -242,11 +235,7 @@ func transitionRunSetupInterruption(c *gin.Context, writer *streaming.SSEWriter,
 	}); err != nil {
 		logger.Error("persist run setup timeout failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
 		if writer == nil && c != nil && !c.Writer.Written() {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":     "任务状态保存失败，请重试",
-				"code":      "run_terminal_failed",
-				"retryable": true,
-			})
+			c.JSON(http.StatusInternalServerError, runPublicErrorPayload(requestID, "run_terminal_failed", "任务状态保存失败，请重试", true))
 		}
 		return true
 	}
@@ -306,12 +295,7 @@ func runAgentStream(c *gin.Context, messageService *service.MessageService, sess
 	if err != nil {
 		// The durable worker owns completion now. A transport that cannot open
 		// SSE must not cancel model execution; the client can resume by run_id.
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":     "当前连接不支持流式响应",
-			"code":      "stream_unavailable",
-			"retryable": true,
-			"run_id":    runSnapshot.RunID,
-		})
+		writeAcceptedRunStreamUnavailable(c, runSnapshot.RunID, err)
 		return
 	}
 	events, ch, cleanup, _, err := runHub.EventsAfter(runSnapshot.RunID, sessionID, userID, 0)
@@ -328,6 +312,14 @@ func runAgentStream(c *gin.Context, messageService *service.MessageService, sess
 	}
 
 	forwardRunEvents(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, events, ch, 0)
+}
+
+func writeAcceptedRunStreamUnavailable(c *gin.Context, runID string, err error) {
+	requestID := c.GetString("request_id")
+	logger.Error("open accepted run stream failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
+	payload := runPublicErrorPayload(requestID, "stream_unavailable", "当前连接不支持流式响应", true)
+	payload["run_id"] = runID
+	c.JSON(http.StatusInternalServerError, payload)
 }
 
 func executeAgentRun(exec agentRunExecution) {

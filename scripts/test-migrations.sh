@@ -81,6 +81,55 @@ SQL
     }
 done
 
+result="$(psql_db "$ATOMIC_DB" -At <<'SQL'
+SELECT
+    to_regclass('public.idx_files_ocr_task') IS NOT NULL
+    AND to_regclass('public.idx_files_ocr_status') IS NOT NULL
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'model_usage_events'::regclass
+          AND conname = 'model_usage_events_kind_check'
+          AND pg_get_constraintdef(oid) LIKE '%timeline_compaction%'
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'model_task_runs'::regclass
+          AND conname = 'model_task_runs_task_key_check'
+          AND pg_get_constraintdef(oid) LIKE '%timeline_compaction%'
+    )
+    AND (
+        SELECT count(*) FROM pg_constraint c
+        WHERE c.conrelid = 'chat_run_reservations'::regclass
+          AND c.contype = 'f'
+          AND c.conkey = ARRAY[(
+              SELECT attnum FROM pg_attribute
+              WHERE attrelid = c.conrelid AND attname = 'user_message_id'
+          )]::smallint[]
+    ) = 1
+    AND (
+        SELECT count(*) FROM pg_constraint c
+        WHERE c.conrelid = 'chat_run_reservations'::regclass
+          AND c.contype = 'f'
+          AND c.conkey = ARRAY[(
+              SELECT attnum FROM pg_attribute
+              WHERE attrelid = c.conrelid AND attname = 'terminal_message_id'
+          )]::smallint[]
+    ) = 1
+    AND (
+        SELECT count(*) FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'v_active_sessions'
+          AND column_name IN ('folder_id', 'pinned_at', 'answer_selection_revision')
+    ) = 3
+    AND (
+        SELECT timeout_seconds FROM tool_configs WHERE tool_key = 'web_extract'
+    ) = 30;
+SQL
+)"
+[ "$result" = "t" ] || {
+    echo "fresh schema does not satisfy the normalized version 043 contract" >&2
+    exit 1
+}
+
 psql_db "$ATOMIC_DB" >/dev/null <<'SQL'
 UPDATE schema_migrations SET checksum = 'legacy-baseline-v1' WHERE version = '001_schema.sql';
 UPDATE schema_migrations SET checksum = '' WHERE version = '002_skills.sql';

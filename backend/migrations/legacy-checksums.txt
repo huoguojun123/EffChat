@@ -1,0 +1,5 @@
+# Exact historical values accepted once and reconciled to the current source
+# checksum. Unknown mismatches still stop the migration runner.
+001_schema.sql legacy-baseline-v1
+032_user_group_default_invariant.sql 1de49ac514319061043a420024d9dd06f50c5b2e7c5057573a1ce8099d0edebc
+041_conversation_search.sql 092ecf033d705ab8a823d810421d1f4d22fc2a0cf351bab49042d2f90475e04d

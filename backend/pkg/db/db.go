@@ -11,7 +11,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const RequiredSchemaVersion = "043_schema_contract.sql"
+const RequiredSchemaVersion = "044_ocr_lease_fencing.sql"
 
 func VerifySchemaVersion(ctx context.Context, database *sql.DB) (string, error) {
 	var compatible bool

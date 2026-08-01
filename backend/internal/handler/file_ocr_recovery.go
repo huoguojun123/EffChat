@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -170,12 +172,18 @@ func (r *OCRRecoveryRunner) process(ctx context.Context, cfg service.MinerUOCRCo
 	if file == nil {
 		return
 	}
+	// A new generation owns the work item. Its predecessor can no longer commit,
+	// so a deterministic previous-generation temp is safe to reclaim without
+	// ever touching the shared final sidecar.
+	if file.OCRLeaseGeneration > 1 {
+		_ = filepolicy.Remove(ocrSidecarTempPath(file.FilePath, file.OCRLeaseGeneration-1))
+	}
 	if file.OCRTaskID == nil || strings.TrimSpace(*file.OCRTaskID) == "" {
 		if policyErr != nil || !policy.Enabled {
 			// Pending work has not crossed the external boundary yet. Keep it
 			// pending and back off instead of inspecting or submitting content;
 			// a later loop automatically resumes after policy recovery/re-enable.
-			if err := r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, time.Now().Add(ocrPolicyRetryDelay)); err != nil {
+			if err := r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrPolicyRetryDelay)); err != nil && !errors.Is(err, repository.ErrOCRLeaseLost) {
 				log.Printf("[file_ocr] policy_block_release_failed file_id=%d err=%v", file.ID, err)
 			}
 			return
@@ -190,20 +198,20 @@ func (r *OCRRecoveryRunner) process(ctx context.Context, cfg service.MinerUOCRCo
 }
 
 func (r *OCRRecoveryRunner) submit(ctx context.Context, cfg service.MinerUOCRConfig, policy attachmentProcessingPolicy, file *model.File) {
-	attempts, err := r.fileRepo.RecordOCRAttempt(file.ID, file.UserID)
+	attempts, err := r.fileRepo.RecordOCRAttempt(file.ID, file.UserID, file.OCRLeaseGeneration)
 	if err != nil {
 		log.Printf("[file_ocr] attempt_record_failed file_id=%d err=%v", file.ID, err)
 		return
 	}
 	sourcePath, err := filepolicy.ExistingPath(valueOrEmpty(file.OCRSourcePath))
 	if err != nil {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
 		return
 	}
 	content, err := os.ReadFile(sourcePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
+			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
 			return
 		}
 		r.scheduleOCRRetry(file, attempts, "read_source_failed", err)
@@ -214,25 +222,26 @@ func (r *OCRRecoveryRunner) submit(ctx context.Context, cfg service.MinerUOCRCon
 	cancel()
 	if err != nil {
 		if isPermanentOCRSubmitError(err) {
-			_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_submit_rejected", humanizeOCRError(err))
+			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_submit_rejected", humanizeOCRError(err))
 			return
 		}
 		r.scheduleOCRRetry(file, attempts, "inspect_failed", err)
 		return
 	}
 	if info.PageCount > 200 {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_page_limit_exceeded", "PDF 超过 MinerU 精准解析 200 页限制")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_page_limit_exceeded", "PDF 超过 MinerU 精准解析 200 页限制")
 		return
 	}
 	reserved := true
 	if r.quotaService != nil {
-		reserved, err = r.quotaService.ReserveOCRSubmission(ctx, file.ID, file.UserID, info.PageCount)
+		reserved, err = r.quotaService.ReserveOCRSubmission(ctx, file.ID, file.UserID, file.OCRLeaseGeneration, info.PageCount)
 	} else {
-		reserved, err = r.fileRepo.MarkOCRSubmissionStarted(file.ID, file.UserID)
+		err = r.fileRepo.MarkOCRSubmissionStarted(file.ID, file.UserID, file.OCRLeaseGeneration)
+		reserved = err == nil
 	}
 	if err != nil {
 		if _, ok := err.(*service.QuotaError); ok {
-			_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_quota_exceeded", "OCR 配额已用完，请稍后再试")
+			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_quota_exceeded", "OCR 配额已用完，请稍后再试")
 			return
 		}
 		log.Printf("[file_ocr] submission_reservation_failed file_id=%d err=%v", file.ID, err)
@@ -246,27 +255,27 @@ func (r *OCRRecoveryRunner) submit(ctx context.Context, cfg service.MinerUOCRCon
 	cancel()
 	if err != nil {
 		if isPermanentOCRSubmitError(err) {
-			_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_submit_rejected", humanizeOCRError(err))
+			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_submit_rejected", humanizeOCRError(err))
 			return
 		}
 		if isUncertainOCRSubmissionError(err) {
-			_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_submission_unknown", "OCR 任务提交结果未确认，请在服务恢复后手动重试")
+			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_submission_unknown", "OCR 任务提交结果未确认，请在服务恢复后手动重试")
 			return
 		}
 		r.scheduleOCRRetry(file, attempts, "submit_failed", err)
 		return
 	}
 	pages := maxInt(info.PageCount, start.PageCount)
-	ok, err := r.fileRepo.StartOCRTask(file.ID, file.UserID, start.TaskID, pages)
+	err = r.fileRepo.StartOCRTask(file.ID, file.UserID, file.OCRLeaseGeneration, start.TaskID, pages)
 	if err != nil {
+		if errors.Is(err, repository.ErrOCRLeaseLost) {
+			return
+		}
 		log.Printf("[file_ocr] submit_state_failed file_id=%d err=%v", file.ID, err)
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_submission_state_unknown", "OCR 任务已提交但本地确认失败，请确认服务恢复后手动重试")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_submission_state_unknown", "OCR 任务已提交但本地确认失败，请确认服务恢复后手动重试")
 		return
 	}
-	if !ok {
-		return
-	}
-	_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, time.Now())
+	_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now())
 	r.Wake()
 }
 
@@ -277,61 +286,84 @@ func (r *OCRRecoveryRunner) poll(ctx context.Context, cfg service.MinerUOCRConfi
 	cancel()
 	if err != nil {
 		if isTransientOCRPollError(err) {
-			attempts, attemptErr := r.fileRepo.RecordOCRAttempt(file.ID, file.UserID)
+			attempts, attemptErr := r.fileRepo.RecordOCRAttempt(file.ID, file.UserID, file.OCRLeaseGeneration)
 			if attemptErr != nil {
 				log.Printf("[file_ocr] poll_attempt_record_failed file_id=%d err=%v", file.ID, attemptErr)
 				return
 			}
 			if attempts >= ocrMaxAttempts {
-				_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_retry_exhausted", "OCR 服务多次重试后仍未成功，请联系管理员或删除文件后重新上传")
+				_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_retry_exhausted", "OCR 服务多次重试后仍未成功，请联系管理员或删除文件后重新上传")
 				log.Printf("[file_ocr] poll_retry_exhausted file_id=%d attempts=%d cause=%v", file.ID, attempts, err)
 				return
 			}
-			_ = r.fileRepo.UpdateOCRRunning(file.ID, file.UserID, file.OCRProgressPages)
-			_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, time.Now().Add(ocrRetryDelayFor(attempts)))
+			_ = r.fileRepo.UpdateOCRRunning(file.ID, file.UserID, file.OCRLeaseGeneration, file.OCRProgressPages)
+			_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrRetryDelayFor(attempts)))
 			return
 		}
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_upstream_failed", humanizeOCRError(err))
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_upstream_failed", humanizeOCRError(err))
 		return
 	}
 	switch result.State {
 	case "ready":
 		if policyErr != nil || policy.MaxOutputMB <= 0 {
-			_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, time.Now().Add(ocrPolicyRetryDelay))
+			_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrPolicyRetryDelay))
 			return
 		}
-		r.complete(file, result, int64(policy.MaxOutputMB)*1024*1024)
+		r.complete(ctx, file, result, int64(policy.MaxOutputMB)*1024*1024)
 	case "failed":
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, result.ErrorType, minerUFailedTaskMessage(result.ErrorType))
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, result.ErrorType, minerUFailedTaskMessage(result.ErrorType))
 	default:
-		_ = r.fileRepo.UpdateOCRRunning(file.ID, file.UserID, file.OCRProgressPages)
-		_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, time.Now().Add(ocrRecoveryInterval))
+		_ = r.fileRepo.UpdateOCRRunning(file.ID, file.UserID, file.OCRLeaseGeneration, file.OCRProgressPages)
+		_ = r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrRecoveryInterval))
 	}
 }
 
-func (r *OCRRecoveryRunner) complete(file *model.File, result *extractor.MinerUPollResult, maxOutputBytes int64) {
+func (r *OCRRecoveryRunner) complete(ctx context.Context, file *model.File, result *extractor.MinerUPollResult, maxOutputBytes int64) {
 	if result == nil {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_empty_result", "OCR 未返回可读文本，请重试或删除文件")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_empty_result", "OCR 未返回可读文本，请重试或删除文件")
 		return
 	}
 	if int64(len([]byte(result.Markdown))) > maxOutputBytes {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_output_too_large", "OCR 解析结果过大，请上传更小的文件")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_output_too_large", "OCR 解析结果过大，请上传更小的文件")
 		return
 	}
 	if strings.TrimSpace(result.Markdown) == "" {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_empty_result", "OCR 未返回可读文本，请重试或删除文件")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_empty_result", "OCR 未返回可读文本，请重试或删除文件")
 		return
 	}
-	if err := writeTextFile(file.FilePath, result.Markdown); err != nil {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_write_failed", "OCR 结果保存失败，请重试")
+	tempPath := ocrSidecarTempPath(file.FilePath, file.OCRLeaseGeneration)
+	defer func() { _ = filepolicy.Remove(tempPath) }()
+	if err := writeTextFile(tempPath, result.Markdown); err != nil {
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_write_failed", "OCR 结果保存失败，请重试")
 		return
 	}
-	ok, err := r.fileRepo.CompleteOCR(file.ID, file.UserID, file.FilePath, result.TokenEstimate)
-	if err != nil || !ok {
-		_ = filepolicy.Remove(file.FilePath)
+	var promotionErr error
+	err := r.fileRepo.CompleteOCRClaim(ctx, file.ID, file.UserID, file.OCRLeaseGeneration, file.FilePath, result.TokenEstimate, func() error {
+		temp, err := filepolicy.ExistingPath(tempPath)
 		if err != nil {
-			log.Printf("[file_ocr] complete_state_failed file_id=%d err=%v", file.ID, err)
+			promotionErr = err
+			return err
 		}
+		final, err := filepolicy.ManagedPath(file.FilePath)
+		if err != nil {
+			promotionErr = err
+			return err
+		}
+		if filepath.Dir(temp) != filepath.Dir(final) {
+			promotionErr = errors.New("OCR temp and final sidecars are on different filesystems")
+			return promotionErr
+		}
+		promotionErr = os.Rename(temp, final)
+		return promotionErr
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrOCRLeaseLost) {
+			return
+		}
+		if promotionErr != nil {
+			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_write_failed", "OCR 结果保存失败，请重试")
+		}
+		log.Printf("[file_ocr] complete_state_failed file_id=%d err=%v", file.ID, err)
 		return
 	}
 	if sourcePath := valueOrEmpty(file.OCRSourcePath); sourcePath != "" {
@@ -339,7 +371,7 @@ func (r *OCRRecoveryRunner) complete(file *model.File, result *extractor.MinerUP
 			log.Printf("[file_ocr] source_cleanup_failed file_id=%d err=%v", file.ID, err)
 			return
 		}
-		if err := r.fileRepo.ClearOCRSourcePath(file.ID, file.UserID, sourcePath); err != nil {
+		if err := r.fileRepo.ClearOCRSourcePathClaim(file.ID, file.UserID, file.OCRLeaseGeneration, sourcePath); err != nil && !errors.Is(err, repository.ErrOCRLeaseLost) {
 			log.Printf("[file_ocr] source_state_cleanup_failed file_id=%d err=%v", file.ID, err)
 		}
 	}
@@ -347,15 +379,19 @@ func (r *OCRRecoveryRunner) complete(file *model.File, result *extractor.MinerUP
 
 func (r *OCRRecoveryRunner) scheduleOCRRetry(file *model.File, attempts int, stage string, err error) {
 	if attempts >= ocrMaxAttempts {
-		_ = r.fileRepo.FailOCR(file.ID, file.UserID, "ocr_retry_exhausted", "OCR 服务多次重试后仍未成功，请联系管理员或删除文件后重新上传")
+		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_retry_exhausted", "OCR 服务多次重试后仍未成功，请联系管理员或删除文件后重新上传")
 		log.Printf("[file_ocr] retry_exhausted file_id=%d stage=%s attempts=%d cause=%v", file.ID, stage, attempts, err)
 		return
 	}
-	if releaseErr := r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, time.Now().Add(ocrRetryDelayFor(attempts))); releaseErr != nil {
+	if releaseErr := r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrRetryDelayFor(attempts))); releaseErr != nil {
 		log.Printf("[file_ocr] retry_schedule_failed file_id=%d stage=%s err=%v", file.ID, stage, releaseErr)
 		return
 	}
 	log.Printf("[file_ocr] retry_scheduled file_id=%d stage=%s attempts=%d cause=%v", file.ID, stage, attempts, err)
+}
+
+func ocrSidecarTempPath(finalPath string, generation int64) string {
+	return fmt.Sprintf("%s.ocr-%d.tmp", finalPath, generation)
 }
 
 func ocrRetryDelayFor(attempts int) time.Duration {

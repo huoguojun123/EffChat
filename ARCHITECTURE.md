@@ -97,6 +97,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 暂存附件抽屉通过 Radix Dialog Portal 脱离聊天 composer 的 stacking context；模态层统一拥有 overlay、焦点约束、Escape 关闭和安全区，关闭后焦点返回实际触发入口。上传队列、附件选择与发送协议仍由原有 ChatInput 状态负责。
 - 上传大小、会话文件数、MIME allowlist、附件提取开关、timeout 和输出上限共用 typed policy reader。长期安装缺少较新的配置行时采用公开配置 schema 的权威默认值并建立可信快照；查询失败或非法存储值不会被误判为缺失。已成功读取的严格值在暂时故障中继续生效并标记 `policy_degraded`；冷启动无可信值时上传/处理入口返回稳定 503，不恢复调用方宽默认。空 allowlist 和空元素在管理员写入边界直接拒绝。
 - `attachment_extract_enabled=false` 同时约束新上传、OCR pending 和人工 retry：尚未提交的 pending 不读取原件、不占用 OCR quota、也不调用 inspect/`StartMinerUOCR`，而是保留状态并退避；人工 retry 在改变数据库状态前返回 `attachment_extract_disabled`。已经提交给远端的 task 属于不可撤回边界，仍可 poll 并在可信输出上限下收尾，但不会重新提交。
+- OCR recovery claim 使用数据库单调 `ocr_lease_generation` 作为 fencing identity。attempt、quota reservation、task/progress、retry、fail、complete 和 source cleanup 都必须携带当前 generation；租约过期后旧 worker 的迟到 mutation 会稳定失败。解析结果先写 generation 独占临时 sidecar，repository 在行锁下再次验证 owner 后才以同文件系统原子 rename 发布正式结果；旧 worker 和失败补偿只清理自己的临时文件，不删除共享正式 sidecar。
 - OCR 未完成前文件不能发送进消息，但用户可以删除文件；删除后迟到 OCR 结果必须丢弃。
 - 管理后台“清理遗留文件”只清理超过 cutoff、未被未删除消息引用、也不绑定活跃会话的文件。
 

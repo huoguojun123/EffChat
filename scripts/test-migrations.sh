@@ -122,11 +122,21 @@ SELECT
     ) = 3
     AND (
         SELECT timeout_seconds FROM tool_configs WHERE tool_key = 'web_extract'
-    ) = 30;
+    ) = 30
+    AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'files'
+          AND column_name = 'ocr_lease_generation'
+          AND data_type = 'bigint'
+          AND is_nullable = 'NO'
+          AND column_default = '0'
+    );
 SQL
 )"
 [ "$result" = "t" ] || {
-    echo "fresh schema does not satisfy the normalized version 043 contract" >&2
+    echo "fresh schema does not satisfy the version 044 OCR fencing contract" >&2
     exit 1
 }
 

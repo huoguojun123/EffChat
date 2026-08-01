@@ -279,30 +279,31 @@ type FontAsset struct {
 
 // File 上传文件元数据
 type File struct {
-	ID                int64      `json:"id"`
-	UserID            int64      `json:"user_id"`
-	SessionID         *int64     `json:"session_id,omitempty"`
-	FileName          string     `json:"file_name"`
-	FilePath          string     `json:"-"`
-	FileType          string     `json:"file_type"`
-	FileSize          int64      `json:"file_size"`
-	FileHash          *string    `json:"file_hash,omitempty"`
-	Status            string     `json:"status"`
-	ExtractedTextPath *string    `json:"-"` // 提取正文文件路径，仅供 file_read 工具按需读取
-	ExtractStatus     string     `json:"extract_status"`
-	ExtractError      *string    `json:"extract_error,omitempty"`
-	TokenEstimate     int        `json:"token_estimate"`
-	OCRProvider       *string    `json:"ocr_provider,omitempty"`
-	OCRTaskID         *string    `json:"ocr_task_id,omitempty"`
-	OCRPageCount      int        `json:"ocr_page_count"`
-	OCRProgressPages  int        `json:"ocr_progress_pages"`
-	OCRStartedAt      *time.Time `json:"ocr_started_at,omitempty"`
-	OCRCompletedAt    *time.Time `json:"ocr_completed_at,omitempty"`
-	OCRErrorType      *string    `json:"ocr_error_type,omitempty"`
-	OCRSourcePath     *string    `json:"-"`
-	OCRLeaseUntil     *time.Time `json:"-"`
-	OCRAttempts       int        `json:"-"`
-	OCRNextRetryAt    *time.Time `json:"-"`
-	CreatedAt         time.Time  `json:"created_at"`
-	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
+	ID                 int64      `json:"id"`
+	UserID             int64      `json:"user_id"`
+	SessionID          *int64     `json:"session_id,omitempty"`
+	FileName           string     `json:"file_name"`
+	FilePath           string     `json:"-"`
+	FileType           string     `json:"file_type"`
+	FileSize           int64      `json:"file_size"`
+	FileHash           *string    `json:"file_hash,omitempty"`
+	Status             string     `json:"status"`
+	ExtractedTextPath  *string    `json:"-"` // 提取正文文件路径，仅供 file_read 工具按需读取
+	ExtractStatus      string     `json:"extract_status"`
+	ExtractError       *string    `json:"extract_error,omitempty"`
+	TokenEstimate      int        `json:"token_estimate"`
+	OCRProvider        *string    `json:"ocr_provider,omitempty"`
+	OCRTaskID          *string    `json:"ocr_task_id,omitempty"`
+	OCRPageCount       int        `json:"ocr_page_count"`
+	OCRProgressPages   int        `json:"ocr_progress_pages"`
+	OCRStartedAt       *time.Time `json:"ocr_started_at,omitempty"`
+	OCRCompletedAt     *time.Time `json:"ocr_completed_at,omitempty"`
+	OCRErrorType       *string    `json:"ocr_error_type,omitempty"`
+	OCRSourcePath      *string    `json:"-"`
+	OCRLeaseUntil      *time.Time `json:"-"`
+	OCRLeaseGeneration int64      `json:"-"`
+	OCRAttempts        int        `json:"-"`
+	OCRNextRetryAt     *time.Time `json:"-"`
+	CreatedAt          time.Time  `json:"created_at"`
+	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
 }

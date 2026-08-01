@@ -624,7 +624,7 @@ func (f fakeToolQuotaStore) GetChatRun(context.Context, string) (repository.Chat
 	return repository.ChatRunRecord{}, repository.ErrNotFound
 }
 
-func (f fakeToolQuotaStore) ReserveOCRSubmission(context.Context, int64, int64, int) (bool, error) {
+func (f fakeToolQuotaStore) ReserveOCRSubmission(context.Context, int64, int64, int64, int) (bool, error) {
 	return true, nil
 }
 

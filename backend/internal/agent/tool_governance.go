@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -117,15 +116,18 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 				}
 				if err != nil {
 					errText := err.Error()
+					code := "tool_execution_failed"
+					publicMessage := "Tool call failed. Continue with the best available information."
 					retryable := false
 					if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-						errText = fmt.Sprintf("tool %s timed out after %s", input.Name, timeout)
+						code = "tool_timeout"
+						publicMessage = "Tool call timed out. Continue with the best available information."
 						retryable = true
 					}
 					errorType := toolUsageErrorType(err, callCtx)
 					log.Printf("[tool_governance] call_failed user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s retryable=%t",
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), errorType, retryable)
-					result := marshalToolError(input.Name, errText, retryable)
+					result := marshalToolError(input.Name, code, publicMessage, retryable)
 					if budget != nil {
 						result = budget.finishToolResult(input.Name, result, grant)
 					}
@@ -139,7 +141,7 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 					budget.cancelToolGrant(grant, false)
 				}
 				if output == nil || strings.TrimSpace(output.Result) == "" {
-					result := marshalToolError(input.Name, "tool returned an empty result", false)
+					result := marshalToolError(input.Name, "tool_empty_result", "Tool returned no result. Continue with the best available information.", false)
 					if budget != nil {
 						result = budget.accountUnreservedResult(input.Name, result)
 					}
@@ -330,12 +332,13 @@ func normalizeToolOutcomeCode(value string) string {
 	return b.String()
 }
 
-func marshalToolError(toolName, errText string, retryable bool) string {
+func marshalToolError(toolName, code, message string, retryable bool) string {
 	out := toolErrorOutput{
 		OK:        false,
 		Tool:      toolName,
-		Error:     errText,
-		Message:   "Tool call failed. Explain the failure briefly and continue with the best available information.",
+		Code:      code,
+		Error:     message,
+		Message:   message,
 		Retryable: retryable,
 		Source:    "tool_governance",
 	}

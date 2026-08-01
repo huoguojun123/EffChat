@@ -81,7 +81,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。
-- 管理后台可启停现有工具并配置超时；错误以结构化工具结果显示在消息内。
+- 管理后台可启停现有工具并配置超时；工具自身返回的受控业务失败保持结构化结果，Tool endpoint 抛出的内部错误只向模型和消息树公开稳定 `code/message/retryable`，原始 repository、路径或 provider 原因仅进入受控内部诊断。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
 - 网页提取链路由管理员为 Firecrawl、Jina、Tavily 和 Exa 独立配置并排序；Basic 固定为最后兜底。
 - 网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。

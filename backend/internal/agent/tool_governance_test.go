@@ -28,7 +28,7 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	budget := &toolBudgetMiddleware{maxCalls: 8, maxResultTokens: 1000, maxContextTokens: 2000, maxSkillTokens: 1000}
 	middleware := toolGovernanceMiddleware(runtime, nil, nil, budget).Invokable
 	endpoint := middleware(func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-		return nil, errors.New("upstream unavailable")
+		return nil, errors.New("postgres://secret@internal/private/path")
 	})
 
 	out, err := endpoint(context.Background(), &compose.ToolInput{Name: "web_search", CallID: "call-1", Arguments: `{"query":"x"}`})
@@ -44,6 +44,12 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	}
 	if payload["ok"] != false || payload["tool"] != "web_search" || payload["source"] != "tool_governance" {
 		t.Fatalf("unexpected payload: %#v", payload)
+	}
+	if payload["code"] != "tool_execution_failed" || payload["retryable"] != false {
+		t.Fatalf("unexpected public classification: %#v", payload)
+	}
+	if strings.Contains(out.Result, "secret") || strings.Contains(out.Result, "/private/path") || strings.Contains(out.Result, "postgres") {
+		t.Fatalf("tool output leaked internal error: %s", out.Result)
 	}
 	if budget.contextUsed == 0 || budget.contextReserved != 0 {
 		t.Fatalf("structured Go error was not accounted: used=%d reserved=%d", budget.contextUsed, budget.contextReserved)

@@ -26,7 +26,7 @@ func ListAdminFontsHandler(fontRepo *repository.FontRepository) gin.HandlerFunc 
 	return func(c *gin.Context) {
 		fonts, err := fontRepo.List()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list fonts"})
+			writeFontError(c, "list", err)
 			return
 		}
 		for _, font := range fonts {
@@ -34,12 +34,12 @@ func ListAdminFontsHandler(fontRepo *repository.FontRepository) gin.HandlerFunc 
 		}
 		selectedID, err := fontRepo.GetSelectedID()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read selected font"})
+			writeFontError(c, "selection_load", err)
 			return
 		}
 		selection, err := fontRepo.GetSelectedIDs()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read selected fonts"})
+			writeFontError(c, "selection_load", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"fonts": fonts, "selected_font_id": selectedID, "selected_font_ids": selection})
@@ -55,46 +55,50 @@ func UploadFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 		if err != nil {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
-				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "font file too large"})
+				writePublicError(c, http.StatusRequestEntityTooLarge, "font_file_too_large", "font file too large", false)
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "font file is required"})
+			writePublicError(c, http.StatusBadRequest, "font_file_required", "font file is required", false)
 			return
 		}
 		defer file.Close()
 
 		safeName := sanitizeUploadFilename(header.Filename)
-		if header.Size <= 0 || header.Size > maxFontUploadBytes {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "font file too large"})
+		if header.Size <= 0 {
+			writePublicError(c, http.StatusBadRequest, "font_file_empty", "font file is empty", false)
+			return
+		}
+		if header.Size > maxFontUploadBytes {
+			writePublicError(c, http.StatusRequestEntityTooLarge, "font_file_too_large", "font file too large", false)
 			return
 		}
 
 		content, err := io.ReadAll(io.LimitReader(file, maxFontUploadBytes+1))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read font file"})
+			writeServerError(c, http.StatusInternalServerError, "font_file_read_failed", "failed to read font file", err)
 			return
 		}
 		if int64(len(content)) > maxFontUploadBytes {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "font file too large"})
+			writePublicError(c, http.StatusRequestEntityTooLarge, "font_file_too_large", "font file too large", false)
 			return
 		}
 
 		mimeType, err := validateFontContent(safeName, content)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "font_file_invalid", err.Error(), false)
 			return
 		}
 
 		hash := fmt.Sprintf("%x", sha256.Sum256(content))
 		if err := os.MkdirAll(fontUploadDir, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create font directory"})
+			writeServerError(c, http.StatusInternalServerError, "font_storage_prepare_failed", "failed to prepare font storage", err)
 			return
 		}
 
 		storedName := fmt.Sprintf("%d_%s_%s", time.Now().UnixNano(), hash[:12], safeName)
 		storedPath := filepath.Join(fontUploadDir, storedName)
 		if err := os.WriteFile(storedPath, content, 0644); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save font file"})
+			writeServerError(c, http.StatusInternalServerError, "font_file_save_failed", "failed to save font file", err)
 			return
 		}
 
@@ -124,13 +128,13 @@ func UploadFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 		}
 		if err := fontRepo.Create(font); err != nil {
 			_ = os.Remove(storedPath)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save font metadata"})
+			writeFontError(c, "create", err)
 			return
 		}
 
 		if c.PostForm("make_current") == "true" {
 			if err := fontRepo.SetSelectedID(&font.ID); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "font uploaded but failed to set current font"})
+				writeFontError(c, "selection_update", err)
 				return
 			}
 		}
@@ -143,8 +147,8 @@ func UploadFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 func UpdateFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid font id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "font_id_invalid", "invalid font id", false)
 			return
 		}
 		var req struct {
@@ -160,7 +164,7 @@ func UpdateFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 		}
 		font, err := fontRepo.Get(id)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "font not found"})
+			writeFontError(c, "load", err)
 			return
 		}
 		if req.DisplayName != nil {
@@ -179,11 +183,11 @@ func UpdateFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			font.Enabled = *req.Enabled
 		}
 		if font.DisplayName == "" || font.FamilyName == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "display_name and family_name are required"})
+			writePublicError(c, http.StatusBadRequest, "font_metadata_invalid", "display_name and family_name are required", false)
 			return
 		}
 		if err := fontRepo.Update(font); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeFontError(c, "update", err)
 			return
 		}
 		if !font.Enabled {
@@ -226,16 +230,24 @@ func SelectFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
+		if req.FontID != nil && *req.FontID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "font_id_invalid", "invalid font id", false)
+			return
+		}
 		if req.FontID != nil {
 			font, err := fontRepo.Get(*req.FontID)
-			if err != nil || !font.Enabled {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "font is not available"})
+			if err != nil {
+				writeFontError(c, "load", err)
+				return
+			}
+			if !font.Enabled {
+				writePublicError(c, http.StatusConflict, "font_not_available", "font is not available", false)
 				return
 			}
 		}
 		if req.Slot == "" {
 			if err := fontRepo.SetSelectedID(req.FontID); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				writeFontError(c, "selection_update", err)
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"selected_font_id": req.FontID})
@@ -243,7 +255,7 @@ func SelectFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 		}
 		selection, err := fontRepo.GetSelectedIDs()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read selected fonts"})
+			writeFontError(c, "selection_load", err)
 			return
 		}
 		switch req.Slot {
@@ -254,11 +266,11 @@ func SelectFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 		case "code":
 			selection.Code = req.FontID
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid font slot"})
+			writePublicError(c, http.StatusBadRequest, "font_slot_invalid", "invalid font slot", false)
 			return
 		}
 		if err := fontRepo.SetSelectedIDs(selection); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeFontError(c, "selection_update", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"selected_font_id": selection.Chinese, "selected_font_ids": selection})
@@ -268,17 +280,17 @@ func SelectFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 func DeleteFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid font id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "font_id_invalid", "invalid font id", false)
 			return
 		}
 		font, err := fontRepo.Get(id)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "font not found"})
+			writeFontError(c, "load", err)
 			return
 		}
 		if err := fontRepo.Delete(id); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeFontError(c, "delete", err)
 			return
 		}
 		_ = os.Remove(font.FilePath)
@@ -289,18 +301,33 @@ func DeleteFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 func DownloadFontFileHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid font id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "font_id_invalid", "invalid font id", false)
 			return
 		}
 		font, err := fontRepo.Get(id)
-		if err != nil || !font.Enabled {
-			c.JSON(http.StatusNotFound, gin.H{"error": "font not found"})
+		if err != nil {
+			writeFontError(c, "load", err)
+			return
+		}
+		if !font.Enabled {
+			writePublicError(c, http.StatusNotFound, "font_not_found", "font not found", false)
+			return
+		}
+		file, err := os.Open(font.FilePath)
+		if err != nil {
+			writeServerError(c, http.StatusInternalServerError, "font_file_open_failed", "font file is unavailable", err)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			writeServerError(c, http.StatusInternalServerError, "font_file_stat_failed", "font file is unavailable", err)
 			return
 		}
 		c.Header("Content-Type", font.MimeType)
 		c.Header("Cache-Control", "public, max-age=31536000, immutable")
-		c.File(font.FilePath)
+		http.ServeContent(c.Writer, c.Request, font.FileName, info.ModTime(), file)
 	}
 }
 

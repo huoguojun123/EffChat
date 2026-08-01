@@ -155,6 +155,8 @@ Prompt Group list/create/update/delete 复用独立的资源错误边界：ID �
 
 头像 upload/delete/serve 使用独立的文件与账户错误边界：缺少文件、无效图片和大小超限为稳定 400/413，用户缺失为 404，读取、处理、受管目录/文件写入与 repository 故障为带 request ID 的 retryable 5xx。已写入新文件后若 profile 读取或头像更新失败，handler 继续补偿删除本请求新文件。本公共错误契约不改变头像的并发 swap、旧文件删除 owner 或 profile partial PATCH 策略；这些仍由 P2-47 收口。
 
+字体 list/upload/update/select/delete/file 使用独立的资源与存储错误边界：ID、slot、metadata、multipart、内容类型和大小校验为稳定 400/413，字体缺失为 404，已停用字体不可选择为 409；repository、配置解析、请求体读取、受管目录/文件写入和已登记字体文件缺失等内部故障为带 request ID 的 retryable 5xx。repository 列表与 mutation 必须检查 iterator/rows-affected 错误，配置中的非法字体 ID 不能静默退回系统默认。本公共错误契约不改变字体槽位的多键事务与并发 owner、显式 null/legacy 回退或 FontAsset partial PATCH 语义；这些仍分别由 P2-29、P2-30 与 P2-47 收口。
+
 注册与登录共享认证错误边界：注册用户名、邮箱、昵称、密码和 preferences 的本地约束为稳定 400，用户名或邮箱重名为 409，登录的未知账号与错误密码统一为 `invalid_credentials` 401，待审核或停用账号为受控 401，限流为带 `Retry-After` 的 retryable 429；repository、注册事务、密码哈希与 token 签发故障为带 request ID 的 retryable 5xx。注册在数据库查询和 bcrypt 前完成可判定输入校验，repository 在实际 registration unique constraint owner 保留 conflict 分类；首用户管理员、后续用户待审批和现有限流计数/重置算法不变。
 
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。

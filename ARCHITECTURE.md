@@ -100,6 +100,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 文件 list/download/preview/OCR refresh 的公共读取契约区分本地参数 400、用户域内缺失 404、解析未完成 409 与 repository/受管存储/sidecar 读取的带 request ID 5xx；缺失与无权访问保持不可区分。`ApiError` 保留后端 `code/retryable/request_id`，文件预览按稳定 code 展示缺失或暂无正文，并只在公共协议允许重试时提供重试入口，不再解析中英文错误字符串。列表扫描统一检查 `rows.Err()`，中途数据库故障不能伪装成部分成功结果。
 - 文件上传准入与持久化复用同一公共错误协议：缺少 multipart/file/session 参数为稳定 400，文件与解析输出超限为 413，声明 MIME 不一致为 400，白名单或解析器不支持为 415，损坏/无可读正文为 422，会话文件数达到上限为 409；会话不存在或无权访问统一为 404，但 session/repository、受管存储、OCR queue 和 metadata 故障必须返回带 request ID 的 retryable 5xx。extractor owner 用 sentinel 区分用户内容、资源上限与依赖故障，Python sidecar 的响应正文、内部路径和上游原因不会传播到 Go 公共错误或 request log；metadata 创建失败会补偿删除本轮刚写入的原件、OCR buffer 或 extracted sidecar。
 - 人工 OCR retry 在 mutation 前分别校验附件 policy、Go/Python runtime 依赖和 MinerU 渠道配置；管理员未启用返回稳定 409，控制面或 runtime 暂不可读返回带 request ID 的 retryable 503。文件不存在或无权访问统一为 404，repository mutation 故障为可追踪 5xx。`RestartOCR` 提交新的 pending generation 后才复核受管原件：过期或确实缺失会用 `FailOCR` 补偿闭合为 failed 并返回 409，越界路径、非缺失型文件系统错误或补偿失败返回稳定可追踪 5xx；只有复核成功才唤醒 recovery runner。
+- 用户删除附件只先提交数据库 tombstone/cleanup claim，不在请求内删除受管字节。无效参数为 400，缺失或无权访问统一为 404，不可用生命周期状态为 409；lookup、受管路径校验和删除事务故障返回带 request ID 的 retryable 5xx。删除事务继续负责 fencing OCR worker，并在 formal attachment 上同步写入历史消息 tombstone；物理清理由管理员维护入口按租约完成。
 - 图片保留原图；文档类文件不承诺长期保留原始 PDF/Word。
 - PDF 当前策略是 MinerU 优先，本地 Python 解析兜底。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。

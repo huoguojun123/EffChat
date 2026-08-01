@@ -724,47 +724,39 @@ func DeleteFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			status := http.StatusBadRequest
-			message := "failed to load file"
-			if errors.Is(err, repository.ErrNotFound) {
-				status = http.StatusNotFound
-				message = "file not found"
-			} else {
-				logger.Error("failed to load file before delete: user=%d file=%d err=%v", userID, id, err)
-			}
-			c.JSON(status, gin.H{"error": message})
+			writeFileLookupError(c, err)
 			return
 		}
 		if _, err := managedUploadPath(f.FilePath); err != nil {
 			logger.Error("refuse deleting file with unsafe path: user=%d file=%d path=%q err=%v", userID, id, f.FilePath, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "file path is outside managed storage"})
+			writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 			return
 		}
 		if f.ExtractedTextPath != nil && strings.TrimSpace(*f.ExtractedTextPath) != "" {
 			if _, err := managedUploadPath(*f.ExtractedTextPath); err != nil {
 				logger.Error("refuse deleting file with unsafe extracted path: user=%d file=%d path=%q err=%v", userID, id, *f.ExtractedTextPath, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "file path is outside managed storage"})
+				writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 				return
 			}
 		}
 		if f.OCRSourcePath != nil && strings.TrimSpace(*f.OCRSourcePath) != "" {
 			if _, err := managedUploadPath(*f.OCRSourcePath); err != nil {
 				logger.Error("refuse deleting file with unsafe OCR source path: user=%d file=%d path=%q err=%v", userID, id, *f.OCRSourcePath, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "file path is outside managed storage"})
+				writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 				return
 			}
 		}
 		now := time.Now()
 		if err := fileRepo.RequestDeletion(c.Request.Context(), id, userID, now, now.Add(ocrSourceRetention)); err != nil {
 			logger.Error("failed to request file deletion: user=%d file=%d err=%v", userID, id, err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to delete file"})
+			writeFileDeletionError(c, err)
 			return
 		}
 

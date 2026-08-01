@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func uploadTestPNG(t *testing.T) []byte {
@@ -178,6 +180,118 @@ func TestUploadLimits_ReturnsConfiguredLimits(t *testing.T) {
 	}
 	if len(body.AllowedTypes) == 0 {
 		t.Fatal("allowed_types should be returned for frontend precheck")
+	}
+}
+
+func TestUploadPolicyEndpointsFailClosedWhenConfigurationIsUnavailable(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	configRepo := repository.NewConfigRepository(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close test database: %v", err)
+	}
+
+	router := gin.New()
+	router.GET("/limits", UploadLimitsHandler(configRepo))
+	router.POST("/files", UploadFileHandler(nil, configRepo))
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/limits"},
+		{method: http.MethodPost, path: "/files"},
+	}
+	for _, test := range tests {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(test.method, test.path, nil))
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s %s status=%d, want %d (body: %s)", test.method, test.path, w.Code, http.StatusServiceUnavailable, w.Body.String())
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %s %s response: %v", test.method, test.path, err)
+		}
+		if body.Code != "file_policy_unavailable" {
+			t.Fatalf("%s %s code=%q, want file_policy_unavailable", test.method, test.path, body.Code)
+		}
+	}
+}
+
+func TestFilePoliciesKeepLastStrictValuesAfterParseFailure(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	defer db.Close()
+	configRepo := repository.NewConfigRepository(db)
+	if _, err := db.Exec(`
+		UPDATE system_config SET value = '1' WHERE key IN ('file_upload_max_size_mb', 'file_upload_max_session_files');
+		UPDATE system_config SET value = '["text/plain"]' WHERE key = 'file_upload_allowed_types';
+		UPDATE system_config SET value = 'false' WHERE key = 'attachment_extract_enabled';
+		UPDATE system_config SET value = '30' WHERE key = 'attachment_extract_timeout_seconds';
+		UPDATE system_config SET value = '1' WHERE key = 'attachment_max_output_mb';
+	`); err != nil {
+		t.Fatalf("seed strict file policies: %v", err)
+	}
+
+	limits, err := resolveUploadLimits(t.Context(), configRepo)
+	if err != nil || limits.PolicyDegraded || limits.MaxFileSizeMB != 1 || limits.MaxSessionFiles != 1 || !reflect.DeepEqual(limits.AllowedTypes, []string{"text/plain"}) {
+		t.Fatalf("prime upload policy: limits=%+v err=%v", limits, err)
+	}
+	attachment, err := resolveAttachmentProcessingPolicy(t.Context(), configRepo)
+	if err != nil || attachment.Degraded || attachment.Enabled || attachment.TimeoutSeconds != 30 || attachment.MaxOutputMB != 1 {
+		t.Fatalf("prime attachment policy: policy=%+v err=%v", attachment, err)
+	}
+
+	if _, err := db.Exec(`
+		UPDATE system_config SET value = '"invalid"' WHERE key IN ('file_upload_max_size_mb', 'file_upload_max_session_files', 'attachment_extract_timeout_seconds', 'attachment_max_output_mb');
+		UPDATE system_config SET value = '{}' WHERE key = 'file_upload_allowed_types';
+		UPDATE system_config SET value = '"invalid"' WHERE key = 'attachment_extract_enabled';
+	`); err != nil {
+		t.Fatalf("inject malformed file policies: %v", err)
+	}
+
+	limits, err = resolveUploadLimits(t.Context(), configRepo)
+	if err != nil || !limits.PolicyDegraded || limits.MaxFileSizeMB != 1 || limits.MaxSessionFiles != 1 || !reflect.DeepEqual(limits.AllowedTypes, []string{"text/plain"}) {
+		t.Fatalf("degraded upload policy widened: limits=%+v err=%v", limits, err)
+	}
+	attachment, err = resolveAttachmentProcessingPolicy(t.Context(), configRepo)
+	if err != nil || !attachment.Degraded || attachment.Enabled || attachment.TimeoutSeconds != 30 || attachment.MaxOutputMB != 1 {
+		t.Fatalf("degraded attachment policy widened: policy=%+v err=%v", attachment, err)
+	}
+}
+
+func TestUploadFailsClosedWhenAttachmentPolicyIsMalformed(t *testing.T) {
+	env := setupTestEnv(t)
+	var previous []byte
+	_ = env.db.QueryRow("SELECT value FROM system_config WHERE key = 'attachment_extract_enabled'").Scan(&previous)
+	if _, err := env.db.Exec(`
+		INSERT INTO system_config (key, value, config_type)
+		VALUES ('attachment_extract_enabled', '"invalid"', 'boolean')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`); err != nil {
+		t.Fatalf("seed malformed attachment policy: %v", err)
+	}
+	t.Cleanup(func() {
+		if previous == nil {
+			_, _ = env.db.Exec("DELETE FROM system_config WHERE key = 'attachment_extract_enabled'")
+			return
+		}
+		_, _ = env.db.Exec("UPDATE system_config SET value = $1 WHERE key = 'attachment_extract_enabled'", previous)
+	})
+
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, uploadMultipart(t, env.token, 1, "note.txt", "text/plain", []byte("test content")))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want %d (body: %s)", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "attachment_policy_unavailable" {
+		t.Fatalf("code=%q, want attachment_policy_unavailable", body.Code)
 	}
 }
 

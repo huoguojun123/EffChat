@@ -772,7 +772,7 @@ func (r *FileRepository) ClaimRecoverableOCRTasks(provider string, now time.Time
 			  AND COALESCE(ocr_error_type, '') <> 'ocr_submission_started'
 			  AND COALESCE(ocr_next_retry_at, created_at) <= $2
 			  AND (ocr_lease_until IS NULL OR ocr_lease_until <= $2)
-			ORDER BY COALESCE(ocr_next_retry_at, created_at), id
+			ORDER BY (ocr_task_id IS NULL), COALESCE(ocr_next_retry_at, created_at), id
 				FOR UPDATE SKIP LOCKED
 			LIMIT $4
 		)

@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -36,7 +38,8 @@ type ConfigOption struct {
 }
 
 type ConfigRepository struct {
-	db *sql.DB
+	db          *sql.DB
+	policyCache sync.Map
 }
 
 type configExecer interface {
@@ -609,11 +612,14 @@ func (r *ConfigRepository) GetIntContext(ctx context.Context, key string, fallba
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fallback, ctxErr
 		}
-		return fallback, nil
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	n, parsed := parseConfigInt(item.Value)
 	if !parsed {
-		return fallback, nil
+		return fallback, fmt.Errorf("config %s is not a valid integer", key)
 	}
 	// select 档位兜底：历史脏值（如人为设成 1000）不在合法档位内时，
 	// 夹紧到最近的合法档位，避免阈值低于单条摘要引发每轮重复压缩。
@@ -675,13 +681,16 @@ func (r *ConfigRepository) GetStringContext(ctx context.Context, key, fallback s
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fallback, ctxErr
 		}
-		return fallback, nil
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	var s string
 	if err := json.Unmarshal(item.Value, &s); err == nil {
 		return s, nil
 	}
-	return fallback, nil
+	return fallback, fmt.Errorf("config %s is not a valid string", key)
 }
 
 // GetBool 读取布尔配置，兼容 JSON true/false 与字符串 "true"/"1"。
@@ -696,7 +705,10 @@ func (r *ConfigRepository) GetBoolContext(ctx context.Context, key string, fallb
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fallback, ctxErr
 		}
-		return fallback, nil
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	var b bool
 	if err := json.Unmarshal(item.Value, &b); err == nil {
@@ -708,19 +720,30 @@ func (r *ConfigRepository) GetBoolContext(ctx context.Context, key string, fallb
 			return parsed, nil
 		}
 	}
-	return fallback, nil
+	return fallback, fmt.Errorf("config %s is not a valid boolean", key)
 }
 
 func (r *ConfigRepository) GetStringSlice(key string, fallback []string) []string {
-	item, err := r.Get(key)
+	values, _ := r.GetStringSliceContext(context.Background(), key, fallback)
+	return values
+}
+
+func (r *ConfigRepository) GetStringSliceContext(ctx context.Context, key string, fallback []string) ([]string, error) {
+	item, err := r.GetContext(ctx, key)
 	if err != nil {
-		return fallback
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fallback, ctxErr
+		}
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	var values []string
-	if err := json.Unmarshal(item.Value, &values); err == nil {
-		return values
+	if err := json.Unmarshal(item.Value, &values); err != nil {
+		return fallback, fmt.Errorf("config %s is not a valid string array", key)
 	}
-	return fallback
+	return values, nil
 }
 
 func (r *ConfigRepository) GetMemoryLimits() sessionmemory.Limits {
@@ -820,6 +843,20 @@ func validateAdminEditableValue(key string, value json.RawMessage) (AdminConfigM
 		}
 		if err := ValidateSystemPromptTemplate(templateText); err != nil {
 			return AdminConfigMeta{}, err
+		}
+	}
+	if key == "file_upload_allowed_types" {
+		var values []string
+		if err := json.Unmarshal(value, &values); err != nil {
+			return AdminConfigMeta{}, fmt.Errorf("file_upload_allowed_types must be a string array")
+		}
+		if len(values) == 0 {
+			return AdminConfigMeta{}, fmt.Errorf("file_upload_allowed_types must not be empty")
+		}
+		for _, item := range values {
+			if strings.TrimSpace(item) == "" {
+				return AdminConfigMeta{}, fmt.Errorf("file_upload_allowed_types must not contain empty values")
+			}
 		}
 	}
 	// select 类型：拒绝档位外的值，前端下拉之外任何来源都挡在门口。

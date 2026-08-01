@@ -53,6 +53,21 @@ func TestUploadAllowedTypesCoversRealSupport(t *testing.T) {
 	}
 }
 
+func TestValidateUploadAllowedTypesRejectsEmptyPolicy(t *testing.T) {
+	for _, value := range []json.RawMessage{
+		json.RawMessage(`[]`),
+		json.RawMessage(`["text/plain", ""]`),
+		json.RawMessage(`["text/plain", "   "]`),
+	} {
+		if _, err := validateAdminEditableValue("file_upload_allowed_types", value); err == nil {
+			t.Fatalf("expected upload allowlist %s to be rejected", value)
+		}
+	}
+	if _, err := validateAdminEditableValue("file_upload_allowed_types", json.RawMessage(`["text/plain"]`)); err != nil {
+		t.Fatalf("valid upload allowlist rejected: %v", err)
+	}
+}
+
 func TestListAdminEditableIncludesSystemPromptDefault(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

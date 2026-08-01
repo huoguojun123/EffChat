@@ -133,6 +133,7 @@ type ChatRequest struct {
 	// boundary between durable admission and execution.
 	RuntimeExtractSummaryEnabled   bool
 	RuntimeExtractSummaryModel     string
+	RuntimeExtractSummaryState     service.RuntimeConfigState
 	RuntimeExtractSummaryModelInfo *modelbank.ModelInfo
 	RuntimeExtractSummaryChannel   *model.AIChannel
 	ContextWindow                  int

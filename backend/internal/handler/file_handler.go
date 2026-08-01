@@ -45,12 +45,6 @@ type uploadFileHandlerOptions struct {
 	ocrRecovery     *OCRRecoveryRunner
 }
 
-type uploadLimits struct {
-	MaxFileSizeMB   int      `json:"max_file_size_mb"`
-	MaxSessionFiles int      `json:"max_session_files"`
-	AllowedTypes    []string `json:"allowed_types"`
-}
-
 type UploadFileHandlerOption func(*uploadFileHandlerOptions)
 
 func WithUploadSessionRepo(repo *repository.SessionRepository) UploadFileHandlerOption {
@@ -83,49 +77,21 @@ func WithUploadOCRRecoveryRunner(runner *OCRRecoveryRunner) UploadFileHandlerOpt
 	}
 }
 
-func resolveUploadLimits(configRepo *repository.ConfigRepository) uploadLimits {
-	limits := uploadLimits{
-		MaxFileSizeMB:   20,
-		MaxSessionFiles: 50,
-		AllowedTypes:    append([]string(nil), repository.DefaultUploadAllowedTypes...),
-	}
-	if configRepo != nil {
-		limits.MaxFileSizeMB = configRepo.GetInt("file_upload_max_size_mb", limits.MaxFileSizeMB)
-		limits.MaxSessionFiles = configRepo.GetInt("file_upload_max_session_files", limits.MaxSessionFiles)
-		limits.AllowedTypes = configRepo.GetStringSlice("file_upload_allowed_types", limits.AllowedTypes)
-	}
-	if limits.MaxFileSizeMB <= 0 {
-		limits.MaxFileSizeMB = 20
-	}
-	if limits.MaxSessionFiles <= 0 {
-		limits.MaxSessionFiles = 50
-	}
-	if len(limits.AllowedTypes) == 0 {
-		limits.AllowedTypes = append([]string(nil), repository.DefaultUploadAllowedTypes...)
-	}
-	limits.AllowedTypes = normalizeUploadAllowedTypes(limits.AllowedTypes)
-	return limits
-}
-
-func normalizeUploadAllowedTypes(allowedTypes []string) []string {
-	normalized := make([]string, 0, len(allowedTypes)+3)
-	for _, contentType := range allowedTypes {
-		if contentType == "image/*" {
-			normalized = append(normalized, "image/png", "image/jpeg", "image/gif", "image/webp")
-			continue
-		}
-		normalized = append(normalized, contentType)
-	}
-	return normalized
-}
-
 // UploadLimitsHandler 返回当前登录用户上传前端预校验所需的全局限制。
 //
 // 后端仍是最终裁判；这个接口只负责让 ChatInput 不再硬编码“5 个 / 20MB”，
 // 避免管理员改了系统配置后前端提示和真实上传行为漂移。
 func UploadLimitsHandler(configRepo *repository.ConfigRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, resolveUploadLimits(configRepo))
+		limits, err := resolveUploadLimits(c.Request.Context(), configRepo)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "文件上传策略暂不可用，请稍后重试", "code": "file_policy_unavailable"})
+			return
+		}
+		if limits.PolicyDegraded {
+			log.Printf("[file_upload] upload policy degraded; using last-known-good limits")
+		}
+		c.JSON(http.StatusOK, limits)
 	}
 }
 
@@ -139,21 +105,24 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 	}
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		limits := resolveUploadLimits(configRepo)
-		extractTimeoutSeconds := 60
-		maxOutputMB := 5
-		if configRepo != nil {
-			extractTimeoutSeconds = configRepo.GetInt("attachment_extract_timeout_seconds", extractTimeoutSeconds)
-			maxOutputMB = configRepo.GetInt("attachment_max_output_mb", maxOutputMB)
+		limits, err := resolveUploadLimits(c.Request.Context(), configRepo)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "文件上传策略暂不可用，请稍后重试", "code": "file_policy_unavailable"})
+			return
 		}
-		if extractTimeoutSeconds <= 0 {
-			extractTimeoutSeconds = 60
+		if limits.PolicyDegraded {
+			log.Printf("[file_upload] upload policy degraded; using last-known-good limits")
 		}
-		if maxOutputMB <= 0 {
-			maxOutputMB = 5
+		extractPolicy, err := resolveAttachmentProcessingPolicy(c.Request.Context(), configRepo)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "附件处理策略暂不可用，请稍后重试", "code": "attachment_policy_unavailable"})
+			return
+		}
+		if extractPolicy.Degraded {
+			log.Printf("[file_upload] attachment policy degraded; using last-known-good controls")
 		}
 		maxUploadSize := int64(limits.MaxFileSizeMB) << 20
-		maxOutputBytes := int64(maxOutputMB) << 20
+		maxOutputBytes := int64(extractPolicy.MaxOutputMB) << 20
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize+multipartOverheadLimit)
 
 		file, header, err := c.Request.FormFile("file")
@@ -280,18 +249,14 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		// 文本字节数，避免 data 目录和预览接口被异常超大解析结果撑爆。
 		// 普通文档仍同步提取；MinerU PDF 会先创建可轮询的 pending 记录，再由后台任务处理，
 		// 避免浏览器或反向代理 60 秒超时导致“转圈后文件消失”。
-		extractEnabled := true
-		if configRepo != nil {
-			extractEnabled = configRepo.GetBool("attachment_extract_enabled", true)
-		}
 		if !isImage {
-			if !extractEnabled {
+			if !extractPolicy.Enabled {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "附件文本解析已关闭，无法保存文档附件"})
 				return
 			}
 			if isPDFUpload(contentType, safeName) {
 				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d file=%q bytes=%d strategy=mineru_async_first", userID, sessionID, safeName, len(content))
-				if queuedFile, status, body := queueMinerUOCR(c.Request.Context(), fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractTimeoutSeconds, maxOutputBytes); queuedFile != nil {
+				if queuedFile, status, body := queueMinerUOCR(c.Request.Context(), fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
 					c.JSON(status, queuedFile)
 					return
 				} else if body != nil {
@@ -301,7 +266,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				log.Printf("[file_ocr] local_fallback_start user=%d session=%d file=%q", userID, sessionID, safeName)
 			}
 
-			extractCtx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(extractTimeoutSeconds)*time.Second)
+			extractCtx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(extractPolicy.TimeoutSeconds)*time.Second)
 			defer cancel()
 			res, err := extractor.ExtractWithSidecar(extractCtx, content, contentType, safeName, opts.extractorClient)
 			if err == extractor.ErrUnsupported {
@@ -319,7 +284,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			} else {
 				if int64(len([]byte(res.Text))) > maxOutputBytes {
 					c.JSON(http.StatusBadRequest, gin.H{
-						"error": fmt.Sprintf("解析结果过大（上限 %dMB），请上传更小的文件", maxOutputMB),
+						"error": fmt.Sprintf("解析结果过大（上限 %dMB），请上传更小的文件", extractPolicy.MaxOutputMB),
 					})
 					return
 				}
@@ -674,13 +639,25 @@ func RefreshOCRFileHandler(fileRepo *repository.FileRepository, channelService *
 	}
 }
 
-func RetryOCRFileHandler(fileRepo *repository.FileRepository, channelService *service.ChannelService, extractorClient *extractor.SidecarClient, runner *OCRRecoveryRunner) gin.HandlerFunc {
+func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *repository.ConfigRepository, channelService *service.ChannelService, extractorClient *extractor.SidecarClient, runner *OCRRecoveryRunner) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || id <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
 			return
+		}
+		policy, err := resolveAttachmentProcessingPolicy(c.Request.Context(), configRepo)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "附件处理策略暂不可用，请稍后重试", "code": "attachment_policy_unavailable"})
+			return
+		}
+		if !policy.Enabled {
+			c.JSON(http.StatusConflict, gin.H{"error": "附件文本解析已关闭，无法重试 OCR", "code": "attachment_extract_disabled"})
+			return
+		}
+		if policy.Degraded {
+			log.Printf("[file_ocr] retry policy degraded; using last-known-good controls file_id=%d", id)
 		}
 		if channelService == nil || extractorClient == nil || !extractorClient.Enabled() || !channelService.ResolveMinerUOCRConfig().Enabled || runner == nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "OCR 服务未启用，请联系管理员", "code": "ocr_service_unavailable"})

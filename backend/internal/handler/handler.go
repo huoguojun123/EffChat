@@ -229,7 +229,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				files.GET("", ListFilesHandler(fileRepo))
 				files.GET("/upload-limits", UploadLimitsHandler(configRepo))
 				files.POST("/:id/ocr-refresh", RefreshOCRFileHandler(fileRepo, channelService, extractorClient))
-				files.POST("/:id/ocr-retry", RetryOCRFileHandler(fileRepo, channelService, extractorClient, ocrRecoveryRunner))
+				files.POST("/:id/ocr-retry", RetryOCRFileHandler(fileRepo, configRepo, channelService, extractorClient, ocrRecoveryRunner))
 				files.GET("/:id/preview", PreviewFileHandler(fileRepo, channelService, extractorClient))
 				files.GET("/:id", DownloadFileHandler(fileRepo))
 				files.DELETE("/:id", DeleteFileHandler(fileRepo))

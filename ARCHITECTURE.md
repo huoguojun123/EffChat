@@ -93,6 +93,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 图片保留原图；文档类文件不承诺长期保留原始 PDF/Word。
 - PDF 当前策略是 MinerU 优先，本地 Python 解析兜底。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。
+- 暂存附件抽屉通过 Radix Dialog Portal 脱离聊天 composer 的 stacking context；模态层统一拥有 overlay、焦点约束、Escape 关闭和安全区，关闭后焦点返回实际触发入口。上传队列、附件选择与发送协议仍由原有 ChatInput 状态负责。
 - OCR 未完成前文件不能发送进消息，但用户可以删除文件；删除后迟到 OCR 结果必须丢弃。
 - 管理后台“清理遗留文件”只清理超过 cutoff、未被未删除消息引用、也不绑定活跃会话的文件。
 

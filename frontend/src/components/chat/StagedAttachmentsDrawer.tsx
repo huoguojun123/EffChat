@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
+import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { FileText, ImageIcon, Loader2, Plus, RefreshCw, Trash2, X } from "lucide-react"
 import { canRetryOCR, filesApi, type FileInfo, isFileSendBlocked } from "@/api/files"
 import { Button } from "@/components/ui/button"
@@ -23,75 +24,56 @@ interface Props {
   onRefresh: () => Promise<void>
 }
 
-const DRAWER_EXIT_MS = 380
-
 export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, uploading, onUpload, onToggle, onDelete, onRetry, onRefresh }: Props) {
   const selectedOrder = new Map(selected.map((file, index) => [file.id, index + 1]))
-  const [rendered, setRendered] = useState(open)
-  const [visible, setVisible] = useState(false)
   const [previewFile, setPreviewFile] = useState<FileInfo | null>(null)
   const [pendingDelete, setPendingDelete] = useState<FileInfo | null>(null)
-  const frameRef = useRef<number | null>(null)
-  const closeTimerRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    if (frameRef.current != null) cancelAnimationFrame(frameRef.current)
-    if (closeTimerRef.current != null) {
-      window.clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
-    }
-
-    if (open) {
-      frameRef.current = requestAnimationFrame(() => {
-        setRendered(true)
-        setVisible(false)
-        frameRef.current = requestAnimationFrame(() => {
-          setVisible(true)
-          frameRef.current = null
-        })
-      })
-    } else {
-      frameRef.current = requestAnimationFrame(() => {
-        setVisible(false)
-        closeTimerRef.current = window.setTimeout(() => {
-          setRendered(false)
-          closeTimerRef.current = null
-        }, DRAWER_EXIT_MS)
-        frameRef.current = null
-      })
-    }
-  }, [open])
-
-  useEffect(() => () => {
-    if (frameRef.current != null) cancelAnimationFrame(frameRef.current)
-    if (closeTimerRef.current != null) window.clearTimeout(closeTimerRef.current)
-  }, [])
-
-  if (!rendered) return null
-
-  const state = visible ? "open" : "closed"
+  const returnFocusRef = useRef<HTMLElement | null>(null)
 
   return (
-    <div data-state={state} className="fixed inset-0 z-50 data-[state=closed]:pointer-events-none">
-      <button data-state={state} className="absolute inset-0 bg-background/55 opacity-0 backdrop-blur-[2px] transition-opacity duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[state=open]:opacity-100" onClick={() => onOpenChange(false)} aria-label="关闭暂存附件" />
-      <section data-state={state} aria-label="暂存附件" className="absolute bottom-0 right-0 flex h-[100dvh] w-full translate-y-4 flex-col border border-border/80 bg-background opacity-0 shadow-2xl transition-[opacity,translate] duration-[380ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[state=open]:translate-y-0 data-[state=open]:opacity-100 sm:h-full sm:w-[min(34rem,calc(100vw-3rem))] sm:translate-x-6 sm:translate-y-0 sm:rounded-l-md sm:data-[state=open]:translate-x-0">
-        <header className="flex h-12 items-center gap-2 border-b border-border/70 px-3">
-          <div className="min-w-0 flex-1 text-sm font-medium">暂存附件</div>
-          <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2" onClick={onUpload} disabled={uploading}>
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            上传
-          </Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={() => onOpenChange(false)} aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
-          {files.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">上传的文件会暂存在这里</div> : null}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {files.map((file) => <StagedFile key={file.id} file={file} selectedOrder={selectedOrder.get(file.id)} onToggle={() => onToggle(file.id)} onDelete={() => setPendingDelete(file)} onRetry={() => onRetry(file.id)} onPreview={() => setPreviewFile(file)} />)}
-          </div>
-        </div>
-        {files.length > 0 ? <footer className="flex min-h-12 items-center border-t border-border/70 px-3 text-xs text-muted-foreground">本次已选 {selected.length}/10 个附件 · {selected.filter((file) => file.content_type.startsWith("image/")).length}/4 张图片</footer> : null}
-      </section>
+    <>
+      <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-background/55 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <DialogPrimitive.Content
+            aria-describedby={undefined}
+            onOpenAutoFocus={() => {
+              const active = document.activeElement
+              returnFocusRef.current = active instanceof HTMLElement && active !== document.body ? active : null
+            }}
+            onCloseAutoFocus={(event) => {
+              const returnTarget = returnFocusRef.current
+              returnFocusRef.current = null
+              if (!returnTarget?.isConnected) return
+
+              // The drawer has multiple external openers, so a static DialogTrigger cannot
+              // own focus restoration. Return focus to the element that actually opened it.
+              event.preventDefault()
+              returnTarget.focus()
+            }}
+            className="fixed inset-y-0 right-0 z-50 flex h-[100dvh] w-full flex-col border border-border/80 bg-background shadow-2xl outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:slide-out-to-bottom-4 data-[state=open]:slide-in-from-bottom-4 sm:w-[min(34rem,calc(100vw-3rem))] sm:data-[state=closed]:slide-out-to-right-6 sm:data-[state=closed]:slide-out-to-bottom-0 sm:data-[state=open]:slide-in-from-right-6 sm:data-[state=open]:slide-in-from-bottom-0 sm:rounded-l-md"
+          >
+            <header className="flex min-h-12 items-center gap-2 border-b border-border/70 px-3 pt-[env(safe-area-inset-top)]">
+              <DialogPrimitive.Title className="min-w-0 flex-1 text-sm font-medium">暂存附件</DialogPrimitive.Title>
+              <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2" onClick={onUpload} disabled={uploading}>
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                上传
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
+              <DialogPrimitive.Close asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
+              </DialogPrimitive.Close>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
+              {files.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">上传的文件会暂存在这里</div> : null}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {files.map((file) => <StagedFile key={file.id} file={file} selectedOrder={selectedOrder.get(file.id)} onToggle={() => onToggle(file.id)} onDelete={() => setPendingDelete(file)} onRetry={() => onRetry(file.id)} onPreview={() => setPreviewFile(file)} />)}
+              </div>
+            </div>
+            {files.length > 0 ? <footer className="flex min-h-12 items-center border-t border-border/70 px-3 pb-[env(safe-area-inset-bottom)] text-xs text-muted-foreground">本次已选 {selected.length}/10 个附件 · {selected.filter((file) => file.content_type.startsWith("image/")).length}/4 张图片</footer> : null}
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
       <StagedFilePreview file={previewFile} onOpenChange={(nextOpen) => !nextOpen && setPreviewFile(null)} />
       <Dialog open={!!pendingDelete} onOpenChange={(nextOpen) => !nextOpen && setPendingDelete(null)}>
         <DialogContent className="max-w-[calc(100vw-1.5rem)] sm:max-w-sm">
@@ -106,7 +88,7 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }
 
@@ -119,7 +101,7 @@ function StagedFile({ file, selectedOrder, onToggle, onDelete, onRetry, onPrevie
 
   return (
     <div className={cn("group relative min-w-0 overflow-hidden rounded-lg border shadow-sm transition-[border-color,box-shadow,opacity] motion-control hover:shadow-md", selectedOrder ? "border-primary/60 bg-primary/5" : "border-border/70 bg-muted/15 hover:border-border", blocked && "opacity-60")}>
-      <button type="button" disabled={blocked} onClick={onToggle} className="block w-full text-left disabled:cursor-not-allowed outline-none" aria-label={`${selectedOrder ? "取消选择" : "选择"}附件：${file.filename}`}>
+      <button type="button" disabled={blocked} onClick={onToggle} className="block w-full text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed" aria-label={`${selectedOrder ? "取消选择" : "选择"}附件：${file.filename}`}>
         <div className="flex aspect-[4/3] items-center justify-center bg-muted/35 p-2 transition-colors group-hover:bg-muted/50">
           {image && url ? <img src={url} alt="" className="h-full w-full object-contain" /> : image && loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : image ? <ImageIcon className="h-6 w-6 text-muted-foreground" /> : <FileText className="h-6 w-6 text-muted-foreground" />}
         </div>

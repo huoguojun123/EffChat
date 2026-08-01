@@ -205,7 +205,7 @@ func (r *UserRepository) Update(user *model.User) error {
 		WHERE id = $6
 	`
 
-	_, err := r.db.Exec(
+	result, err := r.db.Exec(
 		query,
 		user.Email,
 		user.Nickname,
@@ -216,7 +216,17 @@ func (r *UserRepository) Update(user *model.User) error {
 	)
 
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: email already exists", ErrUserConflict)
+		}
 		return fmt.Errorf("failed to update user: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated user rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 
 	return nil

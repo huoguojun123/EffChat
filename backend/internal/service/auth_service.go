@@ -26,6 +26,8 @@ var (
 	// ErrAuthenticationUnavailable 表示 token 对应的账号已不可用或已失效。
 	ErrAuthenticationUnavailable = errors.New("authentication unavailable")
 	ErrAccountInactive           = errors.New("account inactive")
+	ErrUserProfileInvalid        = errors.New("invalid user profile request")
+	ErrIncorrectOldPassword      = errors.New("incorrect old password")
 )
 
 func NewAuthService(userRepo *repository.UserRepository, jwtSecret string) *AuthService {
@@ -306,20 +308,28 @@ func (s *AuthService) GetProfileContext(ctx context.Context, userID int64) (*mod
 
 // UpdateProfile 更新用户个人信息
 func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*model.User, error) {
+	if err := validateUserNickname(req.Nickname); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
+	}
+	email, err := normalizeOptionalEmail(req.Email)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
+	}
+
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, err
 	}
 
 	if req.Nickname != nil {
 		user.Nickname = req.Nickname
 	}
 	if req.Email != nil {
-		user.Email = req.Email
+		user.Email = email
 	}
 
 	if err := s.userRepo.Update(user); err != nil {
-		return nil, fmt.Errorf("failed to update profile: %w", ErrInternal)
+		return nil, err
 	}
 
 	user.PasswordHash = ""
@@ -347,22 +357,26 @@ type ChangePasswordRequest struct {
 
 // ChangePassword 修改密码
 func (s *AuthService) ChangePassword(userID int64, req *ChangePasswordRequest) error {
+	if err := validateUserPassword(req.NewPassword); err != nil {
+		return fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
+	}
+
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
-		return fmt.Errorf("user not found")
+		return err
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.OldPassword)); err != nil {
-		return fmt.Errorf("incorrect old password")
+		return ErrIncorrectOldPassword
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
-		return fmt.Errorf("failed to hash password: %w", ErrInternal)
+		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
 	if err := s.userRepo.UpdatePassword(userID, string(hashedPassword)); err != nil {
-		return fmt.Errorf("failed to update password: %w", ErrInternal)
+		return err
 	}
 	if s.runHub != nil {
 		s.runHub.CancelByUser(userID)

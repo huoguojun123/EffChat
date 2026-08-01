@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -15,7 +14,7 @@ func GetMeHandler(authService *service.AuthService) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		user, err := authService.GetProfile(userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			writeUserProfileError(c, "load", err)
 			return
 		}
 		c.JSON(http.StatusOK, user)
@@ -35,11 +34,7 @@ func UpdateMeHandler(authService *service.AuthService) gin.HandlerFunc {
 
 		user, err := authService.UpdateProfile(userID, &req)
 		if err != nil {
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeUserProfileError(c, "update", err)
 			return
 		}
 
@@ -59,11 +54,7 @@ func ChangePasswordHandler(authService *service.AuthService) gin.HandlerFunc {
 		}
 
 		if err := authService.ChangePassword(userID, &req); err != nil {
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeUserProfileError(c, "change_password", err)
 			return
 		}
 

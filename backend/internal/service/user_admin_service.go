@@ -18,10 +18,10 @@ var ErrUserAdminInvalid = errors.New("invalid administrator user request")
 const (
 	adminUsernameMinRunes = 3
 	adminUsernameMaxRunes = 50
-	adminNicknameMaxRunes = 100
-	adminEmailMaxRunes    = 255
-	adminPasswordMinBytes = 6
-	adminPasswordMaxBytes = 72
+	userNicknameMaxRunes  = 100
+	userEmailMaxRunes     = 255
+	userPasswordMinBytes  = 6
+	userPasswordMaxBytes  = 72
 )
 
 type UserAdminService struct {
@@ -113,10 +113,10 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 	if err := validateAdminUsername(req.Username); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
-	if err := validateAdminPassword(req.Password); err != nil {
+	if err := validateUserPassword(req.Password); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
-	if err := validateAdminNickname(req.Nickname); err != nil {
+	if err := validateUserNickname(req.Nickname); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 	email, err := normalizeOptionalEmail(req.Email)
@@ -188,7 +188,7 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
-	if err := validateAdminNickname(req.Nickname); err != nil {
+	if err := validateUserNickname(req.Nickname); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
@@ -227,7 +227,7 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 	return toUserResponse(user), nil
 }
 
-// normalizeOptionalEmail 统一管理员创建/更新用户时的邮箱口径。
+// normalizeOptionalEmail 统一个人资料与管理员用户维护的邮箱口径。
 //
 // 前端为了保持表单可控，空输入会自然提交为空字符串；如果仍把 gin 的
 // binding:"omitempty,email" 放在 *string 字段上，空字符串指针有时会先触发
@@ -241,8 +241,8 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	if utf8.RuneCountInString(trimmed) > adminEmailMaxRunes {
-		return nil, fmt.Errorf("email must be at most %d characters", adminEmailMaxRunes)
+	if utf8.RuneCountInString(trimmed) > userEmailMaxRunes {
+		return nil, fmt.Errorf("email must be at most %d characters", userEmailMaxRunes)
 	}
 	addr, err := mail.ParseAddress(trimmed)
 	if err != nil || addr.Address != trimmed {
@@ -252,7 +252,7 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 }
 
 func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest) error {
-	if err := validateAdminPassword(req.Password); err != nil {
+	if err := validateUserPassword(req.Password); err != nil {
 		return fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 	if _, err := s.userRepo.GetByIDIncludeInactive(userID); err != nil {
@@ -305,17 +305,17 @@ func validateAdminUsername(username string) error {
 	return nil
 }
 
-func validateAdminNickname(nickname *string) error {
-	if nickname != nil && utf8.RuneCountInString(*nickname) > adminNicknameMaxRunes {
-		return fmt.Errorf("nickname must be at most %d characters", adminNicknameMaxRunes)
+func validateUserNickname(nickname *string) error {
+	if nickname != nil && utf8.RuneCountInString(*nickname) > userNicknameMaxRunes {
+		return fmt.Errorf("nickname must be at most %d characters", userNicknameMaxRunes)
 	}
 	return nil
 }
 
-func validateAdminPassword(password string) error {
+func validateUserPassword(password string) error {
 	length := len(password)
-	if length < adminPasswordMinBytes || length > adminPasswordMaxBytes {
-		return fmt.Errorf("password must be between %d and %d bytes", adminPasswordMinBytes, adminPasswordMaxBytes)
+	if length < userPasswordMinBytes || length > userPasswordMaxBytes {
+		return fmt.Errorf("password must be between %d and %d bytes", userPasswordMinBytes, userPasswordMaxBytes)
 	}
 	return nil
 }

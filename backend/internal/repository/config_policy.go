@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -14,12 +15,34 @@ const (
 	policyStringSlicePrefix = "string_slice:"
 )
 
-// GetPolicyIntContext reads a required integer policy value. A successful value
-// becomes the last-known-good snapshot for this repository instance. Temporary
-// query or parse failures may reuse only that snapshot; a cold process without
-// one returns the original error instead of broadening to the caller fallback.
-func (r *ConfigRepository) GetPolicyIntContext(ctx context.Context, key string, fallback int) (value int, degraded bool, err error) {
+// getPolicyItem distinguishes an absent row from a control-plane failure. Some
+// long-lived installations predate newer editable keys, so the authoritative
+// schema default is still a trusted cold-start value even when no row has been
+// materialized yet. Query failures and malformed stored values must not take
+// this path: they remain eligible only for an already accepted snapshot.
+func (r *ConfigRepository) getPolicyItem(ctx context.Context, key string) (*ConfigItem, error) {
 	item, err := r.GetContext(ctx, key)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return item, err
+	}
+	meta, ok := AdminEditableConfig[key]
+	if !ok || len(meta.Default) == 0 {
+		return nil, err
+	}
+	return &ConfigItem{
+		Key:        key,
+		Value:      append(json.RawMessage(nil), meta.Default...),
+		ConfigType: meta.ConfigType,
+	}, nil
+}
+
+// GetPolicyIntContext reads a required integer policy value. A successfully
+// parsed stored value or authoritative schema default becomes the
+// last-known-good snapshot for this repository instance. Temporary query or
+// parse failures may reuse only that snapshot; a cold process without one
+// returns the original error instead of broadening to the caller fallback.
+func (r *ConfigRepository) GetPolicyIntContext(ctx context.Context, key string, fallback int) (value int, degraded bool, err error) {
+	item, err := r.getPolicyItem(ctx, key)
 	if err == nil {
 		parsed, ok := parseConfigInt(item.Value)
 		if !ok {
@@ -42,7 +65,7 @@ func (r *ConfigRepository) GetPolicyIntContext(ctx context.Context, key string, 
 // GetPolicyStringContext is the string counterpart used for model identifiers
 // that participate in a content-sharing decision.
 func (r *ConfigRepository) GetPolicyStringContext(ctx context.Context, key, fallback string) (value string, degraded bool, err error) {
-	item, err := r.GetContext(ctx, key)
+	item, err := r.getPolicyItem(ctx, key)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(item.Value, &value); unmarshalErr != nil {
 			err = fmt.Errorf("config %s is not a valid string", key)
@@ -63,7 +86,7 @@ func (r *ConfigRepository) GetPolicyStringContext(ctx context.Context, key, fall
 // GetPolicyBoolContext applies the same last-known-good rule to required
 // boolean control-plane values such as content-extraction switches.
 func (r *ConfigRepository) GetPolicyBoolContext(ctx context.Context, key string, fallback bool) (value bool, degraded bool, err error) {
-	item, err := r.GetContext(ctx, key)
+	item, err := r.getPolicyItem(ctx, key)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(item.Value, &value); unmarshalErr != nil {
 			var raw string
@@ -90,7 +113,7 @@ func (r *ConfigRepository) GetPolicyBoolContext(ctx context.Context, key string,
 // GetPolicyStringSliceContext clones cached slices on both store and load so a
 // caller cannot mutate the policy snapshot shared by concurrent requests.
 func (r *ConfigRepository) GetPolicyStringSliceContext(ctx context.Context, key string, fallback []string) (value []string, degraded bool, err error) {
-	item, err := r.GetContext(ctx, key)
+	item, err := r.getPolicyItem(ctx, key)
 	if err == nil {
 		if unmarshalErr := json.Unmarshal(item.Value, &value); unmarshalErr != nil {
 			err = fmt.Errorf("config %s is not a valid string array", key)

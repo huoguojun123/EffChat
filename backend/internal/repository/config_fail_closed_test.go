@@ -90,6 +90,60 @@ func TestPolicyGettersReuseOnlyLastSuccessfulValues(t *testing.T) {
 	}
 }
 
+func TestPolicyGettersAcceptAuthoritativeDefaultsForMissingRows(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	repo := NewConfigRepository(db)
+	keys := []string{
+		"file_upload_max_session_files",
+		"attachment_extract_enabled",
+		"extract_summary_model",
+		"file_upload_allowed_types",
+	}
+	originals := make(map[string]*ConfigItem, len(keys))
+	for _, key := range keys {
+		item, err := repo.Get(key)
+		if err == nil {
+			originals[key] = item
+		} else if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("read original %s: %v", key, err)
+		}
+		if _, err := db.Exec("DELETE FROM system_config WHERE key = $1", key); err != nil {
+			t.Fatalf("delete %s: %v", key, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, item := range originals {
+			_, _ = db.Exec(`
+				INSERT INTO system_config (key, value, description, config_type, updated_at)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (key) DO UPDATE SET
+					value = EXCLUDED.value,
+					description = EXCLUDED.description,
+					config_type = EXCLUDED.config_type,
+					updated_at = EXCLUDED.updated_at
+			`, item.Key, item.Value, item.Description, item.ConfigType, item.UpdatedAt)
+		}
+	})
+
+	if got, degraded, err := repo.GetPolicyIntContext(t.Context(), "file_upload_max_session_files", 999); err != nil || degraded || got != 50 {
+		t.Fatalf("integer default: value=%d degraded=%v err=%v", got, degraded, err)
+	}
+	if got, degraded, err := repo.GetPolicyBoolContext(t.Context(), "attachment_extract_enabled", false); err != nil || degraded || !got {
+		t.Fatalf("boolean default: value=%v degraded=%v err=%v", got, degraded, err)
+	}
+	if got, degraded, err := repo.GetPolicyStringContext(t.Context(), "extract_summary_model", "caller-fallback"); err != nil || degraded || got != "claude-haiku-4-5" {
+		t.Fatalf("string default: value=%q degraded=%v err=%v", got, degraded, err)
+	}
+	gotTypes, degraded, err := repo.GetPolicyStringSliceContext(t.Context(), "file_upload_allowed_types", []string{"caller/fallback"})
+	if err != nil || degraded || !slices.Equal(gotTypes, DefaultUploadAllowedTypes) {
+		t.Fatalf("string-array default: value=%v degraded=%v err=%v", gotTypes, degraded, err)
+	}
+	if _, _, err := repo.GetPolicyIntContext(t.Context(), "unknown_policy_key", 7); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown missing key err=%v, want ErrNotFound", err)
+	}
+}
+
 func TestConfigContextGettersRejectMalformedStoredValues(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

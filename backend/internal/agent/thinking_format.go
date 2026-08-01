@@ -21,6 +21,14 @@ const (
 // 或 NewAPI 的 OpenAI 兼容通道下；真正决定请求体形状的是 model_id + 管理员覆盖项。
 func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig) {
 	if req != nil && req.SuppressThinking {
+		// Some OpenAI-compatible reasoning models default to thinking even when
+		// the request omits every reasoning field. Utility tasks need a hard
+		// output-budget boundary, so explicitly disable DeepSeek V4 thinking
+		// instead of relying on omission to mean "off".
+		format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+		if format == modelbank.ThinkingFormatDeepSeekV4 || format == modelbank.ThinkingFormatDeepSeekV4Disabled {
+			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+		}
 		return
 	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)

@@ -32,6 +32,7 @@ type captureSummaryChatModel struct {
 	messages       []*schema.Message
 	calls          int
 	generateCalled bool
+	chunks         []*schema.Message
 }
 
 func (m *captureSummaryChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...einoModel.Option) (*schema.Message, error) {
@@ -42,10 +43,29 @@ func (m *captureSummaryChatModel) Generate(_ context.Context, _ []*schema.Messag
 func (m *captureSummaryChatModel) Stream(_ context.Context, messages []*schema.Message, _ ...einoModel.Option) (*schema.StreamReader[*schema.Message], error) {
 	m.messages = messages
 	m.calls++
+	if m.chunks != nil {
+		return schema.StreamReaderFromArray(m.chunks), nil
+	}
 	return schema.StreamReaderFromArray([]*schema.Message{
 		{Role: schema.Assistant, Content: "提炼"},
 		{Role: schema.Assistant, Content: "结果"},
 	}), nil
+}
+
+func TestExtractSummarizerStripsLegacyInlineThinking(t *testing.T) {
+	model := &captureSummaryChatModel{chunks: []*schema.Message{
+		{Role: schema.Assistant, Content: "<think>内部推理"},
+		{Role: schema.Assistant, Content: "过程</think>页面标题：RFC 9110"},
+	}}
+	summarizer := &extractSummarizer{chatModel: model}
+
+	got, err := summarizer.Summarize(t.Context(), "提取标题", "RFC", "page text", "summary")
+	if err != nil {
+		t.Fatalf("Summarize returned error: %v", err)
+	}
+	if got != "页面标题：RFC 9110" {
+		t.Fatalf("summary = %q, want legacy thinking removed", got)
+	}
 }
 
 func (m *captureSummaryChatModel) WithTools(_ []*schema.ToolInfo) (einoModel.ToolCallingChatModel, error) {

@@ -6,7 +6,7 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 
 ## 技术栈
 
-- Backend：Go 1.26.5、Gin、Eino v0.9.13、eino-ext openai/claude/gemini adapters。
+- Backend：Go 1.26.5、Gin、Eino v0.9.13、eino-ext openai/claude/gemini adapters。Claude adapter v0.1.20 通过 `backend/third_party/eino-claude` 保留一处可审计的上游 race 修正，待官方发布等价修复后移除本地 replace。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
 - Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理。
@@ -65,11 +65,16 @@ backend (Gin)
 2. `useSSE.sendMessage` 调用 `POST /api/v1/sessions/:id/messages/stream`。
 3. 后端在进入 Agent 前校验会话模型、渠道、用户组限额和并发 run。
 4. `EinoAgent.StreamChat` 从 DB 实时解析渠道、模型能力、工具治理和外部服务配置。
-5. Agent 通过 SSE 输出 `content_delta`、`thinking_delta`、`tool_call_start`、`tool_call_result`、`message_complete` 等事件。
+5. Agent 通过 SSE 输出 `content_delta`、`thinking_delta`、`tool_call_start`、`tool_call_result`、`message_complete` 等事件。只有尚未产生任何有效输出的瞬时模型故障可以自动重试一次；一旦已有文本、thinking 或工具输出，后续传输故障不再重放 provider 调用，而是把现有回答作为 `incomplete` 结果收口。每次真实 provider 调用分别记录 usage，但同一个 run 只形成一条用户消息、一组回答消息和一个 selected answer attempt。Provider SDK 不得在该生命周期之下另行隐藏重试；Anthropic native 的 SDK 默认重试已在共享 HTTP transport 关闭，状态码与首包前连接故障统一回到 EffChat 的 retry、usage 和 SSE 所有权。只有正文、thinking/reasoning 或可执行工具调用属于部分输出；provider 的 role、usage、finish 等空 metadata 不得解除首包门禁，也不得在超时后落成空白 `incomplete` 助手消息。
 6. 后端即使前端 SSE 断开，也尽量继续跑完当前 run 并落库。
-7. 前端在重连、刷新或 run 完成后从 DB 同步真实消息，保留仍未落库的本地 pending 消息。
+7. terminal 决策形成后，RunHub 会冻结迟到输出和取消；瞬时数据库或连接故障使用独立的有界单次上下文重试同一原子提交，只有数据库返回 canonical terminal 后才向所有订阅者发布一次终态。进程在恢复期间退出时，启动 reconciliation 将遗留的 durable running run 转成可重试的 `server_restarted` 终态。
+8. 前端在重连、刷新或 run 完成后从 DB 同步真实消息，保留仍未落库的本地 pending 消息。
 
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
+
+会话压缩只改变 Agent 实际携带的上下文，不改变用户可回看的消息历史。完整加载、冷加载窗口、turn 索引和分页继续包含压缩前的 user/assistant/tool 消息；active checkpoint 作为逻辑 divider 插在它所压缩的最后一个 user turn 之后，并且只随包含该锚点的一个页面返回。刷新、重新登录和分页因此保持历史可见，而 Agent context 仍由独立的压缩上下文查询过滤已压缩消息并注入 checkpoint。撤销只撤销 checkpoint 对后续模型上下文的作用，不承担恢复 UI 可见性的职责。
+
+压缩模型是输出受限且结果会持久化为后续上下文的 utility consumer。它复用当前会话的模型和渠道，但在克隆的任务请求上关闭可选 thinking，避免 reasoning 抢占摘要预算；收流后、checkpoint 落库前还会复用主聊天的 inline `<think>` 分离边界。摘要抽取器同时容忍兼容网关把 opening `<analysis>` 移入 reasoning 字段、却在 content 中留下 orphan `</analysis>` 与 `<summary>` 包装的情况，防止隐藏推理进入 durable summary。原始会话请求保持不变，主聊天的 thinking 配置不受影响。
 
 ## 工具与联网
 
@@ -77,6 +82,7 @@ backend (Gin)
 - 管理后台可启停现有工具并配置超时；错误以结构化工具结果显示在消息内。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
 - 网页提取链路由管理员为 Firecrawl、Jina、Tavily 和 Exa 独立配置并排序；Basic 固定为最后兜底。
+- 网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。
 - 工具调用日志不做持久化后台页面；排障依靠容器日志和用量统计。
 
 ## 文件与 OCR
@@ -95,6 +101,8 @@ backend (Gin)
 - 输出预算是跨 provider 的保守容量契约，不是 tokenizer 精确换算。它按“字符上限 + 4,096 JSON/结构余量”向上取整到 4,096 token：4K/8K/12K/16K 字符分别需要 8,192/12,288/16,384/20,480 输出 token。
 - 已知 `ModelMaxOutput` 小于所需预算时，后端在调用 provider 前失败并保留原记忆；能力元数据为 `0` 时表示未知，后端仍申请完整任务预算，不凭空猜测模型上限。
 - 记忆维护只走完整流式消费。provider 以 `length`、`max_tokens`、`max_output_tokens` 等原因达到输出上限时，本次结果一律不解析、不保存，并在 `model_task_runs` 记录 `memory_output_limit`；能力不足记录 `memory_output_budget_insufficient`。
+- 用户手动整理和重试使用独立的 durable `memory_maintenance` RunHub run 与 SSE 观察链。固定 timeout 只守护首个有效模型输出；浏览器断线、关闭弹窗或刷新不会取消已经 accepted 的任务，重新打开弹窗会从活动 run 的游标继续观察。
+- 手动维护先生成并校验候选记忆，再在同一 PostgreSQL 事务中提交 durable terminal、记忆 CAS、`session_memory_changes` 和 `model_task_runs`。`session_memory_changes.run_id` 使 ambiguous terminal commit 的恢复重试不会重复写入记忆历史。
 
 ## 数据库与迁移
 

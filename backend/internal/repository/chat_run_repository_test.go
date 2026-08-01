@@ -82,14 +82,118 @@ func TestChatRunTransitionIsDurableAndImmutable(t *testing.T) {
 		t.Fatalf("late run message error = %v", err)
 	}
 	lateSummary := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"late summary"}`)}
-	_, _, err = NewMessageRepository(db).PersistCheckpointAndTransitionActiveRun(context.Background(), session.ID, userID, runID, lateSummary, terminalMessage.ID, ChatRunTransitionInput{
+	lateRecord, lateTransitioned, err := NewMessageRepository(db).PersistCheckpointAndTransitionActiveRun(context.Background(), session.ID, userID, runID, lateSummary, terminalMessage.ID, ChatRunTransitionInput{
 		RunID: runID, Status: "completed", TerminalEvent: json.RawMessage(`{"event":"compaction_complete","data":{"compacted":true}}`), ExpiresAt: time.Now().Add(time.Minute),
 	}, nil)
-	if !errors.Is(err, ErrChatRunTerminal) {
-		t.Fatalf("late compression checkpoint error = %v", err)
+	if err != nil || lateTransitioned || lateRecord.Status != "completed" || lateRecord.TerminalMessageID != terminalMessage.ID {
+		t.Fatalf("late compression checkpoint recovery = transitioned:%v record:%+v err:%v", lateTransitioned, lateRecord, err)
 	}
 	if lateSummary.ID != 0 {
 		t.Fatalf("late compression summary was persisted with id %d", lateSummary.ID)
+	}
+}
+
+func TestChatRunTerminalRecoveryReturnsCanonicalRecordWithoutDuplicates(t *testing.T) {
+	quotaRepo, messageRepo, userID, session := setupChatRunAdmission(t, "chat_terminal_recovery")
+	runID := fmt.Sprintf("chat-terminal-recovery-%d", time.Now().UnixNano())
+	input := admissionInput(userID, session.ID, runID, "send", "v1:terminal-recovery", true)
+	userMessage := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData:   []byte(fmt.Sprintf(`{"role":"user","content":"persist once","metadata":{"run_id":%q}}`, runID)),
+	}
+	admission, err := quotaRepo.AdmitChatMessage(context.Background(), input, userMessage)
+	if err != nil {
+		t.Fatalf("admit chat message: %v", err)
+	}
+	terminalMessage := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData:   []byte(fmt.Sprintf(`{"role":"assistant","content":"durable answer","metadata":{"run_id":%q,"run_sequence":0}}`, runID)),
+	}
+	terminalEvent := json.RawMessage(`{"event":"message_complete","data":{"message_id":0,"finish_reason":"stop"}}`)
+	completed, transitioned, err := messageRepo.CreateBatchAndTransitionActiveRun(context.Background(), session.ID, userID, runID, []*model.Message{terminalMessage}, ChatRunTransitionInput{
+		RunID: runID, Status: "completed", TerminalEvent: terminalEvent, ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil || !transitioned || completed.Status != "completed" {
+		t.Fatalf("complete chat run = transitioned:%v record:%+v err:%v", transitioned, completed, err)
+	}
+
+	var beforeMessageCount, beforeAttemptCount, beforeSelectedCount int
+	var beforeAttemptID int64
+	var beforeAttemptStatus string
+	var beforeAttemptCompletedAt time.Time
+	var beforeSelectionRevision int64
+	if err := quotaRepo.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id = $1`, session.ID).Scan(&beforeMessageCount); err != nil {
+		t.Fatalf("count messages before recovery: %v", err)
+	}
+	if err := quotaRepo.db.QueryRow(`
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE selected)
+		FROM answer_attempts
+		WHERE run_id = $1
+	`, runID).Scan(&beforeAttemptCount, &beforeSelectedCount); err != nil {
+		t.Fatalf("count attempts before recovery: %v", err)
+	}
+	if err := quotaRepo.db.QueryRow(`
+		SELECT id, status, completed_at
+		FROM answer_attempts
+		WHERE run_id = $1
+	`, runID).Scan(&beforeAttemptID, &beforeAttemptStatus, &beforeAttemptCompletedAt); err != nil {
+		t.Fatalf("read attempt before recovery: %v", err)
+	}
+	if err := quotaRepo.db.QueryRow(`SELECT answer_selection_revision FROM sessions WHERE id = $1`, session.ID).Scan(&beforeSelectionRevision); err != nil {
+		t.Fatalf("read selection revision before recovery: %v", err)
+	}
+
+	recoveryMessage := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData:   []byte(fmt.Sprintf(`{"role":"assistant","content":"must not persist","metadata":{"run_id":%q,"run_sequence":0}}`, runID)),
+	}
+	recovered, transitioned, err := messageRepo.CreateBatchAndTransitionActiveRun(context.Background(), session.ID, userID, runID, []*model.Message{recoveryMessage}, ChatRunTransitionInput{
+		RunID: runID, Status: "failed", PublicErrorCode: "late_failure", PublicErrorMessage: "must not replace completed output",
+		TerminalEvent: json.RawMessage(`{"event":"error","data":{"code":"late_failure"}}`), ExpiresAt: time.Now().Add(2 * time.Minute),
+	})
+	if err != nil || transitioned {
+		t.Fatalf("recover terminal chat run = transitioned:%v record:%+v err:%v", transitioned, recovered, err)
+	}
+	if recovered.Status != completed.Status || recovered.TerminalMessageID != completed.TerminalMessageID || !reflect.DeepEqual(recovered.TerminalEvent, completed.TerminalEvent) {
+		t.Fatalf("recovered terminal record = %+v, want canonical %+v", recovered, completed)
+	}
+	if recoveryMessage.ID != 0 {
+		t.Fatalf("recovery message was persisted with id %d", recoveryMessage.ID)
+	}
+
+	var afterMessageCount, afterAttemptCount, afterSelectedCount int
+	var afterAttemptID int64
+	var afterAttemptStatus string
+	var afterAttemptCompletedAt time.Time
+	var afterSelectionRevision int64
+	if err := quotaRepo.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE session_id = $1`, session.ID).Scan(&afterMessageCount); err != nil {
+		t.Fatalf("count messages after recovery: %v", err)
+	}
+	if err := quotaRepo.db.QueryRow(`
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE selected)
+		FROM answer_attempts
+		WHERE run_id = $1
+	`, runID).Scan(&afterAttemptCount, &afterSelectedCount); err != nil {
+		t.Fatalf("count attempts after recovery: %v", err)
+	}
+	if err := quotaRepo.db.QueryRow(`
+		SELECT id, status, completed_at
+		FROM answer_attempts
+		WHERE run_id = $1
+	`, runID).Scan(&afterAttemptID, &afterAttemptStatus, &afterAttemptCompletedAt); err != nil {
+		t.Fatalf("read attempt after recovery: %v", err)
+	}
+	if err := quotaRepo.db.QueryRow(`SELECT answer_selection_revision FROM sessions WHERE id = $1`, session.ID).Scan(&afterSelectionRevision); err != nil {
+		t.Fatalf("read selection revision after recovery: %v", err)
+	}
+	if afterMessageCount != beforeMessageCount || afterAttemptCount != beforeAttemptCount || afterSelectedCount != beforeSelectedCount || afterAttemptID != beforeAttemptID || afterAttemptStatus != beforeAttemptStatus || !afterAttemptCompletedAt.Equal(beforeAttemptCompletedAt) || afterSelectionRevision != beforeSelectionRevision {
+		t.Fatalf("recovery changed persisted chat state: messages %d/%d attempts %d/%d selected %d/%d attempt %d/%d status %q/%q completed %s/%s revision %d/%d", afterMessageCount, beforeMessageCount, afterAttemptCount, beforeAttemptCount, afterSelectedCount, beforeSelectedCount, afterAttemptID, beforeAttemptID, afterAttemptStatus, beforeAttemptStatus, afterAttemptCompletedAt, beforeAttemptCompletedAt, afterSelectionRevision, beforeSelectionRevision)
+	}
+	if admission.Record.UserMessageID == 0 {
+		t.Fatal("admission did not bind the user message")
 	}
 }
 
@@ -146,6 +250,42 @@ func TestCompressionCheckpointAndRunTerminalCommitAtomically(t *testing.T) {
 	}
 	if err := db.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id = $1", session.ID).Scan(&messageCount); err != nil || messageCount != 2 {
 		t.Fatalf("committed message count = %d err=%v", messageCount, err)
+	}
+
+	recoverySummary := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"must not persist"}`)}
+	recovered, transitioned, err := messageRepo.PersistCheckpointAndTransitionActiveRun(context.Background(), session.ID, userID, runID, recoverySummary, message.ID+1, ChatRunTransitionInput{
+		RunID: runID, Status: "failed", PublicErrorCode: "late_failure", PublicErrorMessage: "must not replace completed checkpoint",
+		TerminalEvent: json.RawMessage(`{"event":"error","data":{"code":"late_failure"}}`), ExpiresAt: time.Now().Add(2 * time.Minute),
+	}, nil)
+	if err != nil || transitioned {
+		t.Fatalf("recover terminal compaction = transitioned:%v record:%+v err:%v", transitioned, recovered, err)
+	}
+	if recovered.Status != record.Status || recovered.TerminalMessageID != record.TerminalMessageID || !reflect.DeepEqual(recovered.TerminalEvent, record.TerminalEvent) {
+		t.Fatalf("recovered checkpoint terminal = %+v, want canonical %+v", recovered, record)
+	}
+	if recoverySummary.ID != 0 {
+		t.Fatalf("recovery summary was persisted with id %d", recoverySummary.ID)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id = $1", session.ID).Scan(&messageCount); err != nil || messageCount != 2 {
+		t.Fatalf("recovery message count = %d err=%v", messageCount, err)
+	}
+	var compressionSummaryID int64
+	if err := db.QueryRow("SELECT compression_summary_id FROM messages WHERE id = $1", message.ID).Scan(&compressionSummaryID); err != nil || compressionSummaryID != summary.ID {
+		t.Fatalf("recovery compression summary id = %d want %d err=%v", compressionSummaryID, summary.ID, err)
+	}
+	if _, err := db.Exec("UPDATE sessions SET answer_selection_revision = answer_selection_revision + 1 WHERE id = $1", session.ID); err != nil {
+		t.Fatalf("advance answer selection revision: %v", err)
+	}
+	staleRevision := int64(0)
+	recovered, transitioned, err = messageRepo.PersistCheckpointAndTransitionActiveRun(context.Background(), session.ID, userID, runID, recoverySummary, message.ID+1, ChatRunTransitionInput{
+		RunID: runID, Status: "completed", TerminalEvent: json.RawMessage(`{"event":"compaction_complete","data":{"compacted":true}}`), ExpiresAt: time.Now().Add(3 * time.Minute),
+	}, &staleRevision)
+	if err != nil || transitioned || recovered.Status != record.Status || !reflect.DeepEqual(recovered.TerminalEvent, record.TerminalEvent) {
+		t.Fatalf("recover terminal compaction after selection change = transitioned:%v record:%+v err:%v", transitioned, recovered, err)
+	}
+	var attemptCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM answer_attempts WHERE run_id = $1", runID).Scan(&attemptCount); err != nil || attemptCount != 0 {
+		t.Fatalf("compaction recovery attempts = %d err=%v", attemptCount, err)
 	}
 }
 

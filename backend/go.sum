@@ -64,8 +64,6 @@ github.com/cloudwego/base64x v0.1.6 h1:t11wG9AECkCDk5fMSoxmufanudBtJ+/HemLstXDLI
 github.com/cloudwego/base64x v0.1.6/go.mod h1:OFcloc187FXDaYHvrNIjxSe8ncn0OOM8gEHfghB2IPU=
 github.com/cloudwego/eino v0.9.13 h1:iD/ETS+lxnNp1VeNPqWVGPWdND6Dbf4LyINbLUlDRcM=
 github.com/cloudwego/eino v0.9.13/go.mod h1:OBD1mrkfkt/pJa4rkg1P0VnaMeOVl7l8IAdEqY//3IQ=
-github.com/cloudwego/eino-ext/components/model/claude v0.1.20 h1:0MXfcDfVszjj8jGEaegyCs7KFK5pA0TCEuZNgk0EeIM=
-github.com/cloudwego/eino-ext/components/model/claude v0.1.20/go.mod h1:bn+3SiK1LSlZq9J3y/ubAI4aZHtlrNJZ/dkBnmPgJu8=
 github.com/cloudwego/eino-ext/components/model/gemini v0.1.33 h1:LnzDQ3Psf0cPxvR5Ui070x9EPWyszIEifEHq7AJw8tw=
 github.com/cloudwego/eino-ext/components/model/gemini v0.1.33/go.mod h1:snXILkr06Zr2jm6WlqcWeytwiCramhNVPfxASgbjH40=
 github.com/cloudwego/eino-ext/components/model/openai v0.1.13 h1:5XHRTiTD5bt9KQrMHcfvuWNklEC3tpm3XHejdozt9vM=

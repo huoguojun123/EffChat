@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import type { LucideIcon } from "lucide-react"
 import { AlertTriangle, BadgeCheck, Check, ChevronDown, ChevronUp, Clock3, ListChecks, Loader2, MapPinned, Plus, RotateCcw, Save, ShieldOff, SlidersHorizontal, Trash2, UserRound } from "lucide-react"
 import {
-  compactSessionMemory,
   getSessionMemory,
-  retrySessionMemory,
+  memoryMaintenanceUrl,
   saveSessionMemory,
   undoSessionMemoryChange,
   type ModelTaskRun,
@@ -12,10 +11,13 @@ import {
   type SessionMemoryResponse,
   type SessionMemorySection,
 } from "@/api/sessions"
+import { getActiveRun } from "@/api/runs"
+import { handleAuthExpired } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { DialogFooter } from "@/components/ui/dialog"
 import { WorkspaceWindow } from "@/components/ui/workspace-window"
-import { cn } from "@/lib/utils"
+import { cn, safeUUID } from "@/lib/utils"
+import { consumeMemoryMaintenanceSSE, createStreamHTTPError } from "@/lib/sseProtocol"
 
 interface Props {
   open: boolean
@@ -80,12 +82,41 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
       } finally {
         if (!canceled) setLoading(false)
       }
+
+      // Load the durable memory snapshot before attaching to an active run.
+      // Running these requests in parallel lets a slower initial response
+      // overwrite the post-run refresh with stale sections.
+      try {
+        const { run } = await getActiveRun(sessionId!)
+        if (canceled || run?.kind !== "memory_maintenance" || run.status !== "running") return
+        setSaving(true)
+        setError(null)
+        const token = localStorage.getItem("token")
+        const res = await fetch(`/api/v1/sessions/${sessionId}/runs/${encodeURIComponent(run.run_id)}/resume?cursor=${run.cursor}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) throw await createStreamHTTPError(res, token)
+        if (!res.body) throw new Error("流式响应为空")
+        await consumeMemoryMaintenanceSSE(res)
+        if (canceled) return
+        const refreshed = await getSessionMemory(sessionId!)
+        if (canceled) return
+        setData(refreshed)
+        setSections(refreshed.sections)
+        onEnabledChange(refreshed.enabled)
+        onSeenChange(latestAutoChangeId(refreshed))
+        setSuccess("记忆维护已完成")
+      } catch (err) {
+        if (!canceled) setError(err instanceof Error ? err.message : "记忆维护恢复失败")
+      } finally {
+        if (!canceled) setSaving(false)
+      }
     }
     void loadMemory()
     return () => {
       canceled = true
     }
-  }, [open, sessionId, onSeenChange])
+  }, [open, sessionId, onEnabledChange, onSeenChange])
 
   function updateSection(index: number, next: SessionMemorySection) {
     setSections((prev) => prev.map((section, i) => (i === index ? next : section)))
@@ -150,36 +181,37 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
     }
   }
 
-  async function compact() {
-    if (!sessionId) return
+  async function runMaintenance(operation: "compact" | "retry") {
+    if (!sessionId || (operation === "retry" && changed)) return
     setSaving(true)
     setError(null)
     try {
-      const res = await compactSessionMemory(sessionId)
-      await reloadFromResponse(res)
-      setSuccess("会话记忆已整理")
+      const token = localStorage.getItem("token")
+      const runId = safeUUID()
+      const response = await fetch(memoryMaintenanceUrl(sessionId, operation, runId), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) handleAuthExpired(token)
+      if (!response.ok) throw await createStreamHTTPError(response, token)
+      if (!response.body) throw new Error("流式响应为空")
+      await consumeMemoryMaintenanceSSE(response)
+      await reloadFromResponse(await getSessionMemory(sessionId))
+      setSuccess(operation === "compact" ? "会话记忆已整理" : "记忆维护已重试")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "整理失败")
+      setError(err instanceof Error ? err.message : operation === "compact" ? "整理失败" : "重试失败")
       await reloadMemoryQuietly()
     } finally {
       setSaving(false)
     }
   }
 
+  async function compact() {
+    await runMaintenance("compact")
+  }
+
   async function retryMaintenance() {
-    if (!sessionId || changed) return
-    setSaving(true)
-    setError(null)
-    try {
-      const res = await retrySessionMemory(sessionId)
-      await reloadFromResponse(res)
-      setSuccess("记忆维护已重试")
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重试失败")
-      await reloadMemoryQuietly()
-    } finally {
-      setSaving(false)
-    }
+    await runMaintenance("retry")
   }
 
   function clearMemory() {

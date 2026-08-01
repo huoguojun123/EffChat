@@ -801,6 +801,11 @@ export function useSSE() {
     if (!run || run.status !== "running") return
     if (recoveringRunID && recoveringRunID !== run.run_id) return
 
+    // Memory maintenance has its own dialog-level observer. It must never be
+    // interpreted as a chat stream; closing the dialog simply leaves RunHub to
+    // finish and the next dialog open reloads the durable memory state.
+    if (run.kind === "memory_maintenance") return
+
     // 压缩 run 走独立分支：不进 streaming buffer，仅恢复“正在压缩”态，完成时刷新。
     if (run.kind === "compaction") {
       if (useChatStore.getState().compactionOwners[sessionId]) return

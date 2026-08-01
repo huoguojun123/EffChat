@@ -14,6 +14,7 @@ import (
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
 	"google.golang.org/genai"
 )
 
@@ -105,6 +106,14 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 	anthropicResponse := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{
 		"Retry-After": []string{"120"},
 	}}
+	transportClient := providerhttp.NewAnthropicSingleAttemptClient(roundTripFuncForAgentTest(func(*http.Request) (*http.Response, error) {
+		return nil, syscall.ECONNREFUSED
+	}))
+	transportResponse, err := transportClient.Get("https://provider.invalid/v1/messages")
+	if err != nil {
+		t.Fatalf("create synthetic Anthropic transport response: %v", err)
+	}
+	defer transportResponse.Body.Close()
 	cases := []struct {
 		name       string
 		err        error
@@ -156,6 +165,14 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 			retryAfter: maxModelRetryDelay,
 		},
 		{
+			name:      "anthropic synthetic transport error",
+			err:       &anthropic.Error{StatusCode: transportResponse.StatusCode, Response: transportResponse},
+			code:      "model_connection_failed",
+			category:  RuntimeErrorConnection,
+			retryable: true,
+			status:    599,
+		},
+		{
 			name:      "gemini access denied",
 			err:       genai.APIError{Code: http.StatusForbidden},
 			code:      "model_access_denied",
@@ -190,6 +207,12 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 			}
 		})
 	}
+}
+
+type roundTripFuncForAgentTest func(*http.Request) (*http.Response, error)
+
+func (f roundTripFuncForAgentTest) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestClassifyModelRuntimeErrorExposesOnlySafeUpstreamDiagnostics(t *testing.T) {

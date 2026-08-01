@@ -21,6 +21,10 @@ require (
 	google.golang.org/genai v1.65.0
 )
 
+// Keep the public Eino Claude adapter API while applying the narrowly scoped
+// stream race fix documented in third_party/eino-claude/UPSTREAM.md.
+replace github.com/cloudwego/eino-ext/components/model/claude => ./third_party/eino-claude
+
 require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/auth v0.9.3 // indirect

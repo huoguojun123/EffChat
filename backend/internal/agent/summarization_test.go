@@ -53,6 +53,13 @@ func TestBuildCompactionSummaryMessage_SharedPostprocess(t *testing.T) {
 	}
 }
 
+func TestExtractSummarySectionDropsOrphanAnalysisTail(t *testing.T) {
+	raw := "write in Chinese</analysis>\n<summary>有效摘要"
+	if got := extractSummarySection(raw); got != "有效摘要" {
+		t.Fatalf("extractSummarySection() = %q, want 有效摘要", got)
+	}
+}
+
 func TestBuildCompactionSummaryBody_TruncatesOversizedSummary(t *testing.T) {
 	raw := "<summary>" + strings.Repeat("长", compactionSummaryMaxChars+100) + "</summary>"
 	body := buildCompactionSummaryBody(raw, nil)

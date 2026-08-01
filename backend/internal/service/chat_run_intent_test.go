@@ -47,6 +47,8 @@ func TestBuildOperationIntentsCannotCollideAcrossActions(t *testing.T) {
 	retry := BuildRetryRunIntent(42)
 	editedRetry := BuildEditRetryRunIntent(42, "changed")
 	compaction := BuildCompactionRunIntent("auto", "high", 0)
+	memoryCompact := BuildMemoryMaintenanceRunIntent(RunOperationMemoryCompact)
+	memoryRetry := BuildMemoryMaintenanceRunIntent(RunOperationMemoryRetry)
 	if retry.Operation != RunOperationRetry || retry.RetryTargetMessageID != 42 {
 		t.Fatalf("retry intent = %+v", retry)
 	}
@@ -56,9 +58,21 @@ func TestBuildOperationIntentsCannotCollideAcrossActions(t *testing.T) {
 	if editedRetry.Operation != RunOperationRetry || editedRetry.RetryTargetMessageID != 42 {
 		t.Fatalf("edited retry intent = %+v", editedRetry)
 	}
-	if retry.Hash == "" || editedRetry.Hash == "" || compaction.Hash == "" ||
-		retry.Hash == editedRetry.Hash || retry.Hash == compaction.Hash || editedRetry.Hash == compaction.Hash {
-		t.Fatalf("operation hashes = retry:%q edited:%q compaction:%q", retry.Hash, editedRetry.Hash, compaction.Hash)
+	if memoryCompact.Operation != RunOperationMemoryCompact || memoryRetry.Operation != RunOperationMemoryRetry {
+		t.Fatalf("memory intents = compact:%+v retry:%+v", memoryCompact, memoryRetry)
+	}
+	hashes := map[string]struct{}{}
+	for name, intent := range map[string]RunIntent{
+		"retry": retry, "edited retry": editedRetry, "compaction": compaction,
+		"memory compact": memoryCompact, "memory retry": memoryRetry,
+	} {
+		if intent.Hash == "" {
+			t.Fatalf("%s intent has empty hash", name)
+		}
+		if _, exists := hashes[intent.Hash]; exists {
+			t.Fatalf("%s intent reused hash %q", name, intent.Hash)
+		}
+		hashes[intent.Hash] = struct{}{}
 	}
 }
 
@@ -125,5 +139,42 @@ func TestRunHubRestoresDurableTerminalEvent(t *testing.T) {
 	defer cleanup()
 	if ch != nil || len(events) != 1 || events[0].Event != "message_complete" {
 		t.Fatalf("restored events = %+v channel=%v", events, ch)
+	}
+}
+
+func TestRunHubRestoresServerRestartReconciliation(t *testing.T) {
+	hub := NewRunHub(time.Minute, 1<<20)
+	intent := BuildSendRunIntent(&model.Session{MessageFormat: "v1"}, &SendMessageRequest{Content: "resume after restart"})
+	now := time.Now()
+	event, err := json.Marshal(map[string]interface{}{
+		"event": "error",
+		"data": map[string]interface{}{
+			"error": "服务已重启，请重试", "code": "server_restarted", "retryable": true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := repository.ChatRunRecord{
+		RunID: "reconciled-terminal", UserID: 2, SessionID: 1, Kind: RunKindChat,
+		Operation: intent.Operation, IntentVersion: intent.Version, IntentHash: intent.Hash,
+		Status: RunStatusFailed, PublicErrorCode: "server_restarted", PublicErrorMessage: "服务已重启，请重试",
+		TerminalEvent: event, AcceptedAt: now, TerminalAt: &now, ExpiresAt: now.Add(time.Minute),
+	}
+
+	snapshot, err := hub.RestoreTerminal(record, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != RunStatusFailed || snapshot.ErrorCode != "server_restarted" || snapshot.Error != "服务已重启，请重试" {
+		t.Fatalf("restored restart snapshot = %+v", snapshot)
+	}
+	events, subscriber, cleanup, _, err := hub.EventsAfter(record.RunID, record.SessionID, record.UserID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if subscriber != nil || len(events) != 1 || events[0].Event != "error" {
+		t.Fatalf("restored restart events = %+v channel=%v", events, subscriber)
 	}
 }

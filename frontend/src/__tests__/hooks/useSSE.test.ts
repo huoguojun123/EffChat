@@ -242,6 +242,26 @@ describe("useSSE", () => {
     expect(mocks.store.syncMessages).toHaveBeenCalledWith([])
   })
 
+  it("leaves memory maintenance recovery to the memory dialog", async () => {
+    mocks.getActiveRun.mockResolvedValue({
+      run: {
+        run_id: "memory-resume",
+        session_id: 1,
+        kind: "memory_maintenance",
+        status: "running",
+        cursor: 3,
+      },
+    })
+
+    const { resumeActiveRun } = useSSE()
+    await resumeActiveRun(1)
+
+    expect(mocks.getActiveRun).toHaveBeenCalledWith(1)
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+    expect(mocks.store.beginCompaction).not.toHaveBeenCalled()
+    expect(mocks.store.updateStreaming).not.toHaveBeenCalled()
+  })
+
   it("reconnects a recovering run with the current durable snapshot", async () => {
     mocks.store.streaming = {
       status: "recovering",

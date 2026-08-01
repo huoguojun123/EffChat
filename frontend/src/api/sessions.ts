@@ -157,12 +157,8 @@ export function saveSessionMemory(id: number, data: { enabled?: boolean; section
   return api.put<SessionMemoryResponse>(`/sessions/${id}/memory`, data)
 }
 
-export function compactSessionMemory(id: number) {
-  return api.post<SessionMemoryResponse>(`/sessions/${id}/memory/compact`, {})
-}
-
-export function retrySessionMemory(id: number) {
-  return api.post<SessionMemoryResponse>(`/sessions/${id}/memory/retry`, {})
+export function memoryMaintenanceUrl(id: number, operation: "compact" | "retry", clientRunId: string) {
+  return `/api/v1/sessions/${id}/memory/${operation}?client_run_id=${encodeURIComponent(clientRunId)}`
 }
 
 export function undoSessionMemoryChange(sessionId: number, changeId: number) {

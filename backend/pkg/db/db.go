@@ -11,7 +11,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const RequiredSchemaVersion = "041_conversation_search.sql"
+const RequiredSchemaVersion = "042_memory_maintenance_runs.sql"
 
 func VerifySchemaVersion(ctx context.Context, database *sql.DB) (string, error) {
 	var compatible bool

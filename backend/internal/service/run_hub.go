@@ -20,8 +20,9 @@ const (
 )
 
 const (
-	RunKindChat       = "chat"
-	RunKindCompaction = "compaction"
+	RunKindChat              = "chat"
+	RunKindCompaction        = "compaction"
+	RunKindMemoryMaintenance = "memory_maintenance"
 )
 
 var (
@@ -816,6 +817,8 @@ func legacyRunIntent(kind string) RunIntent {
 	operation := RunOperationSend
 	if kind == RunKindCompaction {
 		operation = RunOperationCompaction
+	} else if kind == RunKindMemoryMaintenance {
+		operation = RunOperationMemoryCompact
 	}
 	return RunIntent{Operation: operation}
 }

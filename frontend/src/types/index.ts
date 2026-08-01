@@ -128,7 +128,7 @@ export interface ActiveRunSnapshot {
   run_id: string
   session_id: number
   user_message_id: number
-  kind?: "chat" | "compaction"
+  kind?: "chat" | "compaction" | "memory_maintenance"
   status: "running" | "completed" | "failed" | "canceled"
   cursor: number
   content: string
@@ -145,7 +145,7 @@ export interface ActiveRunSnapshot {
 export interface DurableRunStatus {
   run_id: string
   session_id: number
-  kind: "chat" | "compaction"
+  kind: "chat" | "compaction" | "memory_maintenance"
   status: "running" | "completed" | "failed" | "canceled"
   user_message_id?: number
   terminal_message_id?: number

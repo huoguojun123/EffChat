@@ -106,10 +106,13 @@ func normalizeChatRunReservation(input ChatRunReservationInput) (ChatRunReservat
 		input.Operation = "send"
 		if input.Kind == "compaction" {
 			input.Operation = "compaction"
+		} else if input.Kind == "memory_maintenance" {
+			input.Operation = "memory_compact"
 		}
 	}
 	validOperation := input.Kind == "chat" && (input.Operation == "send" || input.Operation == "retry")
 	validOperation = validOperation || input.Kind == "compaction" && input.Operation == "compaction"
+	validOperation = validOperation || input.Kind == "memory_maintenance" && (input.Operation == "memory_compact" || input.Operation == "memory_retry")
 	if !validOperation || input.IntentVersion < 0 || (input.IntentVersion > 0 && input.IntentHash == "") {
 		return input, fmt.Errorf("invalid chat run intent")
 	}

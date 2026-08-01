@@ -262,6 +262,16 @@ func extractSummarySection(s string) string {
 			}
 		}
 	}
+	// Some reasoning-capable gateways move the opening <analysis> portion into
+	// their reasoning field but leak its closing tag and final draft tail into
+	// ordinary content. Treat only the leading prefix before that orphan close
+	// as reasoning; the remainder is still passed through the summary extractor
+	// so a following provider envelope is normalized as usual.
+	if close := strings.Index(lower, "</analysis>"); close >= 0 {
+		if stripped := strings.TrimSpace(s[close+len("</analysis>"):]); stripped != "" {
+			return extractSummarySection(stripped)
+		}
+	}
 	return s
 }
 

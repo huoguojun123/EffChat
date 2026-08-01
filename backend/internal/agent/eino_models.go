@@ -10,6 +10,7 @@ import (
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
 	"github.com/huoguojun123/EffChat/internal/service"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 	"google.golang.org/genai"
@@ -55,9 +56,10 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			maxOutput = modelbank.GetOrDefault(req.ModelID, req.Provider).Capabilities.MaxOutput
 		}
 		cfg := &claude.Config{
-			APIKey:    channel.APIKey,
-			Model:     req.ModelID,
-			MaxTokens: resolveClaudeMaxTokens(req.MaxTokens, maxOutput),
+			APIKey:     channel.APIKey,
+			Model:      req.ModelID,
+			MaxTokens:  resolveClaudeMaxTokens(req.MaxTokens, maxOutput),
+			HTTPClient: providerhttp.NewAnthropicSingleAttemptClient(nil),
 		}
 		if channel.BaseURL != "" {
 			baseURL := channel.BaseURL

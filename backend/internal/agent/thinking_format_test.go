@@ -240,6 +240,20 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		}
 	})
 
+	t.Run("deepseek v4 is explicitly disabled", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "deepseek-ai/DeepSeek-V4-Flash"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider:         "deepseek",
+			ModelID:          "deepseek-ai/DeepSeek-V4-Flash",
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" || cfg.ReasoningEffort != "" {
+			t.Fatalf("suppressed DeepSeek fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
+		}
+	})
+
 	t.Run("openai reasoning token field", func(t *testing.T) {
 		req := &ChatRequest{
 			Provider:         "openai",

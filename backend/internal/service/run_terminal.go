@@ -2,18 +2,27 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"time"
 
 	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
-const runFinalizationTimeout = 5 * time.Second
+const (
+	runFinalizationTimeout         = 5 * time.Second
+	terminalRecoveryInitialBackoff = 25 * time.Millisecond
+	terminalRecoveryMaxBackoff     = time.Second
+)
 
 type RunCancelCause string
 
@@ -395,6 +404,9 @@ func (h *RunHub) transition(ctx context.Context, runID string, commit RunTermina
 	if terminal.Status != RunStatusCompleted && terminal.Status != RunStatusFailed && terminal.Status != RunStatusCanceled {
 		return nil, false, nil, fmt.Errorf("invalid terminal status %q", terminal.Status)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	h.mu.RLock()
 	state := h.runs[runID]
 	h.mu.RUnlock()
@@ -470,19 +482,10 @@ func (h *RunHub) transition(ctx context.Context, runID string, commit RunTermina
 			TerminalEvent:      terminalEvent,
 			ExpiresAt:          time.Now().Add(h.ttl),
 		}
-		if commit != nil {
-			record, transitioned, err = commit(ctx, input)
-		} else {
-			record, transitioned, err = store.TransitionChatRun(ctx, input)
-		}
+		record, transitioned, useStore, err = persistFrozenRunTerminal(ctx, store, durable, commit, input)
 		if err != nil {
-			if commit == nil && errors.Is(err, repository.ErrNotFound) && !durable {
-				useStore = false
-				transitioned = true
-			} else {
-				h.clearFinishing(state)
-				return nil, false, nil, err
-			}
+			h.clearFinishing(state)
+			return nil, false, nil, err
 		}
 	}
 
@@ -531,6 +534,98 @@ func (h *RunHub) transition(ctx context.Context, runID string, commit RunTermina
 	}
 	h.closeSubscribersLocked(state)
 	return cloneStateSnapshot(state), transitioned, terminalEvent, nil
+}
+
+// persistFrozenRunTerminal is the durable half of a terminal transition.
+//
+// The caller has already set finishing and still owns transitionMu. That freeze
+// is intentional: after the terminal decision is formed, Cancel and Record must
+// not replace it while a retryable database/network failure is being recovered.
+// We keep retrying the original commit (rather than manufacturing a second
+// failure terminal), and publish the canonical stored record only after it is
+// durable. If the process exits during recovery, startup reconciliation turns
+// the remaining durable running row into the existing server_restarted terminal.
+func persistFrozenRunTerminal(ctx context.Context, store chatRunStore, durable bool, commit RunTerminalCommit, input repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, bool, error) {
+	for retry := 0; ; retry++ {
+		attemptCtx := ctx
+		cancel := func() {}
+		if retry > 0 {
+			attemptCtx, cancel = context.WithTimeout(context.Background(), runFinalizationTimeout)
+		}
+
+		var (
+			record       repository.ChatRunRecord
+			transitioned bool
+			err          error
+		)
+		if commit != nil {
+			record, transitioned, err = commit(attemptCtx, input)
+		} else {
+			record, transitioned, err = store.TransitionChatRun(attemptCtx, input)
+		}
+		cancel()
+		if err == nil {
+			if retry > 0 {
+				logger.Info("terminal persistence recovered: run_id=%q attempts=%d", input.RunID, retry+1)
+			}
+			return record, transitioned, true, nil
+		}
+		if commit == nil && errors.Is(err, repository.ErrNotFound) && !durable {
+			return repository.ChatRunRecord{}, true, false, nil
+		}
+		if !isRetryableTerminalPersistenceError(err) {
+			return repository.ChatRunRecord{}, false, true, err
+		}
+		attempt := retry + 1
+		if attempt == 1 || attempt&(attempt-1) == 0 {
+			logger.Error("terminal persistence pending: run_id=%q attempts=%d err=%v", input.RunID, attempt, err)
+		}
+
+		// The initial caller context commonly belongs to a completed worker. Once
+		// the terminal decision is frozen, every retry must get a fresh bounded
+		// context so its cancellation cannot strand the durable running record.
+		time.Sleep(terminalRecoveryBackoff(retry))
+	}
+}
+
+func terminalRecoveryBackoff(retry int) time.Duration {
+	delay := terminalRecoveryInitialBackoff
+	for step := 0; step < retry && delay < terminalRecoveryMaxBackoff; step++ {
+		delay *= 2
+	}
+	if delay > terminalRecoveryMaxBackoff {
+		return terminalRecoveryMaxBackoff
+	}
+	return delay
+}
+
+func isRetryableTerminalPersistenceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	var sqlErr interface{ SQLState() string }
+	if !errors.As(err, &sqlErr) {
+		return false
+	}
+	state := sqlErr.SQLState()
+	if len(state) < 2 {
+		return false
+	}
+	switch state[:2] {
+	case "08", "40", "53", "57", "58":
+		return true
+	default:
+		return false
+	}
 }
 
 func preservesIncompleteMessageCompletion(terminal RunTerminal) bool {
@@ -655,6 +750,13 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 				}
 				return terminal
 			}
+			if kind == RunKindMemoryMaintenance {
+				if terminal.Event == "" {
+					terminal.Event = "memory_maintenance_canceled"
+					terminal.Data = map[string]interface{}{"reason": "canceled"}
+				}
+				return terminal
+			}
 			if terminal.Event == "" {
 				terminal.Event = "message_complete"
 				terminal.Data = map[string]interface{}{
@@ -695,9 +797,12 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 			terminal.Data = map[string]interface{}{
 				"message_id": terminal.TerminalMessageID, "finish_reason": "stop",
 			}
-		} else {
+		} else if kind == RunKindCompaction {
 			terminal.Event = "compaction_complete"
 			terminal.Data = map[string]interface{}{"compacted": true}
+		} else {
+			terminal.Event = "memory_maintenance_complete"
+			terminal.Data = map[string]interface{}{"updated": true}
 		}
 	}
 	return terminal
@@ -773,6 +878,9 @@ func fallbackStoredTerminalEvent(record repository.ChatRunRecord) (string, inter
 	if record.Status == RunStatusCompleted {
 		if record.Operation == RunOperationCompaction || record.Kind == RunKindCompaction {
 			return "compaction_complete", map[string]interface{}{"compacted": true}
+		}
+		if record.Kind == RunKindMemoryMaintenance {
+			return "memory_maintenance_complete", map[string]interface{}{"updated": true}
 		}
 		return "message_complete", map[string]interface{}{"message_id": record.TerminalMessageID, "finish_reason": "stop"}
 	}

@@ -53,6 +53,10 @@ func (a *EinoAgent) PrepareCompaction(setupCtx context.Context, req *ChatRequest
 	}
 
 	compressionReq := taskModelRequest(req, compactionMaxOutputTokens)
+	// Compaction is a bounded utility call whose content is persisted as future
+	// conversation context. Optional provider thinking must not consume the
+	// summary allowance or become durable user-visible checkpoint text.
+	compressionReq.SuppressThinking = true
 	chatModel, err := a.buildChatModel(setupCtx, compressionReq, modelbank.SearchDecision{})
 	if err != nil {
 		return nil, err
@@ -98,6 +102,10 @@ func (a *EinoAgent) RunPreparedCompaction(runCtx context.Context, prepared *Prep
 	if err := validateCompactionCompletion(prepared.profile.Provider, prepared.profile.ModelID, result); err != nil {
 		return nil, err
 	}
+	// Some OpenAI-compatible gateways can still return legacy <think> blocks as
+	// ordinary content even when the request disables thinking. Separate that
+	// material before the checkpoint consumer extracts and persists the summary.
+	stripInlineThink(result)
 	if result == nil || result.Content == "" {
 		return nil, fmt.Errorf("compaction produced empty summary")
 	}

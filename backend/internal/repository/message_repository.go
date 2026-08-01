@@ -253,6 +253,15 @@ func (r *MessageRepository) CreateBatchAndTransitionActiveRun(ctx context.Contex
 		return ChatRunRecord{}, false, err
 	}
 	if err := lockActiveChatRun(ctx, tx, runID, sessionID, userID); err != nil {
+		if errors.Is(err, ErrChatRunTerminal) {
+			record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+			if loadErr != nil {
+				return ChatRunRecord{}, false, loadErr
+			}
+			if terminal {
+				return record, false, nil
+			}
+		}
 		return ChatRunRecord{}, false, err
 	}
 	attempt, hasAttempt, err := answerAttemptForRunTx(ctx, tx, runID)
@@ -820,6 +829,9 @@ func (r *MessageRepository) ListConversationTurns(sessionID int64, limit int, be
 }
 
 func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindowMode, targetTurnID int64, turnLimit int) (*MessageWindow, error) {
+	if mode == "" {
+		mode = MessageWindowLatest
+	}
 	if turnLimit <= 0 {
 		turnLimit = 16
 	}
@@ -832,26 +844,55 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		return nil, err
 	}
 	window := &MessageWindow{}
-	if len(turnIDs) == 0 {
-		return window, nil
-	}
-	window.FirstTurnID = turnIDs[0]
-	window.LastTurnID = turnIDs[len(turnIDs)-1]
+	includeCheckpoint := false
+	if len(turnIDs) > 0 {
+		window.FirstTurnID = turnIDs[0]
+		window.LastTurnID = turnIDs[len(turnIDs)-1]
 
-	if err := r.db.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1 FROM messages
-			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
-			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
-			  AND id < $2
-		), EXISTS (
-			SELECT 1 FROM messages
-			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
-			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
-			  AND id > $3
-		)
-	`, sessionID, window.FirstTurnID, window.LastTurnID).Scan(&window.HasOlder, &window.HasNewer); err != nil {
-		return nil, fmt.Errorf("inspect message window boundaries: %w", err)
+		if err := r.db.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM messages
+				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				  AND id < $2
+			), EXISTS (
+				SELECT 1 FROM messages
+				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				  AND id > $3
+			)
+		`, sessionID, window.FirstTurnID, window.LastTurnID).Scan(&window.HasOlder, &window.HasNewer); err != nil {
+			return nil, fmt.Errorf("inspect message window boundaries: %w", err)
+		}
+		// Compression changes the Agent context, not the user's visible history.
+		// Attach the active checkpoint to the one UI page containing the final
+		// user turn it compressed, so the divider keeps its logical position
+		// without replacing old messages or appearing on multiple pages.
+		var checkpointAnchor sql.NullInt64
+		if err := r.db.QueryRow(`
+			SELECT MAX(history.id)
+			FROM messages checkpoint
+			JOIN messages history
+			  ON history.compression_summary_id = checkpoint.id
+			 AND history.id <> checkpoint.id
+			WHERE checkpoint.session_id = $1
+			  AND checkpoint.deleted_at IS NULL
+			  AND checkpoint.compressed_at IS NULL
+			  AND COALESCE(checkpoint.message_data->'metadata'->>'compaction_summary', '') = 'true'
+			  AND history.deleted_at IS NULL
+			  AND history.role = 'user'
+			  AND COALESCE(history.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+		`, sessionID).Scan(&checkpointAnchor); err != nil {
+			return nil, fmt.Errorf("locate active checkpoint anchor: %w", err)
+		}
+		if checkpointAnchor.Valid {
+			for _, turnID := range turnIDs {
+				if turnID == checkpointAnchor.Int64 {
+					includeCheckpoint = true
+					break
+				}
+			}
+		}
 	}
 
 	query := fmt.Sprintf(`
@@ -872,10 +913,11 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		), window_messages AS (
 			SELECT *
 			FROM visible_messages
-			WHERE turn_id = ANY($2)
+			WHERE turn_id = ANY($2::BIGINT[])
 			   OR (
-				COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
-				AND logical_id BETWEEN $3 AND $4
+				$3
+				AND compressed_at IS NULL
+				AND COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
 			   )
 		)
 		SELECT id, session_id, schema_version, message_data, role,
@@ -884,7 +926,7 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		FROM window_messages
 		ORDER BY logical_id ASC, logical_rank ASC, id ASC
 	`, messageLogicalIDSQL, messageLogicalRankSQL)
-	rows, err := r.db.Query(query, sessionID, pq.Array(turnIDs), window.FirstTurnID, window.LastTurnID)
+	rows, err := r.db.Query(query, sessionID, pq.Array(turnIDs), includeCheckpoint)
 	if err != nil {
 		return nil, fmt.Errorf("list message window: %w", err)
 	}
@@ -1133,10 +1175,28 @@ func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.
 			return ChatRunRecord{}, false, err
 		}
 		if err := ensureAnswerSelectionRevision(answerSelectionRevision, expectedAnswerSelectionRevision); err != nil {
+			if errors.Is(err, ErrAnswerSelectionRevisionConflict) {
+				record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+				if loadErr != nil {
+					return ChatRunRecord{}, false, loadErr
+				}
+				if terminal {
+					return record, false, nil
+				}
+			}
 			return ChatRunRecord{}, false, err
 		}
 	}
 	if err := lockActiveChatRun(ctx, tx, runID, sessionID, userID); err != nil {
+		if errors.Is(err, ErrChatRunTerminal) {
+			record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+			if loadErr != nil {
+				return ChatRunRecord{}, false, loadErr
+			}
+			if terminal {
+				return record, false, nil
+			}
+		}
 		return ChatRunRecord{}, false, err
 	}
 	if input.Status == "completed" {
@@ -1164,10 +1224,10 @@ func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.
 }
 
 // UndoCompressionCheckpoint 撤销一次压缩检查点（原子事务）：
-//  1. 清除被该摘要压缩的所有消息的 compressed_at / compression_summary_id（恢复可见）
+//  1. 清除被该摘要压缩的所有消息的 compressed_at / compression_summary_id（恢复 Agent 原文上下文）
 //  2. 软删除摘要消息本身
 //
-// 返回被恢复的消息条数。撤销后 ListBySession 重新返回完整历史。
+// 返回被恢复的消息条数。UI 历史始终可见；撤销后 ListBySession 也重新返回完整原文。
 func (r *MessageRepository) UndoCompressionCheckpoint(sessionID, summaryMessageID int64) (int64, error) {
 	tx, err := r.db.Begin()
 	if err != nil {

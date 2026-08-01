@@ -137,6 +137,12 @@ func (s *extractSummarizer) Summarize(ctx context.Context, goal, title, content,
 		s.recordTaskRun(ctx, started, repository.ModelTaskStatusFailed, err)
 		return "", err
 	}
+	// OpenAI-compatible gateways may ignore the explicit thinking-disable
+	// request and return a legacy leading <think> block as ordinary content.
+	// Reuse the main chat boundary before enforcing the refinement output cap,
+	// otherwise hidden reasoning can consume the entire tool result while the
+	// useful summary is truncated away.
+	stripInlineThink(resp)
 	summary := strings.TrimSpace(resp.Content)
 	if summary == "" {
 		err = fmt.Errorf("extract summary empty")

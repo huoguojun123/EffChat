@@ -15,7 +15,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/service"
 )
 
-const acceptedRuntimeSnapshotVersion = 3
+const acceptedRuntimeSnapshotVersion = 4
 
 type AcceptedRuntimeSnapshot struct {
 	Version                int                              `json:"version"`
@@ -44,6 +44,7 @@ type AcceptedRuntimeSnapshot struct {
 	ExtractProviders       []string                         `json:"extract_providers,omitempty"`
 	SearchConfigChecksum   string                           `json:"search_config_checksum"`
 	SearchConfigState      service.SearchRuntimeConfigState `json:"search_config_state"`
+	ExtractSummaryState    service.RuntimeConfigState       `json:"extract_summary_state"`
 	MemoryState            service.RuntimeConfigState       `json:"memory_state"`
 	Checksum               string                           `json:"checksum"`
 }
@@ -113,12 +114,14 @@ type runtimeConfigMaterial struct {
 	CompressionContextThreshold int
 	ExtractSummaryEnabled       bool
 	ExtractSummaryModel         string
+	ExtractSummaryState         service.RuntimeConfigState
 	MemoryMaxChars              int
 }
 
 type runtimeExtractSummaryMaterial struct {
 	Enabled           bool
 	ConfiguredModelID string
+	State             service.RuntimeConfigState
 	Available         bool
 	Model             runtimeModelMaterial
 	Channel           runtimeChannelMaterial
@@ -165,6 +168,7 @@ func (a *EinoAgent) resolveAcceptedExtractSummaryRuntime(
 	material := runtimeExtractSummaryMaterial{
 		Enabled:           config.ExtractSummaryEnabled,
 		ConfiguredModelID: strings.TrimSpace(config.ExtractSummaryModel),
+		State:             config.ExtractSummaryState,
 	}
 	if !material.Enabled {
 		return nil, nil, material, nil
@@ -229,6 +233,7 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	currentReq.RuntimeSearchConfigState = service.SearchRuntimeConfigState{}
 	currentReq.RuntimeExtractSummaryEnabled = false
 	currentReq.RuntimeExtractSummaryModel = ""
+	currentReq.RuntimeExtractSummaryState = service.RuntimeConfigState{}
 	currentReq.RuntimeExtractSummaryModelInfo = nil
 	currentReq.RuntimeExtractSummaryChannel = nil
 	current, err := a.captureAcceptedRuntimeSnapshot(ctx, &currentReq)
@@ -254,6 +259,7 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	req.RuntimeSearchConfigState = currentReq.RuntimeSearchConfigState
 	req.RuntimeExtractSummaryEnabled = currentReq.RuntimeExtractSummaryEnabled
 	req.RuntimeExtractSummaryModel = currentReq.RuntimeExtractSummaryModel
+	req.RuntimeExtractSummaryState = currentReq.RuntimeExtractSummaryState
 	req.RuntimeExtractSummaryModelInfo = currentReq.RuntimeExtractSummaryModelInfo
 	req.RuntimeExtractSummaryChannel = currentReq.RuntimeExtractSummaryChannel
 	req.ContextWindow = expected.ContextWindow
@@ -364,6 +370,7 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	req.RuntimeSearchConfigState = searchRuntimeState
 	req.RuntimeExtractSummaryEnabled = configMaterial.ExtractSummaryEnabled
 	req.RuntimeExtractSummaryModel = configMaterial.ExtractSummaryModel
+	req.RuntimeExtractSummaryState = configMaterial.ExtractSummaryState
 	req.RuntimeExtractSummaryModelInfo = extractSummaryInfo
 	req.RuntimeExtractSummaryChannel = extractSummaryChannel
 	req.ContextWindow = modelMaterial.ContextWindow
@@ -404,6 +411,7 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 		ExtractProviders:       append([]string(nil), searchRuntime.CrawlerProviders...),
 		SearchConfigChecksum:   checksumValue("search", searchRuntime),
 		SearchConfigState:      searchRuntimeState,
+		ExtractSummaryState:    configMaterial.ExtractSummaryState,
 		MemoryState:            memoryState,
 	}
 	snapshot.Checksum = acceptedRuntimeChecksum(snapshot)

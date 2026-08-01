@@ -182,14 +182,32 @@ func (a *EinoAgent) resolveExtractSummaryRuntimeConfig(ctx context.Context, req 
 		return req.RuntimeExtractSummaryEnabled, strings.TrimSpace(req.RuntimeExtractSummaryModel), nil
 	}
 	if a != nil && a.configRepo != nil {
+		var degraded bool
 		var err error
-		enabled, err = a.configRepo.GetBoolContext(ctx, "extract_summary_enabled", enabled)
+		enabled, degraded, err = a.configRepo.GetPolicyBoolContext(ctx, "extract_summary_enabled", enabled)
 		if err != nil {
-			return false, "", err
+			if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+				return false, "", ctxErr
+			}
+			log.Printf("[web_extract] refinement policy unavailable, degrading to crawler result: err=%v", err)
+			return false, "", nil
 		}
-		modelID, err = a.configRepo.GetStringContext(ctx, "extract_summary_model", modelID)
+		if !enabled {
+			return false, "", nil
+		}
+		if degraded {
+			log.Printf("[web_extract] refinement policy degraded, using last-known-good enabled value")
+		}
+		modelID, degraded, err = a.configRepo.GetPolicyStringContext(ctx, "extract_summary_model", modelID)
 		if err != nil {
-			return false, "", err
+			if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+				return false, "", ctxErr
+			}
+			log.Printf("[web_extract] refinement model policy unavailable, degrading to crawler result: err=%v", err)
+			return false, "", nil
+		}
+		if degraded {
+			log.Printf("[web_extract] refinement model policy degraded, using last-known-good model")
 		}
 	}
 	return enabled, strings.TrimSpace(modelID), nil

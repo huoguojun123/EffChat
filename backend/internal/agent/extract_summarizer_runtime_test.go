@@ -129,6 +129,68 @@ func TestBuildExtractSummarizerKeepsAcceptedUnavailableRuntimeDegraded(t *testin
 	}
 }
 
+func TestBuildExtractSummarizerFailsClosedOnColdConfigFailure(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	configRepo := repository.NewConfigRepository(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close test database: %v", err)
+	}
+	agent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, configRepo, nil, nil, nil, nil, nil)
+
+	built, enabled, err := agent.buildExtractSummarizer(t.Context(), &ChatRequest{})
+	if err != nil {
+		t.Fatalf("cold policy failure should degrade the optional refiner, got %v", err)
+	}
+	if built != nil || enabled {
+		t.Fatalf("cold policy failure constructed a refiner: built=%T enabled=%v", built, enabled)
+	}
+}
+
+func TestRuntimeConfigMaterialMarksMalformedRefinementPolicyUnavailable(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	defer db.Close()
+	configRepo := repository.NewConfigRepository(db)
+	original, err := configRepo.Get("extract_summary_enabled")
+	if err != nil {
+		t.Fatalf("read original refinement policy: %v", err)
+	}
+	t.Cleanup(func() { _ = configRepo.Update("extract_summary_enabled", original.Value) })
+	if err := configRepo.Update("extract_summary_enabled", json.RawMessage(`"invalid"`)); err != nil {
+		t.Fatalf("seed malformed refinement policy: %v", err)
+	}
+	agent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, configRepo, nil, nil, nil, nil, nil)
+
+	material, err := agent.runtimeConfigMaterialContext(t.Context())
+	if err != nil {
+		t.Fatalf("runtime config material should degrade optional refinement: %v", err)
+	}
+	if material.ExtractSummaryEnabled || material.ExtractSummaryState.State != service.RuntimeStateUnavailable || material.ExtractSummaryState.Cause != "config_unavailable" {
+		t.Fatalf("malformed policy material=%+v", material)
+	}
+}
+
+func TestRuntimeConfigMaterialKeepsDisabledRefinementAfterParseFailure(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	defer db.Close()
+	configRepo := repository.NewConfigRepository(db)
+	if err := configRepo.Update("extract_summary_enabled", json.RawMessage(`false`)); err != nil {
+		t.Fatalf("disable refinement: %v", err)
+	}
+	agent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, configRepo, nil, nil, nil, nil, nil)
+	material, err := agent.runtimeConfigMaterialContext(t.Context())
+	if err != nil || material.ExtractSummaryEnabled || material.ExtractSummaryState.State != service.RuntimeStateDisabled {
+		t.Fatalf("prime disabled refinement material=%+v err=%v", material, err)
+	}
+	if err := configRepo.Update("extract_summary_enabled", json.RawMessage(`"invalid"`)); err != nil {
+		t.Fatalf("inject malformed refinement policy: %v", err)
+	}
+
+	material, err = agent.runtimeConfigMaterialContext(t.Context())
+	if err != nil || material.ExtractSummaryEnabled || material.ExtractSummaryState.State != service.RuntimeStateUnavailable || material.ExtractSummaryState.Cause != "last_known_good" {
+		t.Fatalf("degraded refinement policy reopened content sharing: material=%+v err=%v", material, err)
+	}
+}
+
 func TestBuildUtilityModelPreservesSetupDeadline(t *testing.T) {
 	db := testutil.OpenPostgresTestDB(t)
 	db.SetMaxOpenConns(1)

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"log"
 
 	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 	"github.com/huoguojun123/EffChat/internal/service"
@@ -67,6 +68,7 @@ func (a *EinoAgent) runtimeConfigMaterialContext(ctx context.Context) (runtimeCo
 		ExtractSummaryModel:   "claude-haiku-4-5",
 		MemoryMaxChars:        sessionmemory.DefaultLimits().MaxChars,
 	}
+	material.ExtractSummaryState = extractSummaryConfigState(true, service.RuntimeStateDefault, "", material.ExtractSummaryModel)
 	if a == nil {
 		return material, nil
 	}
@@ -91,19 +93,45 @@ func (a *EinoAgent) runtimeConfigMaterialContext(ctx context.Context) (runtimeCo
 		return runtimeConfigMaterial{}, err
 	}
 	material.MemoryMaxChars = limits.MaxChars
-	material.ExtractSummaryEnabled, err = a.configRepo.GetBoolContext(ctx, "extract_summary_enabled", material.ExtractSummaryEnabled)
+	var policyDegraded bool
+	material.ExtractSummaryEnabled, policyDegraded, err = a.configRepo.GetPolicyBoolContext(ctx, "extract_summary_enabled", material.ExtractSummaryEnabled)
 	if err != nil {
 		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
 			return runtimeConfigMaterial{}, ctxErr
 		}
-		return runtimeConfigMaterial{}, err
+		log.Printf("[web_extract] refinement policy unavailable during runtime admission: err=%v", err)
+		material.ExtractSummaryEnabled = false
+		material.ExtractSummaryState = extractSummaryConfigState(false, service.RuntimeStateUnavailable, "config_unavailable", material.ExtractSummaryModel)
+		return material, nil
 	}
-	material.ExtractSummaryModel, err = a.configRepo.GetStringContext(ctx, "extract_summary_model", material.ExtractSummaryModel)
+	var modelDegraded bool
+	material.ExtractSummaryModel, modelDegraded, err = a.configRepo.GetPolicyStringContext(ctx, "extract_summary_model", material.ExtractSummaryModel)
 	if err != nil {
 		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
 			return runtimeConfigMaterial{}, ctxErr
 		}
-		return runtimeConfigMaterial{}, err
+		log.Printf("[web_extract] refinement model policy unavailable during runtime admission: err=%v", err)
+		material.ExtractSummaryEnabled = false
+		material.ExtractSummaryState = extractSummaryConfigState(false, service.RuntimeStateUnavailable, "config_unavailable", material.ExtractSummaryModel)
+		return material, nil
+	}
+	switch {
+	case policyDegraded || modelDegraded:
+		material.ExtractSummaryState = extractSummaryConfigState(material.ExtractSummaryEnabled, service.RuntimeStateUnavailable, "last_known_good", material.ExtractSummaryModel)
+	case !material.ExtractSummaryEnabled:
+		material.ExtractSummaryState = extractSummaryConfigState(false, service.RuntimeStateDisabled, "", material.ExtractSummaryModel)
+	default:
+		material.ExtractSummaryState = extractSummaryConfigState(true, service.RuntimeStateReady, "", material.ExtractSummaryModel)
 	}
 	return material, nil
+}
+
+func extractSummaryConfigState(enabled bool, state, cause, modelID string) service.RuntimeConfigState {
+	version := checksumValue("extract-summary-policy", struct {
+		Enabled bool
+		ModelID string
+		State   string
+		Cause   string
+	}{Enabled: enabled, ModelID: modelID, State: state, Cause: cause})
+	return service.RuntimeConfigState{State: state, Cause: cause, Version: version}
 }

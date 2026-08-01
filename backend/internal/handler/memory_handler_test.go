@@ -72,6 +72,26 @@ func TestMemoryUndoErrorClassificationUsesStablePublicMessage(t *testing.T) {
 	}
 }
 
+func TestParseSessionIDUsesStablePublicError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: "not-a-number"}}
+
+	if _, ok := parseSessionID(context); ok {
+		t.Fatal("invalid session id was accepted")
+	}
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "session_id_invalid" || body["retryable"] != false {
+		t.Fatalf("response = %#v", body)
+	}
+}
+
 func TestMemoryMaintenanceFailurePayloadUsesStableCodes(t *testing.T) {
 	budget, ok := memoryMaintenanceFailurePayload(fmt.Errorf("capacity detail: %w", agent.ErrMemoryMaintenanceOutputBudgetInsufficient))
 	if !ok || budget["code"] != "memory_output_budget_insufficient" || budget["retryable"] != false {

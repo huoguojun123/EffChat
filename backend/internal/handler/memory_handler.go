@@ -380,7 +380,7 @@ func memoryLimitsFromConfig(configRepo *repository.ConfigRepository) sessionmemo
 func parseSessionID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 		return 0, false
 	}
 	return id, true

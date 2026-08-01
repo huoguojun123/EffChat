@@ -160,7 +160,10 @@ func (r *PromptRepository) UpdateContext(ctx context.Context, p *model.Prompt) e
 	if err != nil {
 		return fmt.Errorf("failed to update prompt: %w", promptContextError(ctx, err))
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read updated prompt rows: %w", promptContextError(ctx, err))
+	}
 	if rows == 0 {
 		return fmt.Errorf("prompt not found or access denied: %w", ErrNotFound)
 	}
@@ -181,7 +184,10 @@ func (r *PromptRepository) UpdateShared(p *model.Prompt) error {
 	if err != nil {
 		return fmt.Errorf("failed to update prompt: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read updated shared prompt rows: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("prompt not found: %w", ErrNotFound)
 	}
@@ -193,7 +199,10 @@ func (r *PromptRepository) Delete(id, userID int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete prompt: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read deleted prompt rows: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("prompt not found or access denied: %w", ErrNotFound)
 	}
@@ -205,7 +214,10 @@ func (r *PromptRepository) DeleteShared(id int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete prompt: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to read deleted shared prompt rows: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("prompt not found: %w", ErrNotFound)
 	}
@@ -235,6 +247,9 @@ func (r *PromptRepository) scanPrompts(query string, args ...interface{}) ([]*mo
 		}
 		prompts = append(prompts, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate prompts: %w", err)
+	}
 	return prompts, nil
 }
 
@@ -249,7 +264,11 @@ func normalizePromptGroup(value string) string {
 func promptGroupNameForWrite(ctx context.Context, tx *sql.Tx, id int64, userID int64) (string, error) {
 	var name string
 	err := tx.QueryRowContext(ctx, `SELECT name FROM prompt_groups WHERE id = $1 AND user_id = $2 FOR SHARE`, id, userID).Scan(&name)
-	return name, promptContextError(ctx, err)
+	err = promptContextError(ctx, err)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return name, err
 }
 
 func promptContextError(ctx context.Context, err error) error {

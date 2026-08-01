@@ -143,6 +143,8 @@ Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导
 
 Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。
 
+管理员 User Group list/create/update/delete 复用稳定资源错误边界：ID、名称、描述、等级与配额限制校验为 400，名称重名及撤销/删除最后默认组的 invariant 冲突为 409，缺失资源为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。默认组 advisory-lock 与事务保护继续由 repository 持有；本契约不改变 effective group 解析、request context 传播或 partial PATCH 并发所有权。
+
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。

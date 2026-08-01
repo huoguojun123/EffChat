@@ -203,7 +203,7 @@ func GetModelsDevCatalogModelHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := strings.TrimSpace(modelIDParam(c))
 		if id == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "model id is required"})
+			writePublicError(c, http.StatusBadRequest, "models_dev_model_invalid", "model id is required", false)
 			return
 		}
 		provider := strings.ToLower(strings.TrimSpace(c.Query("provider")))
@@ -217,14 +217,14 @@ func GetModelsDevCatalogModelHandler() gin.HandlerFunc {
 		if provider != "" {
 			p, ok := catalog[provider]
 			if !ok {
-				c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found in models.dev catalog", provider)})
+				writePublicError(c, http.StatusNotFound, "models_dev_provider_not_found", "models.dev provider not found", false)
 				return
 			}
 			if meta, ok := p.Models[id]; ok {
 				c.JSON(http.StatusOK, gin.H{"model": modelsDevToModel(provider, id, meta, 0)})
 				return
 			}
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model %q not found in models.dev catalog provider %q", id, provider)})
+			writePublicError(c, http.StatusNotFound, "models_dev_model_not_found", "models.dev model not found", false)
 			return
 		}
 
@@ -239,7 +239,7 @@ func GetModelsDevCatalogModelHandler() gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model %q not found in models.dev catalog", id)})
+		writePublicError(c, http.StatusNotFound, "models_dev_model_not_found", "models.dev model not found", false)
 	}
 }
 

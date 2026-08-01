@@ -152,6 +152,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 管理员模型 probe 保持 `200 + ok=false` 的状态型失败协议，避免单个模型检测失败升级为管理后台全局异常；请求字段缺失为稳定 400，probe runtime 缺失为带 request ID 的 retryable 503。setup 和 provider stream 故障只返回稳定 code、retryable 与经 Agent 分类的安全 message/diagnostic，原始渠道、数据库、URL、密钥、响应正文和路径只进入内部日志。probe 仍只验证最小文本连通性；是否严格接受 `OK` 由独立的 probe 真阳性整改负责。
 
+models.dev 单模型目录查询对空 ID 返回 `models_dev_model_invalid` 400，对缺失 provider 或 model 返回稳定 404 code，均携带 `retryable=false` 且不回显用户输入；目录获取失败继续为带 request ID 的 retryable 502。该公共错误契约不改变缓存、目录导入、能力来源、退役标记或候选日 freshness 门禁，后者仍由模型目录生命周期独立负责。
+
 Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导入预览和 Git/Zip 更新共享领域错误出口：本地输入与 archive/selection 校验为稳定 400/413，Skill 或 Skill file 缺失为 404，无权启用为 403，来源或候选状态冲突为 409；Git 来源执行故障为带 request ID 的 retryable 502，repository、受管包存储和预览重建故障为带 request ID 的 retryable 5xx。服务层的 typed error 只携带刻意公开的文案，Git 输出、URL、数据库、路径和 wrapped cause 只进入内部日志。preview、create/update/delete 和 package owner 切换不得忽略 repository/path 查询失败；本契约不改变多 Skill 导入的 batch transaction 边界。
 
 Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。

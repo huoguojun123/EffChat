@@ -491,13 +491,13 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeFileLookupError(c, err)
 			return
 		}
 
@@ -505,7 +505,7 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		filename := f.FileName
 		contentType := f.FileType
 		if !strings.HasPrefix(f.FileType, "image/") && f.ExtractStatus != "ready" {
-			c.JSON(http.StatusConflict, gin.H{"error": "文件仍在解析中，暂不能下载；解析完成后请使用文本预览"})
+			writePublicError(c, http.StatusConflict, "file_content_pending", "文件仍在解析中，暂不能下载；解析完成后请使用文本预览", true)
 			return
 		}
 		if f.ExtractedTextPath != nil && strings.TrimSpace(*f.ExtractedTextPath) != "" && !strings.HasPrefix(f.FileType, "image/") {
@@ -513,13 +513,13 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			filename = f.FileName + ".txt"
 			contentType = "text/plain; charset=utf-8"
 		}
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-		c.Header("Content-Type", contentType)
 		path, err = filepolicy.ExistingPath(path)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "file storage is unavailable"})
+			writeServerError(c, http.StatusInternalServerError, "file_download_unavailable", "file storage is unavailable", err)
 			return
 		}
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		c.Header("Content-Type", contentType)
 		c.File(path)
 	}
 }
@@ -535,7 +535,7 @@ func ListFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		if rawSessionID := strings.TrimSpace(c.Query("session_id")); rawSessionID != "" {
 			sessionID, parseErr := strconv.ParseInt(rawSessionID, 10, 64)
 			if parseErr != nil || sessionID <= 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+				writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session_id", false)
 				return
 			}
 			if parseBoolQuery(c.Query("referenced")) {
@@ -549,7 +549,7 @@ func ListFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			files, err = fileRepo.ListByUser(userID, limit+1, offset)
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list files"})
+			writeServerError(c, http.StatusInternalServerError, "file_list_failed", "failed to list files", err)
 			return
 		}
 		if files == nil {
@@ -578,7 +578,7 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 		maxChars := parsePreviewMaxChars(c.Query("max_chars"))
@@ -586,7 +586,7 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeFileLookupError(c, err)
 			return
 		}
 		if strings.HasPrefix(f.FileType, "image/") {
@@ -594,21 +594,22 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 			return
 		}
 		if f.ExtractedTextPath == nil || strings.TrimSpace(*f.ExtractedTextPath) == "" {
-			c.JSON(http.StatusOK, gin.H{"file": f, "content": "", "next_cursor": "", "has_more": false, "truncated": false, "error": "no extracted text"})
+			retryable := f.ExtractStatus == "pending" || f.ExtractStatus == "ocr_pending" || f.ExtractStatus == "ocr_running"
+			c.JSON(http.StatusOK, gin.H{"file": f, "content": "", "next_cursor": "", "has_more": false, "truncated": false, "error": "no extracted text", "code": "file_text_unavailable", "retryable": retryable})
 			return
 		}
 		path, pathErr := filepolicy.ExistingPath(*f.ExtractedTextPath)
 		if pathErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read extracted text"})
+			writeServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", pathErr)
 			return
 		}
 		chunk, err := service.ReadFilePreviewChunk(path, cursor, maxChars)
 		if errors.Is(err, service.ErrInvalidPreviewCursor) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preview cursor"})
+			writePublicError(c, http.StatusBadRequest, "preview_cursor_invalid", "invalid preview cursor", false)
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read extracted text"})
+			writeServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -627,12 +628,12 @@ func RefreshOCRFileHandler(fileRepo *repository.FileRepository, channelService *
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeFileLookupError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, f)

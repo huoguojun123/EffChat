@@ -97,6 +97,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 ## 文件与 OCR
 
 - 文件元数据在 `files` 表，解析文本保存在受管理的数据目录。
+- 文件 list/download/preview/OCR refresh 的公共读取契约区分本地参数 400、用户域内缺失 404、解析未完成 409 与 repository/受管存储/sidecar 读取的带 request ID 5xx；缺失与无权访问保持不可区分。`ApiError` 保留后端 `code/retryable/request_id`，文件预览按稳定 code 展示缺失或暂无正文，并只在公共协议允许重试时提供重试入口，不再解析中英文错误字符串。列表扫描统一检查 `rows.Err()`，中途数据库故障不能伪装成部分成功结果。
 - 图片保留原图；文档类文件不承诺长期保留原始 PDF/Word。
 - PDF 当前策略是 MinerU 优先，本地 Python 解析兜底。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。

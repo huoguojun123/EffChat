@@ -1,4 +1,4 @@
-import { ApiError, api, fetchWithTimeout, handleAuthExpired, readApiErrorMessage } from "./client"
+import { api, fetchWithTimeout, handleAuthExpired, readApiError } from "./client"
 
 interface FileRecord {
   id: number
@@ -63,6 +63,8 @@ export interface FilePreview {
   hasMore: boolean
   isImage?: boolean
   error?: string
+  code?: string
+  retryable?: boolean
 }
 
 export interface UploadLimits {
@@ -151,7 +153,7 @@ export const filesApi = {
   async preview(id: number, maxChars = 16000, cursor = ""): Promise<FilePreview> {
     const params = new URLSearchParams({ max_chars: String(maxChars) })
     if (cursor) params.set("cursor", cursor)
-    const res = await api.get<{ file: FileRecord; content?: string; truncated?: boolean; next_cursor?: string; has_more?: boolean; is_image?: boolean; error?: string }>(`/files/${id}/preview?${params.toString()}`)
+    const res = await api.get<{ file: FileRecord; content?: string; truncated?: boolean; next_cursor?: string; has_more?: boolean; is_image?: boolean; error?: string; code?: string; retryable?: boolean }>(`/files/${id}/preview?${params.toString()}`)
     return {
       file: normalizeFile(res.file),
       content: res.content || "",
@@ -160,6 +162,8 @@ export const filesApi = {
       hasMore: Boolean(res.has_more),
       isImage: Boolean(res.is_image),
       error: res.error,
+      code: res.code,
+      retryable: res.retryable,
     }
   },
 
@@ -201,9 +205,9 @@ export async function fetchFileBlob(id: number): Promise<Blob> {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   }, 60000)
   if (!res.ok) {
-    const message = await readApiErrorMessage(res)
+    const error = await readApiError(res, `下载失败 (HTTP ${res.status})`)
     if (res.status === 401 && token) handleAuthExpired(token)
-    throw new ApiError(res.status, message || `下载失败 (HTTP ${res.status})`)
+    throw error
   }
   return res.blob()
 }

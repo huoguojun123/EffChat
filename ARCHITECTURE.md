@@ -161,6 +161,8 @@ Prompt Group list/create/update/delete 复用独立的资源错误边界：ID �
 
 注册与登录共享认证错误边界：注册用户名、邮箱、昵称、密码和 preferences 的本地约束为稳定 400，用户名或邮箱重名为 409，登录的未知账号与错误密码统一为 `invalid_credentials` 401，待审核或停用账号为受控 401，限流为带 `Retry-After` 的 retryable 429；repository、注册事务、密码哈希与 token 签发故障为带 request ID 的 retryable 5xx。注册在数据库查询和 bcrypt 前完成可判定输入校验，repository 在实际 registration unique constraint owner 保留 conflict 分类；首用户管理员、后续用户待审批和现有限流计数/重置算法不变。
 
+认证 middleware 在所有受保护 API 前重新读取当前活动账号与 auth version，不信任 token 中的用户名或角色。缺少/非法 Authorization header、无效 token、非法 claims 和已失效账号使用稳定 401 code，非管理员访问为稳定 403；账号状态 repository 故障为带 request ID 的 retryable 5xx，并保留底层 cause 供内部诊断而不进入响应。该契约不改变 JWT 七天有效期、legacy token 的 auth version 兼容或账号变更后的 run 取消行为。
+
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。

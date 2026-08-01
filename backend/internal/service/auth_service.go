@@ -279,7 +279,7 @@ func (s *AuthService) ResolveAuthenticatedUser(userID int64, authVersion int) (*
 		return nil, ErrAuthenticationUnavailable
 	}
 	if err != nil {
-		return nil, fmt.Errorf("resolve authenticated user: %w", ErrInternal)
+		return nil, errors.Join(ErrInternal, fmt.Errorf("resolve authenticated user: %w", err))
 	}
 	if authVersion <= 0 || user.AuthVersion != authVersion {
 		return nil, ErrAuthenticationUnavailable

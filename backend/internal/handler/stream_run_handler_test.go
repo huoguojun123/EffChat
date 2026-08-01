@@ -1115,6 +1115,7 @@ func TestReplayExistingRunWritesErrorForWrongScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest("GET", "/stream", nil)
+	c.Set("request_id", "req-replay")
 	writer, err := streaming.NewSSEWriter(c)
 	if err != nil {
 		t.Fatalf("new sse writer: %v", err)
@@ -1130,8 +1131,26 @@ func TestReplayExistingRunWritesErrorForWrongScope(t *testing.T) {
 	replayExistingRun(c, writer, runHub, 0, 99, 20, run.RunID, 0)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, "run_not_found") || strings.Contains(body, "run not found") {
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "run_not_found") || !strings.Contains(body, `"retryable":false`) || !strings.Contains(body, `"request_id":"req-replay"`) || !strings.Contains(body, `"run_id":"`+run.RunID+`"`) || strings.Contains(body, "run not found") {
 		t.Fatalf("wrong-scope replay should write error event: %q", body)
+	}
+}
+
+func TestRunSubscriptionFailureKeepsRecoveryMetadata(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/stream", nil)
+	ctx.Set("request_id", "req-subscribe")
+	writer, err := streaming.NewSSEWriter(ctx)
+	if err != nil {
+		t.Fatalf("new sse writer: %v", err)
+	}
+
+	writeRunSubscriptionFailed(ctx, writer, "run-subscribe", errors.New("internal subscription failure"))
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "stream_subscription_failed") || !strings.Contains(body, `"retryable":true`) || !strings.Contains(body, `"request_id":"req-subscribe"`) || !strings.Contains(body, `"run_id":"run-subscribe"`) || strings.Contains(body, "internal subscription failure") {
+		t.Fatalf("subscription failure payload = %q", body)
 	}
 }
 

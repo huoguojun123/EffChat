@@ -28,6 +28,8 @@ var (
 	ErrAccountInactive           = errors.New("account inactive")
 	ErrUserProfileInvalid        = errors.New("invalid user profile request")
 	ErrIncorrectOldPassword      = errors.New("incorrect old password")
+	ErrUserRegistrationInvalid   = errors.New("invalid user registration request")
+	ErrInvalidCredentials        = errors.New("invalid credentials")
 )
 
 func NewAuthService(userRepo *repository.UserRepository, jwtSecret string) *AuthService {
@@ -68,13 +70,35 @@ type RegisterResponse struct {
 
 // Register 用户注册
 func (s *AuthService) Register(req *RegisterRequest) (*RegisterResponse, error) {
+	if err := validateUsername(req.Username); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserRegistrationInvalid, err)
+	}
+	if err := validateUserPassword(req.Password); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserRegistrationInvalid, err)
+	}
+	nickname := req.Nickname
+	if err := validateUserNickname(&nickname); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserRegistrationInvalid, err)
+	}
+	email, err := normalizeOptionalEmail(&req.Email)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserRegistrationInvalid, err)
+	}
+	preferences, err := buildUserPreferences(req.Preferences)
+	if err != nil {
+		if errors.Is(err, ErrInternal) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %v", ErrUserRegistrationInvalid, err)
+	}
+
 	// 检查用户名是否已存在（区分"不存在"和真实 DB 错误）
 	existing, err := s.userRepo.GetByUsername(req.Username)
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
-		return nil, fmt.Errorf("failed to check username: %w", ErrInternal)
+		return nil, err
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("用户名已存在")
+		return nil, repository.ErrUserConflict
 	}
 
 	// 哈希密码
@@ -82,11 +106,6 @@ func (s *AuthService) Register(req *RegisterRequest) (*RegisterResponse, error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
-	preferences, err := buildUserPreferences(req.Preferences)
-	if err != nil {
-		return nil, err
-	}
-
 	// 创建用户
 	user := &model.User{
 		Username:     req.Username,
@@ -97,15 +116,15 @@ func (s *AuthService) Register(req *RegisterRequest) (*RegisterResponse, error) 
 		Preferences:  preferences,
 	}
 
-	if req.Email != "" {
-		user.Email = &req.Email
+	if email != nil {
+		user.Email = email
 	}
-	if req.Nickname != "" {
-		user.Nickname = &req.Nickname
+	if nickname != "" {
+		user.Nickname = &nickname
 	}
 
 	if err := s.userRepo.CreateRegistrationUser(user); err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", ErrInternal)
+		return nil, err
 	}
 
 	// 隐藏密码
@@ -203,8 +222,11 @@ func isPreferenceValue(value interface{}, depth int) bool {
 func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 	// 查找用户
 	user, err := s.userRepo.GetByUsername(req.Username)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrInvalidCredentials
+	}
 	if err != nil {
-		return nil, fmt.Errorf("账号或密码错误")
+		return nil, err
 	}
 
 	// 检查用户是否激活
@@ -214,7 +236,7 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 
 	// 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-		return nil, fmt.Errorf("账号或密码错误")
+		return nil, ErrInvalidCredentials
 	}
 
 	// 更新最后登录时间

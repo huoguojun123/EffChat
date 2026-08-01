@@ -341,19 +341,14 @@ func RegisterHandler(authService *service.AuthService, limiters ...*AuthRateLimi
 			return
 		}
 		if retryAfter, ok := limiter.Allow(requestClientIP(c), req.Username); !ok {
-			c.Header("Retry-After", retryAfterSeconds(retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+			writeAuthRateLimitError(c, retryAfter)
 			return
 		}
 
 		resp, err := authService.Register(&req)
 		if err != nil {
 			limiter.RecordFailure(requestClientIP(c), req.Username)
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAuthError(c, "register", err)
 			return
 		}
 		limiter.Reset(requestClientIP(c), req.Username)
@@ -372,20 +367,14 @@ func LoginHandler(authService *service.AuthService, limiters ...*AuthRateLimiter
 			return
 		}
 		if retryAfter, ok := limiter.Allow(requestClientIP(c), req.Username); !ok {
-			c.Header("Retry-After", retryAfterSeconds(retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+			writeAuthRateLimitError(c, retryAfter)
 			return
 		}
 
 		resp, err := authService.Login(&req)
 		if err != nil {
-			if errors.Is(err, service.ErrAccountInactive) {
-				limiter.RecordFailure(requestClientIP(c), req.Username)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "账号待审核或已停用"})
-				return
-			}
 			limiter.RecordFailure(requestClientIP(c), req.Username)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			writeAuthError(c, "login", err)
 			return
 		}
 		limiter.Reset(requestClientIP(c), req.Username)

@@ -520,8 +520,8 @@ func TestRegister_DuplicateUsername(t *testing.T) {
 
 	// Second register with same username
 	w = env.doRequest(http.MethodPost, "/api/v1/auth/register", body)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("duplicate register: want 400, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Errorf("duplicate register: want 409, got %d", w.Code)
 	}
 }
 

@@ -91,6 +91,9 @@ func (r *UserRepository) CreateRegistrationUser(user *model.User) error {
 		RETURNING id, auth_version, created_at, updated_at
 	`
 	if err := tx.QueryRow(query, user.Username, user.Email, user.PasswordHash, user.Nickname, user.Role, user.Permissions, user.Preferences, user.IsActive).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: username or email already exists", ErrUserConflict)
+		}
 		return fmt.Errorf("create registration user: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

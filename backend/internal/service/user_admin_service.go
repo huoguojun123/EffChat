@@ -110,7 +110,7 @@ func (s *UserAdminService) List(limit, offset int) ([]*UserResponse, int, error)
 }
 
 func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error) {
-	if err := validateAdminUsername(req.Username); err != nil {
+	if err := validateUsername(req.Username); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 	if err := validateUserPassword(req.Password); err != nil {
@@ -297,7 +297,7 @@ func validateRole(role string) error {
 	return nil
 }
 
-func validateAdminUsername(username string) error {
+func validateUsername(username string) error {
 	length := utf8.RuneCountInString(username)
 	if length < adminUsernameMinRunes || length > adminUsernameMaxRunes {
 		return fmt.Errorf("username must be between %d and %d characters", adminUsernameMinRunes, adminUsernameMaxRunes)

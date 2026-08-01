@@ -772,42 +772,46 @@ func DeleteFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 // 在物理清理后再次写入。
 func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		olderThanHours := parseBoundedPositiveInt(c.Query("older_than_hours"), 24, 1, 24*30)
-		limit := parseBoundedPositiveInt(c.Query("limit"), 100, 1, 1000)
+		olderThanHours, ok := parseCleanupBoundedPositiveInt(c, "older_than_hours", 24, 1, 24*30)
+		if !ok {
+			return
+		}
+		limit, ok := parseCleanupBoundedPositiveInt(c, "limit", 100, 1, 1000)
+		if !ok {
+			return
+		}
 		cutoff := time.Now().Add(-time.Duration(olderThanHours) * time.Hour)
 
 		now := time.Now()
+		referenced, err := fileRepo.CountStaleReferencedFiles(cutoff)
+		if err != nil {
+			writeServerError(c, http.StatusInternalServerError, "file_cleanup_reference_count_failed", "failed to count referenced files", err)
+			return
+		}
 		expiredOCR, err := fileRepo.ExpireStaleOCROriginals(cutoff, now, limit)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to expire OCR source files"})
+			writeServerError(c, http.StatusInternalServerError, "ocr_source_expire_failed", "failed to expire OCR source files", err)
 			return
 		}
 		claims, err := fileRepo.ClaimFilesForStorageCleanup(c.Request.Context(), cutoff, now, 2*time.Minute, limit)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to claim files for cleanup"})
-			return
-		}
-		referenced, err := fileRepo.CountStaleReferencedFiles(cutoff)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count referenced files"})
+			writeServerError(c, http.StatusInternalServerError, "file_cleanup_claim_failed", "failed to claim files for cleanup", err)
 			return
 		}
 
 		removed := 0
 		removedFileIDs := make(map[int64]struct{}, len(claims))
-		failures := make([]gin.H, 0)
+		failures := make([]fileCleanupFailure, 0)
 		for _, claim := range claims {
 			f := claim.File
 			if err := removeManagedFilePaths(f.FilePath, f.ExtractedTextPath, f.OCRSourcePath); err != nil {
 				logger.Error("failed to remove orphan file paths: file=%d path=%q err=%v", f.ID, f.FilePath, err)
-				_ = fileRepo.ReleaseFileStorageCleanupClaim(c.Request.Context(), f.ID, claim.Token)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to remove file paths"})
+				failures = append(failures, releaseOrCleanupFailure(c, fileRepo, f.ID, claim.Token, "file_cleanup_remove_failed", "failed to remove file paths"))
 				continue
 			}
 			if err := fileRepo.FinalizeFileStorageRemoval(c.Request.Context(), f.ID, claim.Token); err != nil {
 				logger.Error("failed to finalize orphan file cleanup: file=%d err=%v", f.ID, err)
-				_ = fileRepo.ReleaseFileStorageCleanupClaim(c.Request.Context(), f.ID, claim.Token)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to finalize file cleanup"})
+				failures = append(failures, releaseOrCleanupFailure(c, fileRepo, f.ID, claim.Token, "file_cleanup_finalize_failed", "failed to finalize file cleanup"))
 				continue
 			}
 			removed++
@@ -821,18 +825,18 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 			}
 			if err := removeManagedFilePaths("", nil, f.OCRSourcePath); err != nil {
 				logger.Error("failed to remove expired OCR source: file=%d err=%v", f.ID, err)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to remove OCR source"})
+				failures = append(failures, newFileCleanupFailure(f.ID, "ocr_source_remove_failed", "failed to remove OCR source"))
 				continue
 			}
 			if err := fileRepo.ClearOCRSourcePath(f.ID, f.UserID, valueOrEmpty(f.OCRSourcePath)); err != nil {
 				logger.Error("failed to clear expired OCR source path: file=%d err=%v", f.ID, err)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to finalize OCR source cleanup"})
+				failures = append(failures, newFileCleanupFailure(f.ID, "ocr_source_finalize_failed", "failed to finalize OCR source cleanup"))
 				continue
 			}
 			expiredRemoved++
 		}
 
-		c.JSON(http.StatusOK, gin.H{
+		payload := gin.H{
 			"marked":              len(claims),
 			"removed":             removed,
 			"failed":              len(failures),
@@ -841,7 +845,11 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 			"ocr_expired_count":   len(expiredOCR),
 			"ocr_expired_removed": expiredRemoved,
 			"older_than_hours":    olderThanHours,
-		})
+		}
+		if len(failures) > 0 && c.GetString("request_id") != "" {
+			payload["request_id"] = c.GetString("request_id")
+		}
+		c.JSON(http.StatusOK, payload)
 	}
 }
 

@@ -76,6 +76,8 @@ backend (Gin)
 
 会话详情、消息分页/turn/window、Markdown 导出，以及 Run/记忆入口的会话归属查询共享同一隐私边界：不存在与无权访问均公开为 `session_not_found`，但 PostgreSQL 和扫描故障必须保留到带 request ID 的 retryable 5xx，不能在 service 层压成 404。消息 window 的目标 turn 不存在使用独立 404；本地 cursor/limit/window 参数错误使用稳定 400。
 
+会话列表的 `limit/offset/folder_id` 同样是显式查询契约：limit 只接受 1–100，offset 必须非负，folder scope 只接受 `all`、`unfiled` 或正整数 ID；非法值统一返回 `session_list_query_invalid` 400，不静默回退默认分页。该校验不改变 `has_more/next_offset`、置顶排序、folder 归属或前端加载更多行为，repository 故障仍使用带 request ID 的 retryable `session_list_failed` 5xx。
+
 Run active/status/resume/cancel 入口先复用会话归属边界，再对 run id 和 replay cursor 做稳定 400 校验。durable reservation 或 RunHub 中的 run 缺失、跨会话或跨用户都收敛为 `run_not_found` 404，quota repository 和 stream writer 故障为带 request ID 的 retryable 5xx。RunHub 使用 typed not-found sentinel 仅支撑 HTTP 分类；SSE replay/gap、多订阅、terminal snapshot、停止幂等和 durable-first 生命周期不变。
 
 accepted run 的 HTTP fallback 与 durable terminal 使用同一公共错误 payload builder。取消或 setup-timeout 的 terminal 持久化失败、以及 execution owner 建立后 SSE writer 无法打开时，响应必须保留 request ID；后者还返回 run ID，提示客户端稍后恢复。该关联信息只用于追踪和恢复，不改变后台 worker 继续执行、terminal 重试、replay 或 exactly-once 所有权。

@@ -96,6 +96,38 @@ func TestSessionMutationErrorClassificationHidesInternalDetails(t *testing.T) {
 	}
 }
 
+func TestListSessionsRejectsInvalidQuery(t *testing.T) {
+	queries := []string{
+		"limit=0",
+		"limit=101",
+		"limit=not-a-number",
+		"offset=-1",
+		"offset=not-a-number",
+		"folder_id=0",
+		"folder_id=unknown",
+	}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/sessions?"+query, nil)
+
+			ListSessionsHandler(nil)(ctx)
+
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["code"] != "session_list_query_invalid" || body["retryable"] != false {
+				t.Fatalf("response = %#v", body)
+			}
+		})
+	}
+}
+
 func TestRuntimeModelErrorFallbackHidesInternalDetails(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)

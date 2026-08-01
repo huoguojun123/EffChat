@@ -30,6 +30,8 @@ until docker exec "$NAME" pg_isready -U effchat_test -d "$DATABASE" >/dev/null 2
 sleep 2
 until docker exec "$NAME" pg_isready -U effchat_test -d "$DATABASE" >/dev/null 2>&1; do sleep 1; done
 
+POSTGRES_CONTAINER="$NAME" DB_USER=effchat_test "$ROOT/scripts/test-migrations.sh"
+
 POSTGRES_CONTAINER="$NAME" DB_USER=effchat_test DB_PASSWORD="$PASSWORD" DB_NAME="$DATABASE" DB_SSLMODE=disable \
   "$ROOT/backend/migrations/init_db.sh"
 

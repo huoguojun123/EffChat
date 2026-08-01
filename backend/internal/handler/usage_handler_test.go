@@ -1,8 +1,13 @@
 package handler
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestParseUsageWindow(t *testing.T) {
@@ -16,6 +21,7 @@ func TestParseUsageWindow(t *testing.T) {
 		wantError  bool
 	}{
 		{name: "preset", rangeValue: "7d"},
+		{name: "invalid preset", rangeValue: "year", wantError: true},
 		{name: "custom", start: "2026-07-01T00:00:00+08:00", end: "2026-07-27T00:00:00+08:00", wantCustom: true},
 		{name: "inclusive current date boundary", start: "2026-07-27T00:00:00+08:00", end: "2026-07-28T00:00:00+08:00", wantCustom: true},
 		{name: "mixed modes", rangeValue: "30d", start: "2026-07-01T00:00:00+08:00", end: "2026-07-02T00:00:00+08:00", wantError: true},
@@ -35,5 +41,24 @@ func TestParseUsageWindow(t *testing.T) {
 				t.Fatalf("custom = %v, want %v", custom, tt.wantCustom)
 			}
 		})
+	}
+}
+
+func TestAdminUsageHandlerRejectsInvalidQuery(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage?range=year", nil)
+
+	AdminUsageHandler(nil)(context)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "invalid_usage_range" || body["retryable"] != false {
+		t.Fatalf("response = %#v", body)
 	}
 }

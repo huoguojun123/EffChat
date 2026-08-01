@@ -85,7 +85,7 @@ func UploadLimitsHandler(configRepo *repository.ConfigRepository) gin.HandlerFun
 	return func(c *gin.Context) {
 		limits, err := resolveUploadLimits(c.Request.Context(), configRepo)
 		if err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "文件上传策略暂不可用，请稍后重试", "code": "file_policy_unavailable"})
+			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
 			return
 		}
 		if limits.PolicyDegraded {

@@ -191,6 +191,10 @@ func TestUploadPolicyEndpointsFailClosedWhenConfigurationIsUnavailable(t *testin
 	}
 
 	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("request_id", "req-file-policy")
+		c.Next()
+	})
 	router.GET("/limits", UploadLimitsHandler(configRepo))
 	router.POST("/files", UploadFileHandler(nil, configRepo))
 
@@ -208,13 +212,18 @@ func TestUploadPolicyEndpointsFailClosedWhenConfigurationIsUnavailable(t *testin
 			t.Fatalf("%s %s status=%d, want %d (body: %s)", test.method, test.path, w.Code, http.StatusServiceUnavailable, w.Body.String())
 		}
 		var body struct {
-			Code string `json:"code"`
+			Code      string `json:"code"`
+			Retryable bool   `json:"retryable"`
+			RequestID string `json:"request_id"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode %s %s response: %v", test.method, test.path, err)
 		}
 		if body.Code != "file_policy_unavailable" {
 			t.Fatalf("%s %s code=%q, want file_policy_unavailable", test.method, test.path, body.Code)
+		}
+		if !body.Retryable || body.RequestID != "req-file-policy" {
+			t.Fatalf("%s %s response=%+v, want retryable request correlation", test.method, test.path, body)
 		}
 	}
 }

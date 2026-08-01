@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,9 @@ func TestSearchConversationsHandlerRejectsInvalidQueries(t *testing.T) {
 		"q=valid&scope=unknown",
 		"q=valid&scope=folder",
 		"q=valid&scope=folder&folder_id=0",
+		"q=valid&limit=0",
+		"q=valid&limit=51",
+		"q=valid&limit=not-a-number",
 	}
 	for _, query := range tests {
 		t.Run(query, func(t *testing.T) {
@@ -25,6 +29,13 @@ func TestSearchConversationsHandlerRejectsInvalidQueries(t *testing.T) {
 			SearchConversationsHandler(nil)(context)
 			if recorder.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["code"] != "conversation_search_query_invalid" || body["retryable"] != false {
+				t.Fatalf("response = %#v", body)
 			}
 		})
 	}

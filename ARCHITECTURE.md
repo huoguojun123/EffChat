@@ -141,6 +141,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导入预览和 Git/Zip 更新共享领域错误出口：本地输入与 archive/selection 校验为稳定 400/413，Skill 或 Skill file 缺失为 404，无权启用为 403，来源或候选状态冲突为 409；Git 来源执行故障为带 request ID 的 retryable 502，repository、受管包存储和预览重建故障为带 request ID 的 retryable 5xx。服务层的 typed error 只携带刻意公开的文案，Git 输出、URL、数据库、路径和 wrapped cause 只进入内部日志。preview、create/update/delete 和 package owner 切换不得忽略 repository/path 查询失败；本契约不改变多 Skill 导入的 batch transaction 边界。
 
+Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。
+
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。

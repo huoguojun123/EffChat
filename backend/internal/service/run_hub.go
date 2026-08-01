@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +26,7 @@ const (
 
 var (
 	ErrRunIDConflict     = errors.New("run_id conflict")
+	ErrRunNotFound       = errors.New("run not found")
 	ErrSessionRunActive  = errors.New("session run active")
 	ErrServerDraining    = errors.New("server draining")
 	ErrRunTerminal       = errors.New("run is no longer running")
@@ -425,7 +425,7 @@ func (h *RunHub) EventsAfter(runID string, sessionID, userID, cursor int64) ([]R
 
 	state := h.runs[runID]
 	if state == nil || state.SessionID != sessionID || state.UserID != userID {
-		return nil, nil, nil, nil, fmt.Errorf("run not found")
+		return nil, nil, nil, nil, ErrRunNotFound
 	}
 
 	state.eventMu.RLock()
@@ -454,7 +454,7 @@ func (h *RunHub) EventsSince(runID string, sessionID, userID, cursor int64) ([]R
 	defer h.mu.RUnlock()
 	state := h.runs[runID]
 	if state == nil || state.SessionID != sessionID || state.UserID != userID {
-		return nil, nil, fmt.Errorf("run not found")
+		return nil, nil, ErrRunNotFound
 	}
 	state.eventMu.RLock()
 	defer state.eventMu.RUnlock()

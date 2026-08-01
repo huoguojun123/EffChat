@@ -56,6 +56,48 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	}
 }
 
+func TestToolGovernanceSanitizesStructuredFailureCause(t *testing.T) {
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 92})
+	middleware := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"file_list": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, usageService, nil).Invokable
+	endpoint := middleware(func(context.Context, *compose.ToolInput) (*compose.ToolOutput, error) {
+		return &compose.ToolOutput{Result: `{"error":"postgres://fixture:secret@db.example/effchat /srv/private/files","message":"Failed to list conversation files."}`}, nil
+	})
+
+	out, err := endpoint(modelusage.WithMeta(context.Background(), modelusage.Meta{UserID: 7, SessionID: 9, RunID: "run-1"}), &compose.ToolInput{Name: "file_list", CallID: "call-1"})
+	if err != nil {
+		t.Fatalf("structured Tool failure should remain a result: %v", err)
+	}
+	if out == nil || strings.Contains(out.Result, "secret") || strings.Contains(out.Result, "/srv/private") || strings.Contains(out.Result, "postgres") {
+		t.Fatalf("structured Tool result leaked private cause: %#v", out)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(out.Result), &payload); err != nil {
+		t.Fatalf("decode Tool result: %v", err)
+	}
+	if payload["error"] != "Failed to list conversation files." || payload["message"] != "Failed to list conversation files." ||
+		payload["ok"] != false || payload["code"] != "tool_business_failure" || payload["retryable"] != false || payload["tool"] != "file_list" || payload["source"] != "tool" {
+		t.Fatalf("public Tool failure = %#v", payload)
+	}
+	if usageStore.updated.Success || usageStore.updated.ErrorType != "tool_business_failure" {
+		t.Fatalf("usage outcome = %#v", usageStore.updated)
+	}
+	if strings.Contains(usageStore.updated.ErrorMessage, "fixture:secret@") {
+		t.Fatalf("usage diagnostic leaked private cause: %q", usageStore.updated.ErrorMessage)
+	}
+}
+
+func TestToolGovernanceKeepsTypedWebFailure(t *testing.T) {
+	result := `{"ok":false,"error_code":"url_blocked","error":"该地址被安全策略拦截","retryable":false}`
+	sanitized, diagnostic := sanitizeStructuredToolFailure("web_extract", result)
+	if sanitized != result || diagnostic != "" {
+		t.Fatalf("typed web failure changed: result=%s diagnostic=%q", sanitized, diagnostic)
+	}
+}
+
 func TestToolCallContextLeavesWebExtractToItsStagedBudgets(t *testing.T) {
 	ctx, cancel := toolCallContext(t.Context(), "web_extract", 20*time.Millisecond)
 	defer cancel()

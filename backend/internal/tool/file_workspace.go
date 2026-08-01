@@ -101,7 +101,7 @@ func (t *FileListTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	}
 	files, err := t.store.ListReadableFilesForAgent(t.userID, t.sessionID)
 	if err != nil {
-		return marshalFileWorkspaceOutput(FileListOutput{Error: err.Error(), Message: "Failed to list conversation files."})
+		return "", fmt.Errorf("list conversation files: %w", err)
 	}
 	items := make([]FileListItem, 0, len(files))
 	for _, f := range files {
@@ -140,7 +140,7 @@ func (t *FileSearchTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 func (t *FileSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var input FileSearchInput
 	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
-		return marshalFileWorkspaceOutput(FileSearchOutput{Error: "invalid input: " + err.Error(), Message: "file_search input is invalid."})
+		return marshalFileWorkspaceOutput(FileSearchOutput{Error: "invalid input", Message: "file_search input is invalid."})
 	}
 	input.Query = strings.TrimSpace(input.Query)
 	if input.Query == "" {
@@ -160,7 +160,7 @@ func (t *FileSearchTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 
 	files, err := filesForSearch(t.store, t.userID, t.sessionID, input.FileID)
 	if err != nil {
-		return marshalFileWorkspaceOutput(FileSearchOutput{Query: input.Query, Error: err.Error(), Message: "Failed to load searchable files."})
+		return "", fmt.Errorf("load searchable conversation files: %w", err)
 	}
 	matches := make([]FileSearchMatch, 0, maxResults)
 	tokens := queryTokens(input.Query)

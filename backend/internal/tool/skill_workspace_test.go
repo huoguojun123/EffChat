@@ -50,6 +50,22 @@ func TestSkillReadPagesEntryAndReferenceFiles(t *testing.T) {
 	}
 }
 
+func TestSkillReadStorageFailureReturnsGoError(t *testing.T) {
+	tool := NewSkillReadTool([]SkillWorkspaceItem{{
+		ID:   "demo",
+		Name: "Demo",
+		Files: []model.SkillFile{{
+			RelativePath: "SKILL.md",
+			StoragePath:  "/srv/private/missing-skill.md",
+			Kind:         "entry",
+		}},
+	}})
+	raw, err := tool.InvokableRun(context.Background(), `{"skill_id":"demo","path":"SKILL.md"}`)
+	if err == nil || raw != "" || !strings.Contains(err.Error(), "read skill file") {
+		t.Fatalf("storage failure was not preserved for Tool governance: raw=%q err=%v", raw, err)
+	}
+}
+
 func TestSkillSearchOnlyUsesEnabledWorkspace(t *testing.T) {
 	root := t.TempDir()
 	entry := writeTestSkillFile(t, root, "demo/abc/SKILL.md", "入口\n")

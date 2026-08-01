@@ -145,6 +145,8 @@ Prompt Group list/create/update/delete 复用独立的资源错误边界：ID �
 
 管理员 User Group list/create/update/delete 复用稳定资源错误边界：ID、名称、描述、等级与配额限制校验为 400，名称重名及撤销/删除最后默认组的 invariant 冲突为 409，缺失资源为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。默认组 advisory-lock 与事务保护继续由 repository 持有；本契约不改变 effective group 解析、request context 传播或 partial PATCH 并发所有权。
 
+管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名及最后活动管理员 invariant 为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
+
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。

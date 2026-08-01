@@ -376,8 +376,8 @@ func TestAdminUpdateUser_NotFound(t *testing.T) {
 	w := env.doAdmin(http.MethodPatch, "/api/v1/admin/users/999999999", map[string]interface{}{
 		"is_active": false,
 	})
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("nonexistent user: want 400, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("nonexistent user: want 404, got %d", w.Code)
 	}
 }
 

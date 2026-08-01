@@ -18,13 +18,14 @@ import (
 )
 
 var (
-	ErrInvalidMessageInput    = errors.New("invalid message input")
-	ErrMessageTooLarge        = errors.New("message is too large")
-	ErrTooManyAttachments     = errors.New("too many attachments")
-	ErrRetryTargetStale       = repository.ErrRetryTargetStale
-	ErrMessageAlreadyAnswered = repository.ErrMessageAlreadyAnswered
-	ErrMessageUnchanged       = repository.ErrMessageUnchanged
-	ErrChatRunActive          = repository.ErrChatRunActive
+	ErrInvalidMessageInput      = errors.New("invalid message input")
+	ErrMessageTooLarge          = errors.New("message is too large")
+	ErrTooManyAttachments       = errors.New("too many attachments")
+	ErrRetryTargetStale         = repository.ErrRetryTargetStale
+	ErrMessageAlreadyAnswered   = repository.ErrMessageAlreadyAnswered
+	ErrMessageUnchanged         = repository.ErrMessageUnchanged
+	ErrChatRunActive            = repository.ErrChatRunActive
+	ErrConversationTurnNotFound = errors.New("conversation turn not found")
 )
 
 const (
@@ -425,7 +426,7 @@ func attachMessageMetadata(data map[string]interface{}, patch map[string]interfa
 func (s *MessageService) ListBySession(sessionID, userID int64) ([]*MessageResponse, error) {
 	_, err := s.sessionRepo.GetByID(sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 
 	messages, err := s.messageRepo.ListAllBySession(sessionID)
@@ -440,7 +441,7 @@ func (s *MessageService) ListBySession(sessionID, userID int64) ([]*MessageRespo
 // beforeID<=0 取最新一页；否则取更早一页。消息按时间升序返回。
 func (s *MessageService) ListBySessionPaged(sessionID, userID int64, limit int, beforeID int64) ([]*MessageResponse, bool, error) {
 	if _, err := s.sessionRepo.GetByID(sessionID, userID); err != nil {
-		return nil, false, fmt.Errorf("session not found or access denied")
+		return nil, false, sessionLookupError(err)
 	}
 
 	messages, hasMore, err := s.messageRepo.ListBySessionPaged(sessionID, limit, beforeID)
@@ -457,7 +458,7 @@ func (s *MessageService) ListBySessionPaged(sessionID, userID int64, limit int, 
 
 func (s *MessageService) ListConversationTurns(sessionID, userID int64, limit int, beforeTurnID int64) (*ConversationTurnPage, error) {
 	if _, err := s.sessionRepo.GetByID(sessionID, userID); err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	turns, total, hasMore, err := s.messageRepo.ListConversationTurns(sessionID, limit, beforeTurnID)
 	if err != nil {
@@ -486,12 +487,12 @@ func (s *MessageService) ListConversationTurns(sessionID, userID int64, limit in
 
 func (s *MessageService) ListMessageWindow(sessionID, userID int64, mode repository.MessageWindowMode, targetTurnID int64, turnLimit int) (*MessageWindowResponse, error) {
 	if _, err := s.sessionRepo.GetByID(sessionID, userID); err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	window, err := s.messageRepo.ListMessageWindow(sessionID, mode, targetTurnID, turnLimit)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, fmt.Errorf("turn not found")
+			return nil, ErrConversationTurnNotFound
 		}
 		return nil, err
 	}

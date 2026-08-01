@@ -45,7 +45,7 @@ func MemoryMaintenanceStreamHandler(
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		if operation == service.RunOperationMemoryRetry && !session.MemoryEnabled {

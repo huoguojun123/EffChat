@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -12,6 +13,19 @@ import (
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
+
+var ErrSessionNotFound = errors.New("session not found")
+
+// sessionLookupError preserves the privacy invariant that missing and
+// unauthorized sessions are indistinguishable, while retaining repository
+// failures for the handler's retryable 5xx path instead of misreporting them as
+// user-correctable 404 responses.
+func sessionLookupError(err error) error {
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrSessionNotFound
+	}
+	return fmt.Errorf("load session: %w", err)
+}
 
 type SessionService struct {
 	sessionRepo *repository.SessionRepository
@@ -263,7 +277,7 @@ func (s *SessionService) GetByID(sessionID, userID int64) (*model.Session, error
 func (s *SessionService) GetByIDContext(ctx context.Context, sessionID, userID int64) (*model.Session, error) {
 	session, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	return session, nil
 }

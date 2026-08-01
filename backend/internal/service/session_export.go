@@ -71,7 +71,7 @@ type exportTurn struct {
 func (s *MessageService) ExportSessionMarkdown(ctx context.Context, sessionID, userID int64, includeTools bool, exportedAt time.Time) (*SessionMarkdownExport, error) {
 	session, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	messages, err := s.messageRepo.ListAllBySessionContext(ctx, sessionID)
 	if err != nil {

@@ -22,7 +22,7 @@ func ActiveRunHandler(runHub *service.RunHub, sessionService *service.SessionSer
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		snapshot := runHub.Active(sessionID, userID)
@@ -65,7 +65,7 @@ func RunStatusHandler(quotaService *service.QuotaService, sessionService *servic
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		record, err := quotaService.GetChatRunForSession(c.Request.Context(), userID, sessionID, c.Param("run_id"))
@@ -90,7 +90,7 @@ func ResumeRunHandler(runHub *service.RunHub, sessionService *service.SessionSer
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		cursor, _ := strconv.ParseInt(c.Query("cursor"), 10, 64)
@@ -214,7 +214,7 @@ func CancelRunHandler(runHub *service.RunHub, sessionService *service.SessionSer
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		runID := c.Param("run_id")

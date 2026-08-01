@@ -19,7 +19,7 @@ func ListMessagesHandler(messageService *service.MessageService) gin.HandlerFunc
 		sessionIDStr := c.Param("id")
 		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
@@ -39,7 +39,7 @@ func ListMessagesHandler(messageService *service.MessageService) gin.HandlerFunc
 
 		messages, hasMore, err := messageService.ListBySessionPaged(sessionID, userID, limit, beforeID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeMessageReadError(c, "list", err)
 			return
 		}
 
@@ -54,7 +54,7 @@ func ListConversationTurnsHandler(messageService *service.MessageService) gin.Ha
 	return func(c *gin.Context) {
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || sessionID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
@@ -62,7 +62,7 @@ func ListConversationTurnsHandler(messageService *service.MessageService) gin.Ha
 		if raw := c.Query("limit"); raw != "" {
 			limit, err = strconv.Atoi(raw)
 			if err != nil || limit < 1 || limit > 500 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be between 1 and 500"})
+				writePublicError(c, http.StatusBadRequest, "message_limit_invalid", "limit must be between 1 and 500", false)
 				return
 			}
 		}
@@ -71,14 +71,14 @@ func ListConversationTurnsHandler(messageService *service.MessageService) gin.Ha
 		if raw := c.Query("before_turn_id"); raw != "" {
 			beforeTurnID, err = strconv.ParseInt(raw, 10, 64)
 			if err != nil || beforeTurnID <= 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid before_turn_id"})
+				writePublicError(c, http.StatusBadRequest, "before_turn_id_invalid", "invalid before_turn_id", false)
 				return
 			}
 		}
 
 		page, err := messageService.ListConversationTurns(sessionID, middleware.GetUserID(c), limit, beforeTurnID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeMessageReadError(c, "list", err)
 			return
 		}
 		c.JSON(http.StatusOK, page)
@@ -89,27 +89,27 @@ func ListMessageWindowHandler(messageService *service.MessageService) gin.Handle
 	return func(c *gin.Context) {
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || sessionID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		mode, targetTurnID, err := messageWindowQuery(c)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "message_window_invalid", err.Error(), false)
 			return
 		}
 		turnLimit := 16
 		if raw := c.Query("turn_limit"); raw != "" {
 			turnLimit, err = strconv.Atoi(raw)
 			if err != nil || turnLimit < 1 || turnLimit > 16 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "turn_limit must be between 1 and 16"})
+				writePublicError(c, http.StatusBadRequest, "turn_limit_invalid", "turn_limit must be between 1 and 16", false)
 				return
 			}
 		}
 
 		window, err := messageService.ListMessageWindow(sessionID, middleware.GetUserID(c), mode, targetTurnID, turnLimit)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeMessageReadError(c, "window", err)
 			return
 		}
 		c.JSON(http.StatusOK, window)

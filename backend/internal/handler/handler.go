@@ -490,13 +490,13 @@ func GetSessionHandler(sessionService *service.SessionService) gin.HandlerFunc {
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		session, err := sessionService.GetByID(uri.ID, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 

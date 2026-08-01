@@ -58,7 +58,7 @@ func GetSessionMemoryHandler(sessionService *service.SessionService, memoryRepo 
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		resp, err := buildSessionMemoryResponse(c.Request.Context(), memoryRepo, taskRunRepo, configRepo, session.ID, userID, session.MemoryEnabled)
@@ -79,7 +79,7 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		var req saveSessionMemoryRequest
@@ -184,7 +184,7 @@ func UndoSessionMemoryChangeHandler(sessionService *service.SessionService, memo
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		changeID, err := strconv.ParseInt(c.Param("change_id"), 10, 64)

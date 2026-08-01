@@ -256,7 +256,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			}
 			if isPDFUpload(contentType, safeName) {
 				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d file=%q bytes=%d strategy=mineru_async_first", userID, sessionID, safeName, len(content))
-				if queuedFile, queueErr := queueMinerUOCR(fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
+				if queuedFile, queueErr := queueMinerUOCR(c.Request.Context(), fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
 					c.JSON(http.StatusAccepted, queuedFile)
 					return
 				} else if queueErr != nil {
@@ -640,47 +640,67 @@ func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *reposi
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || id <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 		policy, err := resolveAttachmentProcessingPolicy(c.Request.Context(), configRepo)
 		if err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "附件处理策略暂不可用，请稍后重试", "code": "attachment_policy_unavailable"})
+			writeServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
 			return
 		}
 		if !policy.Enabled {
-			c.JSON(http.StatusConflict, gin.H{"error": "附件文本解析已关闭，无法重试 OCR", "code": "attachment_extract_disabled"})
+			writePublicError(c, http.StatusConflict, "attachment_extract_disabled", "附件文本解析已关闭，无法重试 OCR", false)
 			return
 		}
 		if policy.Degraded {
 			log.Printf("[file_ocr] retry policy degraded; using last-known-good controls file_id=%d", id)
 		}
-		if channelService == nil || extractorClient == nil || !extractorClient.Enabled() || !channelService.ResolveMinerUOCRConfig().Enabled || runner == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 服务未启用，请联系管理员", "code": "ocr_service_unavailable"})
+		if channelService == nil || extractorClient == nil || !extractorClient.Enabled() || runner == nil {
+			writeServerError(c, http.StatusServiceUnavailable, "ocr_runtime_unavailable", "OCR runtime is temporarily unavailable", errors.New("OCR retry runtime dependency is unavailable"))
+			return
+		}
+		ocrConfig, err := channelService.ResolveMinerUOCRConfigContext(c.Request.Context())
+		if err != nil {
+			writeServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
+			return
+		}
+		if !ocrConfig.Enabled {
+			writePublicError(c, http.StatusConflict, "ocr_service_unavailable", "OCR 服务未启用，请联系管理员", false)
 			return
 		}
 		file, err := fileRepo.RestartOCR(id, userID, time.Now(), time.Now().Add(-ocrSourceRetention))
-		if errors.Is(err, repository.ErrOCRSourceUnavailable) {
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
-			return
-		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restart OCR"})
+			writeOCRRetryMutationError(c, err)
 			return
 		}
 		if file.OCRSourcePath == nil || strings.TrimSpace(*file.OCRSourcePath) == "" {
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
+			cause := errors.New("OCR source path is missing after restart")
+			if err := markOCRSourceUnavailable(fileRepo, file.ID, userID, cause); err != nil {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
+				return
+			}
+			writeOCRSourceUnavailable(c)
 			return
 		}
 		sourcePath, pathErr := managedUploadPath(*file.OCRSourcePath)
 		if pathErr != nil {
-			_ = fileRepo.FailOCR(file.ID, userID, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
+			if err := markOCRSourceUnavailable(fileRepo, file.ID, userID, pathErr); err != nil {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
+				return
+			}
+			writeServerError(c, http.StatusInternalServerError, "ocr_source_path_invalid", "OCR source path is invalid", pathErr)
 			return
 		}
 		if _, err := os.Stat(sourcePath); err != nil {
-			_ = fileRepo.FailOCR(file.ID, userID, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
+			if !os.IsNotExist(err) {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_check_failed", "failed to verify OCR source", err)
+				return
+			}
+			if reconcileErr := markOCRSourceUnavailable(fileRepo, file.ID, userID, err); reconcileErr != nil {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", reconcileErr)
+				return
+			}
+			writeOCRSourceUnavailable(c)
 			return
 		}
 		runner.Wake()

@@ -14,6 +14,7 @@ var (
 	errUploadImageInvalid        = errors.New("image content is invalid or unsupported")
 	errUploadImageTypeMismatch   = errors.New("image content does not match its declared type")
 	errUploadImagePixelsExceeded = errors.New("image dimensions exceed pixel limit")
+	errOCRConfigLoad             = errors.New("OCR configuration load failed")
 	errOCRUploadBufferWrite      = errors.New("OCR upload buffer write failed")
 	errOCRMetadataCreate         = errors.New("OCR file metadata create failed")
 )
@@ -60,6 +61,8 @@ func writeAttachmentExtractionError(c *gin.Context, err error) {
 
 func writeOCRQueueError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, errOCRConfigLoad):
+		writeServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
 	case errors.Is(err, errOCRUploadBufferWrite):
 		writeServerError(c, http.StatusInternalServerError, "ocr_upload_buffer_write_failed", "failed to prepare OCR upload", err)
 	case errors.Is(err, errOCRMetadataCreate):

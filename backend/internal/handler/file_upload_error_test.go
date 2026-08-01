@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/extractor"
 	"github.com/huoguojun123/EffChat/internal/filepolicy"
 	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 type uploadErrorResponse struct {
@@ -134,12 +136,14 @@ func TestUploadMetadataFailureRemovesExtractedSidecar(t *testing.T) {
 
 func TestOCRQueueFailuresUseStableServerCodes(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
-		code string
+		name   string
+		err    error
+		status int
+		code   string
 	}{
-		{name: "buffer", err: errOCRUploadBufferWrite, code: "ocr_upload_buffer_write_failed"},
-		{name: "metadata", err: errOCRMetadataCreate, code: "ocr_metadata_create_failed"},
+		{name: "configuration", err: errOCRConfigLoad, status: http.StatusServiceUnavailable, code: "ocr_config_unavailable"},
+		{name: "buffer", err: errOCRUploadBufferWrite, status: http.StatusInternalServerError, code: "ocr_upload_buffer_write_failed"},
+		{name: "metadata", err: errOCRMetadataCreate, status: http.StatusInternalServerError, code: "ocr_metadata_create_failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -149,10 +153,43 @@ func TestOCRQueueFailuresUseStableServerCodes(t *testing.T) {
 			ctx.Set("request_id", "req-file-upload")
 			writeOCRQueueError(ctx, test.err)
 			body := decodeUploadError(t, recorder)
-			if recorder.Code != http.StatusInternalServerError || body.Code != test.code || !body.Retryable || body.RequestID != "req-file-upload" {
+			if recorder.Code != test.status || body.Code != test.code || !body.Retryable || body.RequestID != "req-file-upload" {
 				t.Fatalf("queue failure response = %d %+v", recorder.Code, body)
 			}
 		})
+	}
+}
+
+func TestUploadOCRQueueReportsChannelRepositoryFailure(t *testing.T) {
+	env := setupTestEnv(t)
+	sessionID := createUploadTestSession(t, env)
+	closedDB := setupHandlerTestDB(t)
+	if err := closedDB.Close(); err != nil {
+		t.Fatalf("close channel database: %v", err)
+	}
+	fileRepo := repository.NewFileRepository(env.db)
+	extractorClient := extractor.NewSidecarClient("http://extractor.example.test", time.Minute)
+	channelService := service.NewChannelService(repository.NewChannelRepository(closedDB))
+	runner := NewOCRRecoveryRunner(fileRepo, channelService, extractorClient, nil, repository.NewConfigRepository(env.db))
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", env.userID)
+		c.Set("request_id", "req-file-upload")
+		c.Next()
+	})
+	router.POST("/api/v1/files", UploadFileHandler(
+		fileRepo,
+		repository.NewConfigRepository(env.db),
+		WithUploadSessionRepo(repository.NewSessionRepository(env.db)),
+		WithUploadExtractorClient(extractorClient),
+		WithUploadChannelService(channelService),
+		WithUploadOCRRecoveryRunner(runner),
+	))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, uploadMultipart(t, "", sessionID, "fixture.pdf", "application/pdf", []byte("%PDF-1.4\n% fictional fixture\n")))
+	body := decodeUploadError(t, recorder)
+	if recorder.Code != http.StatusServiceUnavailable || body.Code != "ocr_config_unavailable" || !body.Retryable || body.RequestID != "req-file-upload" {
+		t.Fatalf("OCR configuration failure response = %d %+v", recorder.Code, body)
 	}
 }
 

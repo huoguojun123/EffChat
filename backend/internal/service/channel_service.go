@@ -255,12 +255,24 @@ func (s *ChannelService) ResolveSearchRuntimeConfigWithStateContext(ctx context.
 }
 
 func (s *ChannelService) ResolveMinerUOCRConfig() MinerUOCRConfig {
+	config, _ := s.ResolveMinerUOCRConfigContext(context.Background())
+	return config
+}
+
+// ResolveMinerUOCRConfigContext preserves repository failures for HTTP
+// admission paths that must distinguish an intentionally disabled service from
+// a temporarily unreadable control plane. Background recovery keeps using the
+// compatibility wrapper above and treats either case as fail-closed.
+func (s *ChannelService) ResolveMinerUOCRConfigContext(ctx context.Context) (MinerUOCRConfig, error) {
 	if s == nil || s.repo == nil {
-		return MinerUOCRConfig{}
+		return MinerUOCRConfig{}, errors.New("MinerU channel repository is unavailable")
 	}
-	item, err := s.repo.GetExternalService("mineru")
-	if err != nil || item == nil || !item.Enabled || strings.TrimSpace(item.APIKey) == "" {
-		return MinerUOCRConfig{}
+	item, err := s.repo.GetExternalServiceContext(ctx, "mineru")
+	if err != nil {
+		return MinerUOCRConfig{}, fmt.Errorf("resolve MinerU OCR config: %w", err)
+	}
+	if item == nil || !item.Enabled || strings.TrimSpace(item.APIKey) == "" {
+		return MinerUOCRConfig{}, nil
 	}
 	baseURL := strings.TrimSpace(item.BaseURL)
 	if baseURL == "" {
@@ -270,7 +282,7 @@ func (s *ChannelService) ResolveMinerUOCRConfig() MinerUOCRConfig {
 	if concurrency <= 0 {
 		concurrency = 2
 	}
-	return MinerUOCRConfig{Enabled: true, BaseURL: baseURL, APIKey: item.APIKey, MaxConcurrency: concurrency}
+	return MinerUOCRConfig{Enabled: true, BaseURL: baseURL, APIKey: item.APIKey, MaxConcurrency: concurrency}, nil
 }
 
 func BuildSearchRuntimeConfig(services []*model.ExternalService) SearchRuntimeConfig {

@@ -19,11 +19,15 @@ import (
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
-func queueMinerUOCR(fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, _ int, _ int64) (*model.File, error) {
+func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, _ int, _ int64) (*model.File, error) {
 	if opts.channelService == nil || opts.extractorClient == nil || !opts.extractorClient.Enabled() || opts.ocrRecovery == nil {
 		return nil, nil
 	}
-	if !opts.channelService.ResolveMinerUOCRConfig().Enabled {
+	ocrConfig, err := opts.channelService.ResolveMinerUOCRConfigContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errOCRConfigLoad, err)
+	}
+	if !ocrConfig.Enabled {
 		return nil, nil
 	}
 	sourcePath := filepath.Join(sourceDir, storedName)

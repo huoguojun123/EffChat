@@ -257,17 +257,23 @@ func (s *ModelService) Delete(id string) error {
 
 func (s *ModelService) ValidateDefaultModel(id string) error {
 	m, err := s.modelRepo.Get(id)
-	if err != nil || m == nil {
-		return fmt.Errorf("default_model_id does not exist")
+	if err != nil {
+		return fmt.Errorf("load default model: %w", err)
+	}
+	if m == nil {
+		return fmt.Errorf("%w: default_model_id does not exist", ErrModelInvalid)
 	}
 	if !m.Enabled || m.MinGroupLevel > 0 {
-		return fmt.Errorf("default_model_id must be an enabled public model")
+		return fmt.Errorf("%w: default_model_id must be an enabled public model", ErrModelInvalid)
 	}
 	if s.channelService == nil {
-		return fmt.Errorf("default model channel is unavailable")
+		return fmt.Errorf("%w: default model channel is unavailable", ErrModelInvalid)
 	}
 	if _, err := s.channelService.ResolveAIChannel(m.Provider); err != nil {
-		return fmt.Errorf("default model channel is unavailable")
+		if errors.Is(err, ErrChannelInvalid) || errors.Is(err, ErrChannelNotFound) || errors.Is(err, ErrChannelUnavailable) {
+			return fmt.Errorf("%w: default model channel is unavailable", ErrModelInvalid)
+		}
+		return fmt.Errorf("validate default model channel: %w", err)
 	}
 	return nil
 }

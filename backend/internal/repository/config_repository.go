@@ -17,6 +17,8 @@ import (
 	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
 
+var ErrConfigInvalid = errors.New("invalid system configuration")
+
 type ConfigItem struct {
 	Key         string          `json:"key"`
 	Value       json.RawMessage `json:"value"`
@@ -794,7 +796,7 @@ func updateConfigValue(execer configExecer, key string, value json.RawMessage, c
 func (r *ConfigRepository) UpdateAdminEditable(key string, value json.RawMessage) error {
 	meta, err := validateAdminEditableValue(key, value)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 	}
 	return updateConfigValue(r.db, key, value, meta.ConfigType)
 }
@@ -808,7 +810,7 @@ func (r *ConfigRepository) UpdateAdminEditableBatch(updates map[string]json.RawM
 	for key, value := range updates {
 		meta, err := validateAdminEditableValue(key, value)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 		}
 		keys = append(keys, key)
 		metas[key] = meta

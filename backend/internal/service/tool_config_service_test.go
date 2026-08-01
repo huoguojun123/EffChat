@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/huoguojun123/EffChat/internal/repository"
@@ -28,8 +29,8 @@ func TestToolConfigService_RejectsUnknownTool(t *testing.T) {
 		Enabled:        &enabled,
 		TimeoutSeconds: 20,
 	})
-	if err == nil {
-		t.Fatal("unknown tool should be rejected")
+	if !errors.Is(err, ErrToolConfigInvalid) {
+		t.Fatalf("unknown tool error = %v, want invalid tool configuration", err)
 	}
 }
 

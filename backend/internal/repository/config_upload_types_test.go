@@ -148,7 +148,7 @@ func TestUpdateAdminEditableBatchIsAtomic(t *testing.T) {
 		"system_name":      json.RawMessage(`"Must Not Persist"`),
 		"memory_max_chars": json.RawMessage(`9999`),
 	})
-	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
+	if !errors.Is(err, ErrConfigInvalid) || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("invalid batch error = %v", err)
 	}
 	gotName, err := repo.Get("system_name")

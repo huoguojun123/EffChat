@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -11,7 +12,7 @@ func ListToolConfigsHandler(toolConfigService *service.ToolConfigService) gin.Ha
 	return func(c *gin.Context) {
 		configs, err := toolConfigService.List()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list tool configs"})
+			writeServerError(c, http.StatusInternalServerError, "tool_config_list_failed", "failed to list tool configs", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"tools": configs})
@@ -27,9 +28,17 @@ func SaveToolConfigHandler(toolConfigService *service.ToolConfigService) gin.Han
 		}
 		item, err := toolConfigService.Save(&req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeToolConfigError(c, "save", err)
 			return
 		}
 		c.JSON(http.StatusOK, item)
 	}
+}
+
+func writeToolConfigError(c *gin.Context, operation string, err error) {
+	if errors.Is(err, service.ErrToolConfigInvalid) {
+		writePublicError(c, http.StatusBadRequest, "tool_config_invalid", err.Error(), false)
+		return
+	}
+	writeServerError(c, http.StatusInternalServerError, "tool_config_"+operation+"_failed", "failed to "+operation+" tool config", err)
 }

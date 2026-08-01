@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/huoguojun123/EffChat/internal/agent"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/service"
 )
@@ -84,6 +85,13 @@ func TestModelTestHandlerRejectsMissingModelOrProvider(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "model_probe_invalid" || body["retryable"] != false {
+		t.Fatalf("response = %#v", body)
+	}
 }
 
 func TestModelTestHandlerRejectsUnavailableProbeRuntime(t *testing.T) {
@@ -98,6 +106,13 @@ func TestModelTestHandlerRejectsUnavailableProbeRuntime(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "model_probe_unavailable" || body["retryable"] != true {
+		t.Fatalf("response = %#v", body)
 	}
 }
 
@@ -277,14 +292,49 @@ func TestFetchGoogleModels(t *testing.T) {
 	}
 }
 
-func TestTruncateModelTestError(t *testing.T) {
-	longMessage := strings.Repeat("错", 600)
-	got := truncateModelTestError(longMessage)
-	if len([]rune(got)) != 503 {
-		t.Fatalf("truncated runes = %d, want 503", len([]rune(got)))
+func TestWriteModelProbeFailureHidesInternalCause(t *testing.T) {
+	for _, phase := range []string{"setup", "run"} {
+		t.Run(phase, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/models/test", nil)
+			ctx.Set("request_id", "req-probe")
+
+			writeModelProbeFailure(ctx, "fixture-model", "fixture-provider", phase, errors.New("postgres://fixture:secret@db.example/effchat /srv/private/probe"))
+
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			wantCode := "model_probe_failed"
+			if phase == "setup" {
+				wantCode = "model_probe_setup_failed"
+			}
+			if recorder.Code != http.StatusOK || body["code"] != wantCode || body["retryable"] != true || body["request_id"] != "req-probe" {
+				t.Fatalf("response = %#v status=%d", body, recorder.Code)
+			}
+			if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/srv/private") {
+				t.Fatalf("response leaked internal cause: %s", recorder.Body.String())
+			}
+		})
 	}
-	if !strings.HasSuffix(got, "...") {
-		t.Fatalf("truncated message should end with ellipsis")
+}
+
+func TestWriteModelProbeFailureUsesSanitizedRuntimeClassification(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/models/test", nil)
+
+	writeModelProbeFailure(ctx, "fixture-model", "fixture-provider", "run", &agent.RuntimeError{
+		Code: "model_quota_exceeded", Message: "上游模型额度不足", Diagnostic: "HTTP 403 · 上游额度不足", Retryable: false,
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != "model_quota_exceeded" || body["error"] != "上游模型额度不足" || body["diagnostic"] != "HTTP 403 · 上游额度不足" || body["retryable"] != false {
+		t.Fatalf("response = %#v", body)
 	}
 }
 

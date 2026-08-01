@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 type testModelRequest struct {
@@ -34,11 +36,11 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 		modelID := strings.TrimSpace(req.ID)
 		provider := strings.TrimSpace(req.Provider)
 		if modelID == "" || provider == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "model id and provider are required"})
+			writePublicError(c, http.StatusBadRequest, "model_probe_invalid", "model id and provider are required", false)
 			return
 		}
 		if einoAgent == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "model probe is unavailable", "code": "model_probe_unavailable"})
+			writeServerError(c, http.StatusServiceUnavailable, "model_probe_unavailable", "model probe is unavailable", errors.New("model probe runtime is unavailable"))
 			return
 		}
 
@@ -49,22 +51,12 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 		})
 		setupCancel()
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"ok":       false,
-				"model_id": modelID,
-				"provider": provider,
-				"error":    truncateModelTestError(err.Error()),
-			})
+			writeModelProbeFailure(c, modelID, provider, "setup", err)
 			return
 		}
 		result, err := einoAgent.RunPreparedModelProbe(c.Request.Context(), prepared)
 		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"ok":       false,
-				"model_id": modelID,
-				"provider": provider,
-				"error":    truncateModelTestError(err.Error()),
-			})
+			writeModelProbeFailure(c, modelID, provider, "run", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -78,11 +70,46 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 	}
 }
 
-func truncateModelTestError(message string) string {
-	const maxRunes = 500
-	runes := []rune(strings.TrimSpace(message))
-	if len(runes) <= maxRunes {
-		return string(runes)
+func writeModelProbeFailure(c *gin.Context, modelID, provider, phase string, err error) {
+	code := "model_probe_failed"
+	message := "model probe failed; verify the model and channel configuration"
+	retryable := true
+	diagnostic := ""
+	if phase == "setup" {
+		code = "model_probe_setup_failed"
+		message = "model probe setup failed; verify the model and channel configuration"
+	} else {
+		var runtimeErr *agent.RuntimeError
+		if errors.As(err, &runtimeErr) {
+			if runtimeErr.Code != "" {
+				code = runtimeErr.Code
+			}
+			if runtimeErr.Message != "" {
+				message = runtimeErr.Message
+			}
+			retryable = runtimeErr.Retryable
+			diagnostic = runtimeErr.Diagnostic
+		}
 	}
-	return string(runes[:maxRunes]) + "..."
+	requestID := c.GetString("request_id")
+	logErr := err
+	if cause := errors.Unwrap(err); cause != nil {
+		logErr = cause
+	}
+	logger.Error("model probe failed: request_id=%q model=%q provider=%q phase=%s code=%s err=%v", requestID, modelID, provider, phase, code, logErr)
+	payload := gin.H{
+		"ok":        false,
+		"model_id":  modelID,
+		"provider":  provider,
+		"error":     message,
+		"code":      code,
+		"retryable": retryable,
+	}
+	if diagnostic != "" {
+		payload["diagnostic"] = diagnostic
+	}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	c.JSON(http.StatusOK, payload)
 }

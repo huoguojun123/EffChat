@@ -76,6 +76,8 @@ backend (Gin)
 
 会话详情、消息分页/turn/window、Markdown 导出，以及 Run/记忆入口的会话归属查询共享同一隐私边界：不存在与无权访问均公开为 `session_not_found`，但 PostgreSQL 和扫描故障必须保留到带 request ID 的 retryable 5xx，不能在 service 层压成 404。消息 window 的目标 turn 不存在使用独立 404；本地 cursor/limit/window 参数错误使用稳定 400。
 
+会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。
+
 checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成的上下文治理记录，不是用户发送消息。每日消息配额、准入检查和 Admin 今日用量统一排除 `metadata.compaction_summary=true`；普通用户消息即使后来被 retry 或删除，仍按既有消费语义计数。
 
 压缩模型是输出受限且结果会持久化为后续上下文的 utility consumer。它复用当前会话的模型和渠道，但在克隆的任务请求上关闭可选 thinking，避免 reasoning 抢占摘要预算；收流后、checkpoint 落库前还会复用主聊天的 inline `<think>` 分离边界。摘要抽取器同时容忍兼容网关把 opening `<analysis>` 移入 reasoning 字段、却在 content 中留下 orphan `</analysis>` 与 `<summary>` 包装的情况，防止隐藏推理进入 durable summary。原始会话请求保持不变，主聊天的 thinking 配置不受影响。

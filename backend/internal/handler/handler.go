@@ -421,7 +421,7 @@ func CreateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 
 		session, err := sessionService.Create(userID, &req)
 		if err != nil {
-			writeRuntimeModelError(c, err)
+			writeSessionMutationError(c, "create", err)
 			return
 		}
 
@@ -513,7 +513,7 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
@@ -524,7 +524,7 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 		}
 
 		if err := sessionService.Update(uri.ID, userID, &req); err != nil {
-			writeRuntimeModelError(c, err)
+			writeSessionMutationError(c, "update", err)
 			return
 		}
 
@@ -541,12 +541,12 @@ func DeleteSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		if err := sessionService.Delete(uri.ID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionMutationError(c, "delete", err)
 			return
 		}
 

@@ -745,6 +745,33 @@ func TestGetSession_InvalidID(t *testing.T) {
 	}
 }
 
+func TestSessionMutationErrorContract(t *testing.T) {
+	env := setupTestEnv(t)
+
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		w := env.doRequest(method, "/api/v1/sessions/abc", map[string]interface{}{})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s invalid id: want 400, got %d body=%s", method, w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s decode invalid id response: %v", method, err)
+		}
+		if body["code"] != "session_id_invalid" || body["retryable"] != false {
+			t.Fatalf("%s invalid id response = %#v", method, body)
+		}
+	}
+
+	w := env.doRequest(http.MethodPatch, "/api/v1/sessions/999999999", map[string]interface{}{"title": "Updated"})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing update: want 404, got %d body=%s", w.Code, w.Body.String())
+	}
+	w = env.doRequest(http.MethodDelete, "/api/v1/sessions/999999999", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing delete: want 404, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 // --- Pagination Tests ---
 
 func TestListSessions_Pagination(t *testing.T) {

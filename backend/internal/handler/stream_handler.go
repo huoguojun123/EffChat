@@ -685,15 +685,20 @@ func failQuotaAdmission(c *gin.Context, runHub *service.RunHub, runID string, er
 func writeRuntimeModelError(c *gin.Context, err error) {
 	var modelErr *service.RuntimeModelError
 	if errors.As(err, &modelErr) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":    modelErr.Message,
-			"code":     modelErr.Code,
-			"provider": modelErr.Provider,
-			"model_id": modelErr.ModelID,
+		status := http.StatusBadRequest
+		if modelErr.Retryable {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{
+			"error":     modelErr.Message,
+			"code":      modelErr.Code,
+			"provider":  modelErr.Provider,
+			"model_id":  modelErr.ModelID,
+			"retryable": modelErr.Retryable,
 		})
 		return
 	}
-	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	writeServerError(c, http.StatusInternalServerError, "model_validation_failed", "failed to validate model", err)
 }
 
 func runtimeSnapshotPublicMessage(err error) string {

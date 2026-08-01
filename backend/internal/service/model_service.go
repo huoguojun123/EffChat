@@ -1,11 +1,18 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
+)
+
+var (
+	ErrModelInvalid  = errors.New("invalid model configuration")
+	ErrModelNotFound = errors.New("model not found")
+	ErrModelExists   = errors.New("model already exists")
 )
 
 type ModelService struct {
@@ -62,28 +69,28 @@ var validSearchImpls = map[string]bool{
 // validateModelInput 校验模型字段（纯函数，不依赖 DB）
 func validateModelInput(m *model.Model) error {
 	if m.ID == "" {
-		return fmt.Errorf("id is required")
+		return fmt.Errorf("%w: id is required", ErrModelInvalid)
 	}
 	if m.DisplayName == "" {
-		return fmt.Errorf("display_name is required")
+		return fmt.Errorf("%w: display_name is required", ErrModelInvalid)
 	}
 	if m.Provider == "" {
-		return fmt.Errorf("provider is required")
+		return fmt.Errorf("%w: provider is required", ErrModelInvalid)
 	}
 	if !validSearchImpls[m.SearchImpl] {
-		return fmt.Errorf("invalid search_impl: must be one of '', internal, params, tool")
+		return fmt.Errorf("%w: search_impl must be one of '', internal, params, tool", ErrModelInvalid)
 	}
 	if !modelbank.IsValidThinkingFormat(m.ThinkingFormat) {
-		return fmt.Errorf("invalid thinking_format")
+		return fmt.Errorf("%w: invalid thinking_format", ErrModelInvalid)
 	}
 	if m.ContextWindow < 0 {
-		return fmt.Errorf("context_window must be >= 0")
+		return fmt.Errorf("%w: context_window must be >= 0", ErrModelInvalid)
 	}
 	if m.MaxOutput < 0 {
-		return fmt.Errorf("max_output must be >= 0")
+		return fmt.Errorf("%w: max_output must be >= 0", ErrModelInvalid)
 	}
 	if m.MinGroupLevel < 0 {
-		return fmt.Errorf("min_group_level must be >= 0")
+		return fmt.Errorf("%w: min_group_level must be >= 0", ErrModelInvalid)
 	}
 	return nil
 }
@@ -124,7 +131,7 @@ func (s *ModelService) Get(id string) (*model.Model, error) {
 		return nil, err
 	}
 	if m == nil {
-		return nil, fmt.Errorf("model not found: %s", id)
+		return nil, ErrModelNotFound
 	}
 	return s.applyThinkingRuntimeMetadata(m), nil
 }
@@ -136,7 +143,7 @@ func (s *ModelService) Create(req *CreateModelRequest) (*model.Model, error) {
 		return nil, err
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("model already exists: %s", req.ID)
+		return nil, ErrModelExists
 	}
 
 	enabled := true
@@ -179,7 +186,7 @@ func (s *ModelService) Update(id string, req *UpdateModelRequest) (*model.Model,
 		return nil, err
 	}
 	if m == nil {
-		return nil, fmt.Errorf("model not found: %s", id)
+		return nil, ErrModelNotFound
 	}
 
 	if req.DisplayName != nil {
@@ -239,7 +246,7 @@ func (s *ModelService) Delete(id string) error {
 		return err
 	}
 	if m == nil {
-		return fmt.Errorf("model not found: %s", id)
+		return ErrModelNotFound
 	}
 	m.Enabled = false
 	if err := s.modelRepo.Upsert(m); err != nil {

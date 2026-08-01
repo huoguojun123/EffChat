@@ -2,12 +2,19 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
+)
+
+var (
+	ErrChannelInvalid     = errors.New("invalid channel configuration")
+	ErrChannelNotFound    = errors.New("channel not found")
+	ErrChannelUnavailable = errors.New("channel unavailable")
 )
 
 const (
@@ -68,7 +75,7 @@ func (s *ChannelService) GetAIChannelContext(ctx context.Context, key string) (*
 func (s *ChannelService) SaveAIChannel(input *AIChannelInput) (*model.AIChannel, error) {
 	item, replaceKey, err := channelFromInput(input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
 	}
 	if err := s.repo.UpsertAIChannel(item, replaceKey); err != nil {
 		return nil, err
@@ -77,7 +84,11 @@ func (s *ChannelService) SaveAIChannel(input *AIChannelInput) (*model.AIChannel,
 }
 
 func (s *ChannelService) DeleteAIChannel(key string) error {
-	return s.repo.DeleteAIChannel(key)
+	err := s.repo.DeleteAIChannel(key)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrChannelNotFound
+	}
+	return err
 }
 
 func (s *ChannelService) ResolveAIChannel(key string) (*model.AIChannel, error) {
@@ -87,20 +98,20 @@ func (s *ChannelService) ResolveAIChannel(key string) (*model.AIChannel, error) 
 func (s *ChannelService) ResolveAIChannelContext(ctx context.Context, key string) (*model.AIChannel, error) {
 	key = normalizeKey(key)
 	if key == "" {
-		return nil, fmt.Errorf("channel is required")
+		return nil, fmt.Errorf("%w: channel is required", ErrChannelInvalid)
 	}
 	item, err := s.repo.GetAIChannelContext(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	if item == nil {
-		return nil, fmt.Errorf("channel %q is not configured", key)
+		return nil, ErrChannelNotFound
 	}
 	if !item.Enabled {
-		return nil, fmt.Errorf("channel %q is disabled", key)
+		return nil, ErrChannelUnavailable
 	}
 	if strings.TrimSpace(item.APIKey) == "" {
-		return nil, fmt.Errorf("channel %q has no API key configured", key)
+		return nil, ErrChannelUnavailable
 	}
 	return item, nil
 }
@@ -128,7 +139,7 @@ func (s *ChannelService) SaveExternalService(input *ExternalServiceInput) (*mode
 func (s *ChannelService) SaveExternalServiceContext(ctx context.Context, input *ExternalServiceInput) (*model.ExternalService, error) {
 	item, replaceKey, err := externalServiceFromInput(input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
 	}
 	if err := s.repo.SaveExternalServiceContext(ctx, item, replaceKey); err != nil {
 		return nil, err
@@ -138,7 +149,10 @@ func (s *ChannelService) SaveExternalServiceContext(ctx context.Context, input *
 
 func ValidateExternalService(input *ExternalServiceInput) (*model.ExternalService, error) {
 	item, _, err := externalServiceFromInput(input)
-	return item, err
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
+	}
+	return item, nil
 }
 
 func CanReuseExternalServiceCredential(saved, candidate *model.ExternalService) bool {
@@ -151,16 +165,23 @@ func CanReuseExternalServiceCredential(saved, candidate *model.ExternalService) 
 func (s *ChannelService) ReorderExternalServices(kind string, keys []string) ([]*model.ExternalService, error) {
 	kind = normalizeKey(kind)
 	if kind != ServiceKindSearch && kind != ServiceKindCrawler {
-		return nil, fmt.Errorf("invalid service kind")
+		return nil, fmt.Errorf("%w: invalid service kind", ErrChannelInvalid)
 	}
 	if err := s.repo.ReorderExternalServices(kind, keys); err != nil {
+		if errors.Is(err, repository.ErrExternalServiceOrderInvalid) {
+			return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
+		}
 		return nil, err
 	}
 	return s.repo.ListExternalServices(true)
 }
 
 func (s *ChannelService) DeleteExternalService(key string) error {
-	return s.repo.DeleteExternalService(key)
+	err := s.repo.DeleteExternalService(key)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrChannelNotFound
+	}
+	return err
 }
 
 type SearchRuntimeConfig struct {

@@ -146,6 +146,21 @@ func TestChannelServiceExternalServiceEditPreservesSortOrder(t *testing.T) {
 	}
 }
 
+func TestChannelServiceClassifiesInvalidExternalServiceOrder(t *testing.T) {
+	db := setupMessageTestDB(t)
+	defer db.Close()
+
+	svc := NewChannelService(repository.NewChannelRepository(db))
+	if _, err := svc.SaveExternalService(&ExternalServiceInput{
+		Key: "search_one", DisplayName: "Search One", Kind: ServiceKindSearch, BaseURL: "https://search.example.com",
+	}); err != nil {
+		t.Fatalf("create external service: %v", err)
+	}
+	if _, err := svc.ReorderExternalServices(ServiceKindSearch, []string{"missing"}); !errors.Is(err, ErrChannelInvalid) {
+		t.Fatalf("reorder error = %v, want invalid channel configuration", err)
+	}
+}
+
 func TestChannelServiceExternalServiceSaveHonorsLockCancellation(t *testing.T) {
 	db := setupMessageTestDB(t)
 	defer db.Close()

@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +14,43 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/service"
 )
+
+func TestModelErrorClassificationHidesInternalDetails(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "invalid", err: fmt.Errorf("%w: provider is required", service.ErrModelInvalid), wantStatus: http.StatusBadRequest, wantCode: "model_invalid"},
+		{name: "exists", err: service.ErrModelExists, wantStatus: http.StatusConflict, wantCode: "model_exists"},
+		{name: "not found", err: service.ErrModelNotFound, wantStatus: http.StatusNotFound, wantCode: "model_not_found"},
+		{name: "internal", err: errors.New("postgres://secret@internal/private/model"), wantStatus: http.StatusInternalServerError, wantCode: "model_update_failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/admin/models/example", nil)
+			ctx.Set("request_id", "req-model")
+			writeModelError(ctx, "update", tt.err)
+
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+			if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/private/model") {
+				t.Fatalf("response leaked internal error: %s", recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["code"] != tt.wantCode || body["retryable"] != (tt.wantStatus >= 500) {
+				t.Fatalf("response = %#v", body)
+			}
+		})
+	}
+}
 
 func TestModelWildcardRouteAllowsSlashIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -111,8 +151,8 @@ func TestModelListConfigForChannelRequiresAPIKey(t *testing.T) {
 		Adapter: service.AdapterOpenAICompatible,
 		BaseURL: "https://gateway.example.com/v1",
 	})
-	if err == nil || !strings.Contains(err.Error(), "no API key") {
-		t.Fatalf("error = %v, want missing API key", err)
+	if !errors.Is(err, service.ErrChannelUnavailable) {
+		t.Fatalf("error = %v, want channel unavailable", err)
 	}
 }
 

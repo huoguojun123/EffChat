@@ -129,6 +129,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。
 
+模型、渠道与外部服务的普通 JSON 失败使用稳定的 `error`、`code`、`retryable` 契约。纯本地字段或排序校验返回可修改的 400，资源不存在返回 404，模型重复创建返回 409，外部服务 probe 失败返回 502；repository、registry 和其他内部故障返回带 request ID 的 5xx。只有受控本地校验文案可以公开，SQL、内部路径、provider 原文和凭据化 URL 只保留在服务端诊断。
+
 ## 发布入口
 
 - 快速部署见 [Docker Compose 部署](docs/03-实施计划/Docker-Compose-部署.md)。

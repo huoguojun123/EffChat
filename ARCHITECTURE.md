@@ -112,9 +112,9 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 ## 数据库与迁移
 
-- `backend/migrations/init.sql` 是全新库 schema 快照。
-- `backend/migrations/production/*.sql` 是唯一生产增量链。
-- Docker Compose 通过 `migrate` 一次性容器执行 production 链，并记录到 `schema_migrations`。
+- `backend/migrations/production/*.sql` 是 fresh install 与已有库升级共用的唯一生产链；`init.sql` 只是 001 引用的不可变历史 schema 基线，不能独立启动应用。
+- Compose migrate 与 `init_db.sh` 共用 `build_migration_script.sh`：同一 session advisory lock 串行完整链，每条 migration SQL 与 checksum 账本行在同一事务提交。
+- 已知 legacy/空 checksum 只做精确一次性 reconcile，未知漂移拒绝启动；后端 schema gate 要求最新 production migration 已登记。
 - 不保留测试数据迁移；用户、会话、消息、文件、Skills、字体等真实数据不应被迁移脚本清空。
 
 ## 管理后台

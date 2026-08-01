@@ -182,7 +182,7 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"<think>内部推理\"},\"finish_reason\":null}]}\n\n")
-		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"过程</think>继续上下文\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"过程</think>to be written in Chinese</analysis>\\n\\n<summary>继续上下文</summary>\"},\"finish_reason\":\"stop\"}]}\n\n")
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -247,6 +247,9 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 	}
 	if strings.Contains(string(checkpoint.SummaryData), "内部推理") {
 		t.Fatalf("summary data retained inline thinking: %s", checkpoint.SummaryData)
+	}
+	if strings.Contains(string(checkpoint.SummaryData), "to be written in Chinese") || strings.Contains(string(checkpoint.SummaryData), "analysis>") || strings.Contains(string(checkpoint.SummaryData), "summary>") {
+		t.Fatalf("summary data retained provider reasoning envelope: %s", checkpoint.SummaryData)
 	}
 	if req.MaxTokens != 64000 {
 		t.Fatalf("PrepareCompaction mutated the active request MaxTokens = %d", req.MaxTokens)

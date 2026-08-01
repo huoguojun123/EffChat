@@ -154,7 +154,10 @@ func (r *QuotaRepository) UsageForToday(ctx context.Context, userID int64) (Quot
 			 FROM messages m
 			 JOIN sessions s ON s.id = m.session_id
 			 CROSS JOIN bounds b
-			 WHERE s.user_id = $1 AND m.role = 'user' AND m.created_at >= b.start_at),
+			 WHERE s.user_id = $1
+			   AND m.role = 'user'
+			   AND COALESCE(m.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			   AND m.created_at >= b.start_at),
 			(SELECT COALESCE(SUM(total_tokens), 0)
 			 FROM model_usage_events e
 			 CROSS JOIN bounds b
@@ -453,7 +456,10 @@ func usageForTodayInTx(ctx context.Context, tx *sql.Tx, userID int64) (QuotaUsag
 			 FROM messages m
 			 JOIN sessions s ON s.id = m.session_id
 			 CROSS JOIN bounds b
-			 WHERE s.user_id = $1 AND m.role = 'user' AND m.created_at >= b.start_at),
+			 WHERE s.user_id = $1
+			   AND m.role = 'user'
+			   AND COALESCE(m.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			   AND m.created_at >= b.start_at),
 			(SELECT COALESCE(SUM(total_tokens), 0)
 			 FROM model_usage_events e
 			 CROSS JOIN bounds b

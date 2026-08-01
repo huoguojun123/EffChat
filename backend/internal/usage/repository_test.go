@@ -113,6 +113,51 @@ func TestRepositoryAggregateSeparatesRunsAttemptsAndDegradedTools(t *testing.T) 
 	}
 }
 
+func TestRepositoryQuotaUsersIgnoreCompactionCheckpoints(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	var userID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO users (username, password_hash, role, is_active, permissions, preferences)
+		VALUES ($1, 'hash', 'user', true, '{}', '{}')
+		RETURNING id
+	`, fmt.Sprintf("usage_compaction_%d", time.Now().UnixNano())).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var sessionID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO sessions (user_id, title, model_id, provider)
+		VALUES ($1, 'Compaction quota', 'model-a', 'provider-a')
+		RETURNING id
+	`, userID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO messages (session_id, schema_version, message_data)
+		VALUES
+			($1, 'v1', '{"role":"user","content":"actual user message"}'),
+			($1, 'v1', '{"role":"user","content":"checkpoint","metadata":{"compaction_summary":true}}')
+	`, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := repo.QuotaUsersForToday(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if user.UserID == userID {
+			if user.DailyMessages != 1 {
+				t.Fatalf("admin daily messages = %d, want only the actual user message", user.DailyMessages)
+			}
+			return
+		}
+	}
+	t.Fatalf("quota user %d was not returned", userID)
+}
+
 func timePointer(value time.Time) *time.Time {
 	return &value
 }

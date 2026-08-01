@@ -179,7 +179,9 @@ func (r *Repository) QuotaUsersForToday(ctx context.Context) ([]QuotaUserUsage, 
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
 			CROSS JOIN bounds b
-			WHERE m.role = 'user' AND m.created_at >= b.start_at
+			WHERE m.role = 'user'
+			  AND COALESCE(m.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			  AND m.created_at >= b.start_at
 			GROUP BY s.user_id
 		),
 		model_usage AS (

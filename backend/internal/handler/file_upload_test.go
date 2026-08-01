@@ -362,6 +362,10 @@ func TestUpload_RejectsOversizedMultipartBody(t *testing.T) {
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d, want %d (body: %s)", w.Code, http.StatusRequestEntityTooLarge, w.Body.String())
 	}
+	body := decodeUploadError(t, w)
+	if body.Code != "file_too_large" || body.Retryable {
+		t.Fatalf("oversized response = %+v", body)
+	}
 }
 
 // 上传白名单必须按真实内容嗅探，不能只信 multipart 头：伪装成 text/plain 的二进制应被拒，
@@ -409,11 +413,12 @@ func TestUpload_RejectsDisguisedBinaryAcceptsRealText(t *testing.T) {
 		declaredType string
 		content      []byte
 		wantStatus   int
+		wantCode     string
 	}{
-		{"binary disguised as text rejected", "evil.txt", "text/plain", pngBytes, http.StatusBadRequest},
-		{"binary disguised as json rejected", "evil.json", "application/json", pngBytes, http.StatusBadRequest},
-		{"real text accepted", "note.txt", "text/plain", []byte("hello world\nplain text body"), http.StatusCreated},
-		{"real json accepted", "data.json", "application/json", []byte(`{"k":"v","n":1}`), http.StatusCreated},
+		{"binary disguised as text rejected", "evil.txt", "text/plain", pngBytes, http.StatusBadRequest, "file_type_mismatch"},
+		{"binary disguised as json rejected", "evil.json", "application/json", pngBytes, http.StatusBadRequest, "file_type_mismatch"},
+		{"real text accepted", "note.txt", "text/plain", []byte("hello world\nplain text body"), http.StatusCreated, ""},
+		{"real json accepted", "data.json", "application/json", []byte(`{"k":"v","n":1}`), http.StatusCreated, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -421,6 +426,12 @@ func TestUpload_RejectsDisguisedBinaryAcceptsRealText(t *testing.T) {
 			env.router.ServeHTTP(w, uploadMultipart(t, env.token, sessionID, c.filename, c.declaredType, c.content))
 			if w.Code != c.wantStatus {
 				t.Errorf("status=%d, want %d (body: %s)", w.Code, c.wantStatus, w.Body.String())
+			}
+			if c.wantCode != "" {
+				body := decodeUploadError(t, w)
+				if body.Code != c.wantCode || body.Retryable {
+					t.Errorf("error response = %+v, want code %q", body, c.wantCode)
+				}
 			}
 		})
 	}
@@ -441,10 +452,11 @@ func TestUpload_ValidatesImageContentAgainstDeclaredType(t *testing.T) {
 		declaredType string
 		content      []byte
 		wantStatus   int
+		wantCode     string
 	}{
-		{"valid PNG accepted", "photo.png", "image/png", pngContent, http.StatusCreated},
-		{"PNG declared as JPEG rejected", "photo.jpg", "image/jpeg", pngContent, http.StatusBadRequest},
-		{"non-image declared as PNG rejected", "fake.png", "image/png", []byte("not an image"), http.StatusBadRequest},
+		{"valid PNG accepted", "photo.png", "image/png", pngContent, http.StatusCreated, ""},
+		{"PNG declared as JPEG rejected", "photo.jpg", "image/jpeg", pngContent, http.StatusBadRequest, "file_type_mismatch"},
+		{"non-image declared as PNG rejected", "fake.png", "image/png", []byte("not an image"), http.StatusUnprocessableEntity, "image_invalid"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -452,6 +464,12 @@ func TestUpload_ValidatesImageContentAgainstDeclaredType(t *testing.T) {
 			env.router.ServeHTTP(w, uploadMultipart(t, env.token, sessionID, tc.filename, tc.declaredType, tc.content))
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status=%d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
+			}
+			if tc.wantCode != "" {
+				body := decodeUploadError(t, w)
+				if body.Code != tc.wantCode || body.Retryable {
+					t.Fatalf("error response = %+v, want code %q", body, tc.wantCode)
+				}
 			}
 		})
 	}
@@ -551,7 +569,8 @@ func TestUpload_RejectsWhenSessionFileCountExceeded(t *testing.T) {
 	}
 	second := httptest.NewRecorder()
 	env.router.ServeHTTP(second, uploadMultipart(t, env.token, sessionID, "b.txt", "text/plain", []byte("second text")))
-	if second.Code != http.StatusBadRequest || !strings.Contains(second.Body.String(), "too many active files") {
+	body := decodeUploadError(t, second)
+	if second.Code != http.StatusConflict || body.Code != "session_file_limit_reached" || body.Retryable || !strings.Contains(body.Error, "too many active files") {
 		t.Fatalf("second status/body=%d %s, want session count rejection", second.Code, second.Body.String())
 	}
 }

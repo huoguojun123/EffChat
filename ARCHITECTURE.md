@@ -110,6 +110,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 记忆维护只走完整流式消费。provider 以 `length`、`max_tokens`、`max_output_tokens` 等原因达到输出上限时，本次结果一律不解析、不保存，并在 `model_task_runs` 记录 `memory_output_limit`；能力不足记录 `memory_output_budget_insufficient`。
 - 用户手动整理和重试使用独立的 durable `memory_maintenance` RunHub run 与 SSE 观察链。固定 timeout 只守护首个有效模型输出；浏览器断线、关闭弹窗或刷新不会取消已经 accepted 的任务，重新打开弹窗会从活动 run 的游标继续观察。
 - 手动维护先生成并校验候选记忆，再在同一 PostgreSQL 事务中提交 durable terminal、记忆 CAS、`session_memory_changes` 和 `model_task_runs`。`session_memory_changes.run_id` 使 ambiguous terminal commit 的恢复重试不会重复写入记忆历史。
+- 记忆 REST 与维护任务的 HTTP 准入遵循公共错误契约：内容或 change id 校验为 400，缺失 change 为 404，CAS/不可撤销状态为 409，不可用维护服务为 503；memory repository、响应重建和 stream 初始化故障为带 request ID 的 retryable 5xx。任务一旦进入 RunHub，后续失败继续由既有 SSE/terminal 公共事件收口，原始错误只进入内部 task run 与日志。
 
 ## 数据库与迁移
 

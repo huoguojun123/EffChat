@@ -44,18 +44,31 @@ func TestLatestMemoryRetryUserTextFromMessagesRejectsEmpty(t *testing.T) {
 	}
 }
 
-func TestMemoryUndoErrorPayloadUsesStablePublicMessage(t *testing.T) {
-	payload := memoryUndoErrorPayload(errors.New("sql: internal detail"))
-	if payload["code"] != "memory_undo_unavailable" {
-		t.Fatalf("code = %v", payload["code"])
+func TestMemoryUndoErrorClassificationUsesStablePublicMessage(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "not found", err: repository.ErrMemoryChangeNotFound, wantStatus: http.StatusNotFound, wantCode: "memory_change_not_found"},
+		{name: "not undoable", err: repository.ErrMemoryChangeNotUndoable, wantStatus: http.StatusConflict, wantCode: "memory_undo_unavailable"},
+		{name: "internal", err: errors.New("postgres://secret@internal/private/memory"), wantStatus: http.StatusInternalServerError, wantCode: "memory_undo_failed"},
 	}
-	if payload["error"] == "sql: internal detail" {
-		t.Fatal("internal error leaked")
-	}
-
-	notFound := memoryUndoErrorPayload(repository.ErrMemoryChangeNotFound)
-	if notFound["code"] != "memory_change_not_found" {
-		t.Fatalf("not found code = %v", notFound["code"])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/memory/changes/1/undo", nil)
+			ctx.Set("request_id", "req-memory")
+			writeMemoryUndoError(ctx, tt.err)
+			if recorder.Code != tt.wantStatus || !strings.Contains(recorder.Body.String(), tt.wantCode) {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/private/memory") {
+				t.Fatalf("response leaked internal error: %s", recorder.Body.String())
+			}
+		})
 	}
 }
 

@@ -1119,7 +1119,8 @@ func (s *MessageService) PrepareRetryContext(ctx context.Context, sessionID, use
 //  1. 将摘要消息存为新消息（role=user, schema_version=v1）
 //  2. 将 beforeMessageID 之前的所有消息标记为已压缩（compressed_at + compression_summary_id）
 //
-// 后续加载 ListBySession 时，已压缩消息被过滤，只返回摘要 + 检查点之后的新消息。
+// Agent context 的 ListBySession 会过滤已压缩消息，只返回摘要 + 检查点之后的新消息；
+// UI 历史窗口使用独立的全历史查询，压缩前消息始终可查看。
 // 压缩检查点来源：auto=对话流自动触发，manual=用户 /compact 手动触发。
 // 前端据 compaction_kind 决定是否显示撤销按钮（自动压缩不显示）。
 const (

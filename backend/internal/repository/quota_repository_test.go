@@ -126,6 +126,53 @@ func TestQuotaRepository_UsageForTodayCountsOCRByStartTime(t *testing.T) {
 	}
 }
 
+func TestQuotaRepositoryUsageAndAdmissionIgnoreCompactionCheckpoints(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "compaction_quota")
+	session := &model.Session{UserID: userID, Title: "compaction quota", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	groupName := fmt.Sprintf("compaction_quota_group_%d", time.Now().UnixNano())
+	var groupID int64
+	if err := db.QueryRow(`
+		INSERT INTO user_groups (name, level, daily_message_limit, is_default)
+		VALUES ($1, 99, 2, false)
+		RETURNING id
+	`, groupName).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE users SET group_id = $1 WHERE id = $2`, groupID, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	messageRepo := NewMessageRepository(db)
+	for _, message := range []*model.Message{
+		{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"actual user message"}`)},
+		{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"manual"}}`)},
+	} {
+		if err := messageRepo.Create(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := NewQuotaRepository(db)
+	usage, err := repo.UsageForToday(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.DailyMessages != 1 {
+		t.Fatalf("daily messages = %d, want only the actual user message", usage.DailyMessages)
+	}
+	if _, err := repo.ReserveChatRun(context.Background(), ChatRunReservationInput{
+		UserID: userID, AuthVersion: 1, SessionID: session.ID, RunID: "compaction-quota-run",
+		ReserveMessage: true, ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("checkpoint consumed daily message quota: %v", err)
+	}
+}
+
 func TestQuotaRepositoryReserveChatRunEnforcesDailyMessageAndConcurrentLimits(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

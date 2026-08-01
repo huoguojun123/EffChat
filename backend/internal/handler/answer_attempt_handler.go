@@ -23,7 +23,7 @@ func SelectAnswerAttemptHandler(messageService *service.MessageService, sessionS
 		}
 		attemptID, err := strconv.ParseInt(c.Param("attempt_id"), 10, 64)
 		if err != nil || attemptID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid answer attempt id", "code": "answer_attempt_invalid"})
+			writePublicError(c, http.StatusBadRequest, "answer_attempt_invalid", "invalid answer attempt id", false)
 			return
 		}
 
@@ -47,16 +47,15 @@ func SelectAnswerAttemptHandler(messageService *service.MessageService, sessionS
 func writeAnswerAttemptSelectionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found", "code": "session_not_found"})
+		writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "answer attempt not found", "code": "answer_attempt_not_found"})
+		writePublicError(c, http.StatusNotFound, "answer_attempt_not_found", "answer attempt not found", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotLatest):
-		c.JSON(http.StatusConflict, gin.H{"error": "只能切换当前最后一轮的回答", "code": "answer_attempt_not_latest"})
+		writePublicError(c, http.StatusConflict, "answer_attempt_not_latest", "只能切换当前最后一轮的回答", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotSelectable):
-		c.JSON(http.StatusConflict, gin.H{"error": "该回答不可切换", "code": "answer_attempt_not_selectable"})
+		writePublicError(c, http.StatusConflict, "answer_attempt_not_selectable", "该回答不可切换", false)
 	default:
-		logger.Error("select answer attempt failed: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "切换回答失败，请重试", "code": "answer_attempt_select_failed", "retryable": true})
+		writeServerError(c, http.StatusInternalServerError, "answer_attempt_select_failed", "切换回答失败，请重试", err)
 	}
 }
 

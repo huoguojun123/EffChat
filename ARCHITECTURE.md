@@ -78,6 +78,8 @@ backend (Gin)
 
 Run active/status/resume/cancel 入口先复用会话归属边界，再对 run id 和 replay cursor 做稳定 400 校验。durable reservation 或 RunHub 中的 run 缺失、跨会话或跨用户都收敛为 `run_not_found` 404，quota repository 和 stream writer 故障为带 request ID 的 retryable 5xx。RunHub 使用 typed not-found sentinel 仅支撑 HTTP 分类；SSE replay/gap、多订阅、terminal snapshot、停止幂等和 durable-first 生命周期不变。
 
+回答版本切换复用会话归属与 answer attempt 事务边界：无效 ID 为 400，会话或 attempt 缺失为 404，目标不属于最后一轮或没有可选择输出为 409，repository/transaction 故障为带 request ID 的 retryable 5xx。该公共错误契约不改变选择 revision、可见消息导航或选择成功后的单会话记忆重整行为。
+
 会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功；该公共错误契约不改变复合 PATCH 字段的更新语义。

@@ -459,7 +459,7 @@ func TestToolOutcomeCodeAndDiagnosticsMatchStorageLimits(t *testing.T) {
 	}
 }
 
-func TestToolGovernanceRecordsTruncatedGoErrorWithoutLoggingSecret(t *testing.T) {
+func TestToolGovernanceCapsGoErrorDiagnosticWithoutLoggingSecret(t *testing.T) {
 	var logs bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logs)
@@ -484,8 +484,13 @@ func TestToolGovernanceRecordsTruncatedGoErrorWithoutLoggingSecret(t *testing.T)
 	if _, err := endpoint(ctx, &compose.ToolInput{Name: "web_search", CallID: "call-1"}); err != nil {
 		t.Fatalf("Go error should be converted to a structured result: %v", err)
 	}
-	if !usageStore.updated.Truncated || usageStore.updated.Success || usageStore.updated.ErrorType != "tool_error" {
+	// Truncated describes the model-visible Tool result, not the separately capped
+	// internal diagnostic. The stable public error fits within the result budget.
+	if usageStore.updated.Truncated || usageStore.updated.Success || usageStore.updated.ErrorType != "tool_error" {
 		t.Fatalf("Go error usage mismatch: %#v", usageStore.updated)
+	}
+	if len([]rune(usageStore.updated.ErrorMessage)) != 500 {
+		t.Fatalf("usage diagnostic length = %d, want storage cap", len([]rune(usageStore.updated.ErrorMessage)))
 	}
 	if strings.Contains(usageStore.updated.ErrorMessage, "private-value") || strings.Contains(usageStore.updated.ErrorMessage, "\n") {
 		t.Fatalf("usage diagnostic exposed secret/control characters: %q", usageStore.updated.ErrorMessage)

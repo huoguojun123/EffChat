@@ -232,7 +232,7 @@ func (r *SessionRepository) UpdateEnabledSkills(sessionID, userID int64, ids []s
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rows != 1 {
-		return fmt.Errorf("session not found or already deleted")
+		return fmt.Errorf("session not found or already deleted: %w", ErrNotFound)
 	}
 	return nil
 }

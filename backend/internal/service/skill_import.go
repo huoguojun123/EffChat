@@ -2,27 +2,33 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 func (s *SkillService) PreviewZip(data []byte) (*SkillZipPreviewResult, error) {
 	parsed, report, err := skillparser.ImportZip(data)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill archive", err)
 	}
 	parsed = dedupeParsedSkills(parsed, &report)
 	report.Imported = len(parsed)
-	return &SkillZipPreviewResult{Skills: s.toSkillPreviews(parsed), Report: report}, nil
+	previews, err := s.toSkillPreviews(parsed)
+	if err != nil {
+		return nil, err
+	}
+	return &SkillZipPreviewResult{Skills: previews, Report: report}, nil
 }
 
 func (s *SkillService) ImportZip(userID int64, data []byte, selectedPaths []string, selectedFiles map[string][]string) (*SkillImportResult, error) {
 	parsed, report, err := skillparser.ImportZipSelectedFiles(data, selectedPaths, selectedFiles)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill archive selection", err)
 	}
 	return s.persistParsed(userID, parsed, report, SkillSourceZip, nil, nil)
 }
@@ -30,30 +36,34 @@ func (s *SkillService) ImportZip(userID int64, data []byte, selectedPaths []stri
 func (s *SkillService) PreviewGit(ctx context.Context, req *SkillGitPreviewRequest) (*SkillGitPreviewResult, error) {
 	repoURL := strings.TrimSpace(req.URL)
 	if err := validateGitURL(ctx, repoURL); err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git repository URL", err)
 	}
 	ref := strings.TrimSpace(req.Ref)
 	if ref != "" && !safeGitRef(ref) {
-		return nil, fmt.Errorf("invalid git ref")
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git ref", nil)
 	}
 	branches, defaultRef, err := listGitBranches(ctx, repoURL)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source is unavailable", err)
 	}
 	selectedRef := selectGitRef(ref, defaultRef, branches)
 	if selectedRef == "" {
-		return nil, fmt.Errorf("no git branches found")
+		return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source has no branches", nil)
 	}
 	parsed, report, err := scanGitRef(ctx, repoURL, selectedRef, nil)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source could not be scanned", err)
 	}
 	parsed = dedupeParsedSkills(parsed, &report)
 	report.Imported = len(parsed)
+	previews, err := s.toSkillPreviews(parsed)
+	if err != nil {
+		return nil, err
+	}
 	return &SkillGitPreviewResult{
 		Branches:    branches,
 		SelectedRef: selectedRef,
-		Skills:      s.toSkillPreviews(parsed),
+		Skills:      previews,
 		Report:      report,
 	}, nil
 }
@@ -61,22 +71,22 @@ func (s *SkillService) PreviewGit(ctx context.Context, req *SkillGitPreviewReque
 func (s *SkillService) ImportGit(ctx context.Context, userID int64, req *SkillGitImportRequest) (*SkillImportResult, error) {
 	repoURL := strings.TrimSpace(req.URL)
 	if err := validateGitURL(ctx, repoURL); err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git repository URL", err)
 	}
 	ref := strings.TrimSpace(req.Ref)
 	if ref != "" && !safeGitRef(ref) {
-		return nil, fmt.Errorf("invalid git ref")
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git ref", nil)
 	}
 	if ref == "" {
 		branches, defaultRef, err := listGitBranches(ctx, repoURL)
 		if err != nil {
-			return nil, err
+			return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source is unavailable", err)
 		}
 		ref = selectGitRef("", defaultRef, branches)
 	}
 	parsed, report, err := scanGitRef(ctx, repoURL, ref, req.SelectedFiles)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source could not be scanned", err)
 	}
 	parsed = skillparser.FilterParsedBySourcePaths(parsed, req.SelectedPaths, &report)
 	sourceURL := repoURL
@@ -102,6 +112,8 @@ func (s *SkillService) persistParsed(userID int64, parsed []skillparser.ParsedSk
 			enabled = existing.Enabled
 			minGroupLevel = existing.MinGroupLevel
 			createdBy = existing.CreatedBy
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
 		}
 		skill := &model.Skill{
 			ID:              item.ID,
@@ -128,8 +140,11 @@ func (s *SkillService) persistParsed(userID int64, parsed []skillparser.ParsedSk
 	return resp, nil
 }
 
-func (s *SkillService) toSkillPreviews(parsed []skillparser.ParsedSkill) []SkillPreview {
-	existing, _ := s.skillRepo.List(true)
+func (s *SkillService) toSkillPreviews(parsed []skillparser.ParsedSkill) ([]SkillPreview, error) {
+	existing, err := s.skillRepo.List(true)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]SkillPreview, 0, len(parsed))
 	for _, item := range parsed {
 		matchSkill, matchType, defaultAction := matchExistingSkill(item, existing)
@@ -155,7 +170,7 @@ func (s *SkillService) toSkillPreviews(parsed []skillparser.ParsedSkill) []Skill
 		}
 		out = append(out, preview)
 	}
-	return out
+	return out, nil
 }
 
 func previewFiles(item skillparser.ParsedSkill) []skillparser.ParsedSkillFile {

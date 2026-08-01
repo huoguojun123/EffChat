@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -242,14 +243,14 @@ func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillRespon
 	}
 	parsed, err := parseManualSkill(req)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill package", err)
 	}
 	id := normalizeSkillID(req.ID)
 	if id == "" {
 		id = normalizeSkillID(req.Name)
 	}
 	if id == "" {
-		return nil, fmt.Errorf("invalid skill id")
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill id", nil)
 	}
 	parsed.ID = id
 	parsed.Name = strings.TrimSpace(req.Name)
@@ -273,6 +274,8 @@ func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillRespon
 	action := "create"
 	if _, err := s.skillRepo.Get(skill.ID, true); err == nil {
 		action = "update"
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
 	}
 	record := s.buildImportRecord(action, skill, parsed, parsed.Files, skillparser.ImportReport{}, &userID)
 	if err := s.persistSkillPackage(skill, parsed.Files, record); err != nil {
@@ -284,6 +287,9 @@ func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillRespon
 func (s *SkillService) Update(id string, req *SkillUpdateInput) (*SkillResponse, error) {
 	skill, err := s.skillRepo.Get(id, true)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	if req.Name != nil {
@@ -297,12 +303,12 @@ func (s *SkillService) Update(id string, req *SkillUpdateInput) (*SkillResponse,
 	}
 	if req.MinGroupLevel != nil {
 		if *req.MinGroupLevel < 0 {
-			return nil, fmt.Errorf("min_group_level must be >= 0")
+			return nil, newSkillError(SkillErrorInvalid, "min_group_level must be >= 0", nil)
 		}
 		skill.MinGroupLevel = *req.MinGroupLevel
 	}
 	if strings.TrimSpace(skill.Name) == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, newSkillError(SkillErrorInvalid, "name is required", nil)
 	}
 	if req.EntryContent != nil {
 		parsed, err := parseManualSkill(&SkillInput{
@@ -315,7 +321,7 @@ func (s *SkillService) Update(id string, req *SkillUpdateInput) (*SkillResponse,
 			MinGroupLevel: skill.MinGroupLevel,
 		})
 		if err != nil {
-			return nil, err
+			return nil, newSkillError(SkillErrorInvalid, "invalid Skill package", err)
 		}
 		skill.Checksum = parsed.Checksum
 		skill.PackageChecksum = parsed.PackageChecksum
@@ -330,7 +336,10 @@ func (s *SkillService) Update(id string, req *SkillUpdateInput) (*SkillResponse,
 	if err := s.skillRepo.UpdateMetadata(skill); err != nil {
 		return nil, err
 	}
-	files, _ := s.skillRepo.ListFiles(skill.ID)
+	files, err := s.skillRepo.ListFiles(skill.ID)
+	if err != nil {
+		return nil, err
+	}
 	skill.Files = files
 	return toSkillResponse(skill, true), nil
 }
@@ -339,8 +348,14 @@ func (s *SkillService) Delete(id string) error {
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
 
-	paths, _ := s.skillRepo.FilePathsForSkill(id)
+	paths, err := s.skillRepo.FilePathsForSkill(id)
+	if err != nil {
+		return err
+	}
 	if err := s.skillRepo.Delete(id); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return err
 	}
 	markSkillPackageRootsForDelayedCleanup(paths, "")
@@ -350,6 +365,9 @@ func (s *SkillService) Delete(id string) error {
 
 func (s *SkillService) ListFilesAdmin(id string) ([]SkillFileResponse, error) {
 	if _, err := s.skillRepo.Get(id, true); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	files, err := s.skillRepo.ListFiles(id)
@@ -361,6 +379,9 @@ func (s *SkillService) ListFilesAdmin(id string) ([]SkillFileResponse, error) {
 
 func (s *SkillService) ReadFileAdmin(id, path string) (string, *SkillFileResponse, error) {
 	if _, err := s.skillRepo.Get(id, true); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return "", nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return "", nil, err
 	}
 	return s.readSkillFile(id, path)
@@ -391,6 +412,9 @@ func (s *SkillService) visibleSkillForUser(userID int64, id string) (*model.Skil
 	}
 	skill, err := s.skillRepo.Get(id, false)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	groupLevel, err := s.groupLevelForUser(user)
@@ -398,7 +422,7 @@ func (s *SkillService) visibleSkillForUser(userID int64, id string) (*model.Skil
 		return nil, err
 	}
 	if !skillAllowedForUser(user, groupLevel, skill) {
-		return nil, fmt.Errorf("skill not found")
+		return nil, newSkillError(SkillErrorNotFound, "Skill not found", nil)
 	}
 	return skill, nil
 }
@@ -406,10 +430,13 @@ func (s *SkillService) visibleSkillForUser(userID int64, id string) (*model.Skil
 func (s *SkillService) readSkillFile(id, path string) (string, *SkillFileResponse, error) {
 	path = normalizeSkillFilePath(path)
 	if path == "" {
-		return "", nil, fmt.Errorf("invalid skill file path")
+		return "", nil, newSkillError(SkillErrorInvalid, "invalid Skill file path", nil)
 	}
 	file, err := s.skillRepo.GetFile(id, path)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return "", nil, newSkillError(SkillErrorNotFound, "Skill file not found", err)
+		}
 		return "", nil, err
 	}
 	content, err := readStoredSkillFile(file.StoragePath)
@@ -527,7 +554,10 @@ func (s *SkillService) persistSkillPackage(skill *model.Skill, parsedFiles []ski
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
 
-	oldPaths, _ := s.skillRepo.FilePathsForSkill(skill.ID)
+	oldPaths, err := s.skillRepo.FilePathsForSkill(skill.ID)
+	if err != nil {
+		return err
+	}
 	files, packageRoot, err := writeSkillPackage(skill.ID, skill.PackageChecksum, parsedFiles)
 	if err != nil {
 		s.scheduleSkillPackageCleanup()

@@ -270,7 +270,10 @@ func (r *SkillRepository) UpdateMetadata(skill *model.Skill) error {
 	if err != nil {
 		return fmt.Errorf("failed to update skill: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get updated skill count: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("skill not found: %w", ErrNotFound)
 	}
@@ -282,7 +285,10 @@ func (r *SkillRepository) Delete(id string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete skill: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get deleted skill count: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("skill not found: %w", ErrNotFound)
 	}

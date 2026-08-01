@@ -103,6 +103,111 @@ func TestMessageRepositoryConversationTurnsAndWindows(t *testing.T) {
 	assertWindow(MessageWindowAround, turnIDs[5], turnIDs[2:], true, false)
 }
 
+func TestMessageRepositoryWindowUsesActiveCompactionCheckpoint(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "message_window_checkpoint")
+	session := &model.Session{UserID: userID, Title: "checkpoint window", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM messages WHERE session_id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM answer_attempts WHERE session_id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+
+	repo := NewMessageRepository(db)
+	createTurn := func(label string) (int64, int64) {
+		t.Helper()
+		user := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(fmt.Sprintf(`{"role":"user","content":"question %s"}`, label))}
+		if err := repo.Create(user); err != nil {
+			t.Fatal(err)
+		}
+		attemptID := insertWindowAttempt(t, db, session.ID, user.ID, 1, true)
+		assistant := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(fmt.Sprintf(`{"role":"assistant","content":"answer %s"}`, label)), AnswerAttemptID: &attemptID}
+		if err := repo.Create(assistant); err != nil {
+			t.Fatal(err)
+		}
+		return user.ID, assistant.ID
+	}
+
+	for i := 1; i <= 3; i++ {
+		createTurn(fmt.Sprintf("old-%d", i))
+	}
+	var beforeMessageID int64
+	if err := db.QueryRow("SELECT COALESCE(MAX(id), 0) + 1 FROM messages WHERE session_id = $1", session.ID).Scan(&beforeMessageID); err != nil {
+		t.Fatal(err)
+	}
+	summary := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData: []byte(fmt.Sprintf(
+			`{"role":"user","content":"checkpoint summary","metadata":{"compaction_summary":true,"compaction_kind":"manual","compaction_before_message_id":%d}}`,
+			beforeMessageID,
+		)),
+	}
+	if err := repo.PersistCheckpoint(summary, beforeMessageID); err != nil {
+		t.Fatal(err)
+	}
+
+	immediate, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(immediate.Messages) != 1 || immediate.Messages[0].ID != summary.ID {
+		t.Fatalf("immediate checkpoint window = %+v, want only summary %d", immediate.Messages, summary.ID)
+	}
+	if immediate.FirstTurnID != 0 || immediate.LastTurnID != 0 || immediate.HasOlder || immediate.HasNewer {
+		t.Fatalf("immediate checkpoint bounds = %+v", immediate)
+	}
+
+	postCheckpointTurns := make([]int64, 0, 17)
+	for i := 1; i <= 17; i++ {
+		turnID, _ := createTurn(fmt.Sprintf("new-%d", i))
+		postCheckpointTurns = append(postCheckpointTurns, turnID)
+	}
+
+	latest, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !latest.HasOlder || latest.HasNewer || latest.FirstTurnID != postCheckpointTurns[1] || latest.LastTurnID != postCheckpointTurns[16] {
+		t.Fatalf("latest post-checkpoint bounds = %+v", latest)
+	}
+	for _, message := range latest.Messages {
+		if message.ID == summary.ID {
+			t.Fatal("checkpoint leaked into a page that still has older uncompressed turns")
+		}
+	}
+
+	oldest, err := repo.ListMessageWindow(session.ID, MessageWindowBefore, latest.FirstTurnID, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest.HasOlder || !oldest.HasNewer || oldest.FirstTurnID != postCheckpointTurns[0] || oldest.LastTurnID != postCheckpointTurns[0] {
+		t.Fatalf("oldest post-checkpoint bounds = %+v", oldest)
+	}
+	foundSummary := false
+	for _, message := range oldest.Messages {
+		if message.ID == summary.ID {
+			foundSummary = true
+		}
+	}
+	if !foundSummary {
+		t.Fatal("oldest uncompressed page did not include the active checkpoint")
+	}
+
+	turns, total, hasMore, err := repo.ListConversationTurns(session.ID, 500, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 17 || hasMore || len(turns) != 17 || turns[0].ID != postCheckpointTurns[0] {
+		t.Fatalf("post-checkpoint turn index = len:%d total:%d hasMore:%v first:%d", len(turns), total, hasMore, turns[0].ID)
+	}
+}
+
 func insertWindowAttempt(t *testing.T, db interface {
 	QueryRow(query string, args ...interface{}) *sql.Row
 }, sessionID, userMessageID int64, attemptNumber int, selected bool) int64 {

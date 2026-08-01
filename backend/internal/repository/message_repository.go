@@ -779,6 +779,7 @@ func (r *MessageRepository) ListConversationTurns(sessionID int64, limit int, be
 		WHERE session_id = $1
 		  AND deleted_at IS NULL
 		  AND role = 'user'
+		  AND compressed_at IS NULL
 		  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
 	`, sessionID).Scan(&total); err != nil {
 		return nil, 0, false, fmt.Errorf("count conversation turns: %w", err)
@@ -794,6 +795,7 @@ func (r *MessageRepository) ListConversationTurns(sessionID int64, limit int, be
 			WHERE session_id = $1
 			  AND deleted_at IS NULL
 			  AND role = 'user'
+			  AND compressed_at IS NULL
 			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
 		)
 		SELECT id, sequence, content, created_at
@@ -829,6 +831,9 @@ func (r *MessageRepository) ListConversationTurns(sessionID int64, limit int, be
 }
 
 func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindowMode, targetTurnID int64, turnLimit int) (*MessageWindow, error) {
+	if mode == "" {
+		mode = MessageWindowLatest
+	}
 	if turnLimit <= 0 {
 		turnLimit = 16
 	}
@@ -841,26 +846,31 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		return nil, err
 	}
 	window := &MessageWindow{}
-	if len(turnIDs) == 0 {
-		return window, nil
-	}
-	window.FirstTurnID = turnIDs[0]
-	window.LastTurnID = turnIDs[len(turnIDs)-1]
+	includeCheckpoint := mode == MessageWindowLatest || mode == MessageWindowBefore
+	if len(turnIDs) > 0 {
+		window.FirstTurnID = turnIDs[0]
+		window.LastTurnID = turnIDs[len(turnIDs)-1]
 
-	if err := r.db.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1 FROM messages
-			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
-			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
-			  AND id < $2
-		), EXISTS (
-			SELECT 1 FROM messages
-			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
-			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
-			  AND id > $3
-		)
-	`, sessionID, window.FirstTurnID, window.LastTurnID).Scan(&window.HasOlder, &window.HasNewer); err != nil {
-		return nil, fmt.Errorf("inspect message window boundaries: %w", err)
+		if err := r.db.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM messages
+				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND compressed_at IS NULL
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				  AND id < $2
+			), EXISTS (
+				SELECT 1 FROM messages
+				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND compressed_at IS NULL
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				  AND id > $3
+			)
+		`, sessionID, window.FirstTurnID, window.LastTurnID).Scan(&window.HasOlder, &window.HasNewer); err != nil {
+			return nil, fmt.Errorf("inspect message window boundaries: %w", err)
+		}
+		// The active checkpoint is the left boundary of the uncompressed history.
+		// Return it only on the oldest loaded page so pagination cannot duplicate the divider.
+		includeCheckpoint = !window.HasOlder
 	}
 
 	query := fmt.Sprintf(`
@@ -881,10 +891,11 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		), window_messages AS (
 			SELECT *
 			FROM visible_messages
-			WHERE turn_id = ANY($2)
+			WHERE turn_id = ANY($2::BIGINT[])
 			   OR (
-				COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
-				AND logical_id BETWEEN $3 AND $4
+				$3
+				AND compressed_at IS NULL
+				AND COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
 			   )
 		)
 		SELECT id, session_id, schema_version, message_data, role,
@@ -893,7 +904,7 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		FROM window_messages
 		ORDER BY logical_id ASC, logical_rank ASC, id ASC
 	`, messageLogicalIDSQL, messageLogicalRankSQL)
-	rows, err := r.db.Query(query, sessionID, pq.Array(turnIDs), window.FirstTurnID, window.LastTurnID)
+	rows, err := r.db.Query(query, sessionID, pq.Array(turnIDs), includeCheckpoint)
 	if err != nil {
 		return nil, fmt.Errorf("list message window: %w", err)
 	}
@@ -920,6 +931,7 @@ func (r *MessageRepository) messageWindowTurnIDs(sessionID int64, mode MessageWi
 		query = `
 			SELECT id FROM messages
 			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+			  AND compressed_at IS NULL
 			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
 			ORDER BY id DESC LIMIT $2`
 		args = []interface{}{sessionID, limit}
@@ -927,6 +939,7 @@ func (r *MessageRepository) messageWindowTurnIDs(sessionID int64, mode MessageWi
 		query = `
 			SELECT id FROM messages
 			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+			  AND compressed_at IS NULL
 			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
 			  AND id < $2
 			ORDER BY id DESC LIMIT $3`
@@ -935,6 +948,7 @@ func (r *MessageRepository) messageWindowTurnIDs(sessionID int64, mode MessageWi
 		query = `
 			SELECT id FROM messages
 			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+			  AND compressed_at IS NULL
 			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
 			  AND id > $2
 			ORDER BY id ASC LIMIT $3`
@@ -947,6 +961,7 @@ func (r *MessageRepository) messageWindowTurnIDs(sessionID int64, mode MessageWi
 				       COUNT(*) OVER () AS total
 				FROM messages
 				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND compressed_at IS NULL
 				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
 			), target AS (
 				SELECT position, total FROM turns WHERE id = $2

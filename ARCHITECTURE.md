@@ -72,6 +72,8 @@ backend (Gin)
 
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
 
+会话压缩后的冷加载窗口以最新 active checkpoint 为历史左边界。窗口和对话 turn 索引只选择未压缩 user turn；当分页到达最旧未压缩页时附带 checkpoint 摘要，立即刷新且尚无新 turn 时则只返回该摘要。这样 divider 不会在中间页重复，旧压缩消息也不会重新混入窗口；Agent context 仍由独立的压缩上下文查询负责。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

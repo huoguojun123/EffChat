@@ -159,6 +159,16 @@ func runPublicErrorPayload(requestID, code, message string, retryable bool) gin.
 	return payload
 }
 
+func writeRunTerminalConflict(c *gin.Context) {
+	c.JSON(http.StatusConflict, runPublicErrorPayload(c.GetString("request_id"), "run_terminal", "任务已结束，请刷新会话", false))
+}
+
+func writeRunExecutionOwned(c *gin.Context, runID string) {
+	payload := runPublicErrorPayload(c.GetString("request_id"), "run_execution_owned", "任务已开始，请通过 run_id 恢复", false)
+	payload["run_id"] = runID
+	c.JSON(http.StatusConflict, payload)
+}
+
 func transitionRun(runHub *service.RunHub, runID string, terminal service.RunTerminal) (*service.RunEvent, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), runTerminalWriteTimeout)
 	defer cancel()
@@ -359,7 +369,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 				return
 			}
 			if errors.Is(err, service.ErrRunTerminal) {
-				c.JSON(http.StatusConflict, gin.H{"error": "任务已结束，请刷新会话", "code": "run_terminal"})
+				writeRunTerminalConflict(c)
 				return
 			}
 			if errors.Is(err, service.ErrRunIDConflict) {
@@ -555,7 +565,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 				return
 			}
 			if errors.Is(err, service.ErrRunTerminal) {
-				c.JSON(http.StatusConflict, gin.H{"error": "任务已结束，请刷新会话", "code": "run_terminal"})
+				writeRunTerminalConflict(c)
 				return
 			}
 			if errors.Is(err, service.ErrRunIDConflict) {
@@ -912,7 +922,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 				return
 			}
 			if errors.Is(err, service.ErrRunTerminal) {
-				c.JSON(http.StatusConflict, gin.H{"error": "任务已结束，请刷新会话", "code": "run_terminal"})
+				writeRunTerminalConflict(c)
 				return
 			}
 			if errors.Is(err, service.ErrRunIDConflict) {
@@ -941,7 +951,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			if errors.Is(err, service.ErrRunTerminal) || errors.Is(err, service.ErrRunExecutionOwned) {
 				writer, writerErr := streaming.NewSSEWriter(c)
 				if writerErr != nil {
-					c.JSON(http.StatusConflict, gin.H{"error": "任务已开始，请通过 run_id 恢复", "code": "run_execution_owned", "run_id": runSnapshot.RunID})
+					writeRunExecutionOwned(c, runSnapshot.RunID)
 					return
 				}
 				replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)

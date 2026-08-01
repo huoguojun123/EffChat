@@ -503,6 +503,42 @@ func TestAcceptedRunStreamUnavailableKeepsRecoveryMetadata(t *testing.T) {
 	}
 }
 
+func TestRunConflictFallbacksKeepRecoveryMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		code  string
+		runID string
+		write func(*gin.Context)
+	}{
+		{name: "terminal", code: "run_terminal", write: writeRunTerminalConflict},
+		{name: "execution owned", code: "run_execution_owned", runID: "run-owned", write: func(c *gin.Context) { writeRunExecutionOwned(c, "run-owned") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/messages/stream", nil)
+			ctx.Set("request_id", "req-conflict")
+
+			test.write(ctx)
+
+			if recorder.Code != http.StatusConflict {
+				t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["code"] != test.code || body["retryable"] != false || body["request_id"] != "req-conflict" {
+				t.Fatalf("response = %#v", body)
+			}
+			if test.runID != "" && body["run_id"] != test.runID {
+				t.Fatalf("run_id = %#v, want %q", body["run_id"], test.runID)
+			}
+		})
+	}
+}
+
 func assertRunFallbackError(t *testing.T, recorder *httptest.ResponseRecorder, code, requestID string) {
 	t.Helper()
 	if recorder.Code != http.StatusInternalServerError {

@@ -32,42 +32,46 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "头像文件不能超过 10 MiB"})
+			writeAvatarTooLarge(c)
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择头像图片"})
+		writePublicError(c, http.StatusBadRequest, "avatar_file_required", "请选择头像图片", false)
 		return
 	}
 	defer file.Close()
 
-	if header.Size <= 0 || header.Size > avatar.MaxInputBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "头像文件不能超过 10 MiB"})
+	if header.Size <= 0 {
+		writePublicError(c, http.StatusBadRequest, "avatar_file_required", "请选择头像图片", false)
+		return
+	}
+	if header.Size > avatar.MaxInputBytes {
+		writeAvatarTooLarge(c)
 		return
 	}
 	content, err := io.ReadAll(io.LimitReader(file, avatar.MaxInputBytes+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "读取头像失败"})
+		writeServerError(c, http.StatusInternalServerError, "avatar_read_failed", "读取头像失败", err)
 		return
 	}
 	if len(content) > avatar.MaxInputBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "头像文件不能超过 10 MiB"})
+		writeAvatarTooLarge(c)
 		return
 	}
 
 	processed, err := avatar.Process(content)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		writeAvatarProcessError(c, err)
 		return
 	}
 	if err := os.MkdirAll(h.storageDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法创建头像目录"})
+		writeServerError(c, http.StatusInternalServerError, "avatar_storage_unavailable", "无法创建头像目录", err)
 		return
 	}
 
 	filename := uuid.NewString() + "." + processed.Ext
 	storedPath := filepath.Join(h.storageDir, filename)
 	if err := os.WriteFile(storedPath, processed.Data, 0644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存头像失败"})
+		writeServerError(c, http.StatusInternalServerError, "avatar_store_failed", "保存头像失败", err)
 		return
 	}
 
@@ -75,14 +79,14 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	oldUser, err := h.authService.GetProfile(userID)
 	if err != nil {
 		_ = os.Remove(storedPath)
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		writeAvatarAccountError(c, "profile", err)
 		return
 	}
 	avatarURL := avatarURLPrefix + filename
 	user, err := h.authService.UpdateAvatar(userID, &avatarURL)
 	if err != nil {
 		_ = os.Remove(storedPath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新头像失败"})
+		writeAvatarAccountError(c, "update", err)
 		return
 	}
 	h.removeManaged(oldUser.AvatarURL)
@@ -93,12 +97,12 @@ func (h *AvatarHandler) Delete(c *gin.Context) {
 	userID := middleware.GetUserID(c)
 	oldUser, err := h.authService.GetProfile(userID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		writeAvatarAccountError(c, "profile", err)
 		return
 	}
 	user, err := h.authService.UpdateAvatar(userID, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "移除头像失败"})
+		writeAvatarAccountError(c, "delete", err)
 		return
 	}
 	h.removeManaged(oldUser.AvatarURL)
@@ -114,13 +118,21 @@ func (h *AvatarHandler) Serve(c *gin.Context) {
 	path := filepath.Join(h.storageDir, filename)
 	file, err := os.Open(path)
 	if err != nil {
-		c.Status(http.StatusNotFound)
+		if os.IsNotExist(err) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		writeServerError(c, http.StatusInternalServerError, "avatar_read_failed", "读取头像失败", err)
 		return
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > avatar.MaxOutputBytes {
+	if err != nil {
+		writeServerError(c, http.StatusInternalServerError, "avatar_read_failed", "读取头像失败", err)
+		return
+	}
+	if !info.Mode().IsRegular() || info.Size() > avatar.MaxOutputBytes {
 		c.Status(http.StatusNotFound)
 		return
 	}

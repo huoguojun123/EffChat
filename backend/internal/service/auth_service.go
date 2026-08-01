@@ -361,11 +361,11 @@ func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*m
 func (s *AuthService) UpdateAvatar(userID int64, avatarURL *string) (*model.User, error) {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, err
 	}
 	user.AvatarURL = avatarURL
 	if err := s.userRepo.Update(user); err != nil {
-		return nil, fmt.Errorf("failed to update avatar: %w", ErrInternal)
+		return nil, err
 	}
 	user.PasswordHash = ""
 	return user, nil

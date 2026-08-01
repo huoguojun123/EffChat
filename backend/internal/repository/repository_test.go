@@ -35,6 +35,30 @@ func createRepositoryTestUser(t *testing.T, db *sql.DB, name string) int64 {
 	return user.ID
 }
 
+func claimRepositoryOCRFile(t *testing.T, db *sql.DB, fileID int64) *model.File {
+	t.Helper()
+	return claimRepositoryOCRFileWithProvider(t, db, fileID, fmt.Sprintf("test-ocr-%d", fileID))
+}
+
+func claimRepositoryOCRFileWithProvider(t *testing.T, db *sql.DB, fileID int64, provider string) *model.File {
+	t.Helper()
+	if _, err := db.Exec(`
+		UPDATE files
+		SET ocr_provider = $2, ocr_lease_until = NULL, ocr_next_retry_at = NOW()
+		WHERE id = $1
+	`, fileID, provider); err != nil {
+		t.Fatalf("prepare OCR claim: %v", err)
+	}
+	claimed, err := NewFileRepository(db).ClaimRecoverableOCRTasks(provider, time.Now(), time.Minute, 1)
+	if err != nil {
+		t.Fatalf("claim OCR file: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != fileID || claimed[0].OCRLeaseGeneration <= 0 {
+		t.Fatalf("claimed OCR file = %+v, want file %d with a positive generation", claimed, fileID)
+	}
+	return claimed[0]
+}
+
 func TestUserRepository_Create(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

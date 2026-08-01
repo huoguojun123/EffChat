@@ -287,7 +287,7 @@ func lockChatRunUser(ctx context.Context, tx *sql.Tx, userID int64, authVersion 
 	return nil
 }
 
-func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, userID int64, pageCount int) (bool, error) {
+func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, userID, generation int64, pageCount int) (bool, error) {
 	if pageCount < 0 {
 		pageCount = 0
 	}
@@ -299,30 +299,38 @@ func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, user
 	if err := lockQuotaUser(ctx, tx, userID); err != nil {
 		return false, err
 	}
-	var alreadyStarted bool
+	var alreadyStarted, owned bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT ocr_started_at IS NOT NULL
+		SELECT ocr_started_at IS NOT NULL,
+		       status = 'staged'
+		         AND extract_status IN ('ocr_pending', 'ocr_running')
+		         AND $3 > 0
+		         AND ocr_lease_generation = $3
 		FROM files
-			WHERE id = $1 AND user_id = $2 AND status = 'staged'
+		WHERE id = $1 AND user_id = $2
 		FOR UPDATE
-	`, fileID, userID).Scan(&alreadyStarted); err != nil {
+	`, fileID, userID, generation).Scan(&alreadyStarted, &owned); err != nil {
 		if err == sql.ErrNoRows {
 			return false, ErrNotFound
 		}
 		return false, fmt.Errorf("lock OCR file reservation: %w", err)
 	}
+	if !owned {
+		return false, ErrOCRLeaseLost
+	}
 	if alreadyStarted {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE files
 			SET ocr_error_type = 'ocr_submission_started',
-			    ocr_page_count = GREATEST(ocr_page_count, $3)
+			    ocr_page_count = GREATEST(ocr_page_count, $4)
 			WHERE id = $1
 			  AND user_id = $2
+			  AND ocr_lease_generation = $3
 			  AND status = 'staged'
 			  AND extract_status IN ('ocr_pending', 'ocr_running')
 			  AND NULLIF(TRIM(ocr_task_id), '') IS NULL
 			  AND ocr_error_type IS NULL
-		`, fileID, userID, pageCount)
+		`, fileID, userID, generation, pageCount)
 		if err != nil {
 			return false, fmt.Errorf("resume OCR submission: %w", err)
 		}
@@ -349,16 +357,17 @@ func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, user
 	result, err := tx.ExecContext(ctx, `
 		UPDATE files
 		SET ocr_error_type = 'ocr_submission_started',
-		    ocr_page_count = GREATEST(ocr_page_count, $3),
+		    ocr_page_count = GREATEST(ocr_page_count, $4),
 		    ocr_started_at = NOW()
 		WHERE id = $1
 		  AND user_id = $2
+		  AND ocr_lease_generation = $3
 		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
 		  AND NULLIF(TRIM(ocr_task_id), '') IS NULL
 		  AND ocr_error_type IS NULL
 		  AND ocr_started_at IS NULL
-	`, fileID, userID, pageCount)
+	`, fileID, userID, generation, pageCount)
 	if err != nil {
 		return false, fmt.Errorf("reserve OCR submission: %w", err)
 	}

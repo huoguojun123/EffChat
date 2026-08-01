@@ -90,7 +90,7 @@ func (f fakeQuotaStore) GetChatRun(context.Context, string) (repository.ChatRunR
 	return f.runRecord, nil
 }
 
-func (f fakeQuotaStore) ReserveOCRSubmission(context.Context, int64, int64, int) (bool, error) {
+func (f fakeQuotaStore) ReserveOCRSubmission(context.Context, int64, int64, int64, int) (bool, error) {
 	return true, f.reservationErr
 }
 

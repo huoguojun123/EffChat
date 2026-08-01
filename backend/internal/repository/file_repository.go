@@ -28,6 +28,7 @@ const (
 
 var (
 	ErrOCRSourceUnavailable  = errors.New("ocr source is unavailable")
+	ErrOCRLeaseLost          = errors.New("ocr lease is no longer owned")
 	ErrAttachmentUnavailable = errors.New("attachment is unavailable")
 	cleanupClaimSequence     atomic.Uint64
 )
@@ -262,6 +263,7 @@ func (r *FileRepository) GetByID(id, userID int64) (*model.File, error) {
 		SELECT id, user_id, session_id, file_name, file_path, file_type, file_size, file_hash, status,
 		       extracted_text_path, extract_status, extract_error, token_estimate,
 		       ocr_provider, ocr_task_id, ocr_page_count, ocr_progress_pages, ocr_started_at, ocr_completed_at, ocr_error_type, ocr_source_path,
+		       ocr_lease_until, ocr_lease_generation, ocr_attempts, ocr_next_retry_at,
 		       created_at
 		FROM files
 			WHERE id = $1 AND user_id = $2 AND status IN ('staged', 'formal')
@@ -270,6 +272,7 @@ func (r *FileRepository) GetByID(id, userID int64) (*model.File, error) {
 		&f.ID, &f.UserID, &f.SessionID, &f.FileName, &f.FilePath, &f.FileType, &f.FileSize, &f.FileHash, &f.Status,
 		&f.ExtractedTextPath, &f.ExtractStatus, &f.ExtractError, &f.TokenEstimate,
 		&f.OCRProvider, &f.OCRTaskID, &f.OCRPageCount, &f.OCRProgressPages, &f.OCRStartedAt, &f.OCRCompletedAt, &f.OCRErrorType, &f.OCRSourcePath,
+		&f.OCRLeaseUntil, &f.OCRLeaseGeneration, &f.OCRAttempts, &f.OCRNextRetryAt,
 		&f.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -502,6 +505,7 @@ func (r *FileRepository) RequestDeletion(ctx context.Context, id, userID int64, 
 			cleanup_claim_token = NULL,
 			cleanup_lease_until = NULL,
 			ocr_lease_until = NULL,
+			ocr_lease_generation = ocr_lease_generation + 1,
 			ocr_next_retry_at = NULL,
 			extract_status = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN 'failed' ELSE extract_status END,
 			extract_error = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN '附件已删除，解析已停止' ELSE extract_error END,
@@ -562,65 +566,69 @@ func lockActiveMessagesForFileDeletion(ctx context.Context, tx *sql.Tx, sessionI
 	return nil
 }
 
-func (r *FileRepository) UpdateOCRRunning(id, userID int64, progressPages int) error {
+func (r *FileRepository) UpdateOCRRunning(id, userID, generation int64, progressPages int) error {
 	if progressPages < 0 {
 		progressPages = 0
 	}
-	_, err := r.db.Exec(`
+	result, err := r.db.Exec(`
 		UPDATE files
 		SET extract_status = 'ocr_running',
-		    ocr_progress_pages = GREATEST(ocr_progress_pages, $3)
+		    ocr_progress_pages = GREATEST(ocr_progress_pages, $4)
 		WHERE id = $1
 		  AND user_id = $2
+		  AND $3 > 0
+		  AND ocr_lease_generation = $3
 		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
-	`, id, userID, progressPages)
+	`, id, userID, generation, progressPages)
 	if err != nil {
 		return fmt.Errorf("failed to update OCR running status: %w", err)
 	}
-	return nil
+	return requireOCRLeaseMutation(result)
 }
 
-func (r *FileRepository) StartOCRTask(id, userID int64, taskID string, pageCount int) (bool, error) {
+func (r *FileRepository) StartOCRTask(id, userID, generation int64, taskID string, pageCount int) error {
 	if pageCount < 0 {
 		pageCount = 0
 	}
 	result, err := r.db.Exec(`
 		UPDATE files
 		SET extract_status = 'ocr_running',
-		    ocr_task_id = NULLIF($3, ''),
+		    ocr_task_id = NULLIF($4, ''),
 		    ocr_error_type = NULL,
-		    ocr_page_count = GREATEST(ocr_page_count, $4),
+		    ocr_page_count = GREATEST(ocr_page_count, $5),
 		    ocr_started_at = COALESCE(ocr_started_at, NOW()),
 		    ocr_next_retry_at = NOW()
 		WHERE id = $1
 		  AND user_id = $2
+		  AND $3 > 0
+		  AND ocr_lease_generation = $3
 		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
-	`, id, userID, taskID, pageCount)
+	`, id, userID, generation, taskID, pageCount)
 	if err != nil {
-		return false, fmt.Errorf("failed to start OCR task: %w", err)
+		return fmt.Errorf("failed to start OCR task: %w", err)
 	}
-	rows, _ := result.RowsAffected()
-	return rows > 0, nil
+	return requireOCRLeaseMutation(result)
 }
 
-func (r *FileRepository) MarkOCRSubmissionStarted(id, userID int64) (bool, error) {
+func (r *FileRepository) MarkOCRSubmissionStarted(id, userID, generation int64) error {
 	result, err := r.db.Exec(`
 		UPDATE files
 		SET ocr_error_type = 'ocr_submission_started'
 		WHERE id = $1
 		  AND user_id = $2
+		  AND $3 > 0
+		  AND ocr_lease_generation = $3
 		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
 		  AND NULLIF(TRIM(ocr_task_id), '') IS NULL
 		  AND ocr_error_type IS NULL
-	`, id, userID)
+	`, id, userID, generation)
 	if err != nil {
-		return false, fmt.Errorf("mark OCR submission started: %w", err)
+		return fmt.Errorf("mark OCR submission started: %w", err)
 	}
-	rows, _ := result.RowsAffected()
-	return rows > 0, nil
+	return requireOCRLeaseMutation(result)
 }
 
 func (r *FileRepository) FailStaleOCRSubmissions(now time.Time) (int64, error) {
@@ -631,6 +639,7 @@ func (r *FileRepository) FailStaleOCRSubmissions(now time.Time) (int64, error) {
 		    ocr_error_type = 'ocr_submission_unknown',
 		    ocr_completed_at = $1,
 		    ocr_lease_until = NULL,
+		    ocr_lease_generation = ocr_lease_generation + 1,
 		    ocr_next_retry_at = NULL
 		WHERE status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
@@ -644,16 +653,17 @@ func (r *FileRepository) FailStaleOCRSubmissions(now time.Time) (int64, error) {
 	return rows, nil
 }
 
-func (r *FileRepository) RecordOCRAttempt(id, userID int64) (int, error) {
+func (r *FileRepository) RecordOCRAttempt(id, userID, generation int64) (int, error) {
 	var attempts int
 	err := r.db.QueryRow(`
 		UPDATE files
 		SET ocr_attempts = ocr_attempts + 1
-		WHERE id = $1 AND user_id = $2 AND status = 'staged' AND extract_status IN ('ocr_pending', 'ocr_running')
+		WHERE id = $1 AND user_id = $2 AND $3 > 0 AND ocr_lease_generation = $3
+		  AND status = 'staged' AND extract_status IN ('ocr_pending', 'ocr_running')
 		RETURNING ocr_attempts
-	`, id, userID).Scan(&attempts)
+	`, id, userID, generation).Scan(&attempts)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("file not found: %w", ErrNotFound)
+		return 0, ErrOCRLeaseLost
 	}
 	if err != nil {
 		return 0, fmt.Errorf("record OCR attempt: %w", err)
@@ -661,11 +671,45 @@ func (r *FileRepository) RecordOCRAttempt(id, userID int64) (int, error) {
 	return attempts, nil
 }
 
-func (r *FileRepository) CompleteOCR(id, userID int64, extractedPath string, tokenEstimate int) (bool, error) {
+// CompleteOCRClaim serializes filesystem promotion with the database terminal
+// transition. The row lock proves that the caller still owns generation before
+// promotion; stale workers therefore never touch the shared final sidecar.
+// Once promotion succeeds, callers must not compensate by deleting the final
+// path because a commit error can be ambiguous to the client.
+func (r *FileRepository) CompleteOCRClaim(ctx context.Context, id, userID, generation int64, extractedPath string, tokenEstimate int, promote func() error) error {
 	if tokenEstimate < 0 {
 		tokenEstimate = 0
 	}
-	result, err := r.db.Exec(`
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin OCR completion: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var owned bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status = 'staged'
+		   AND extract_status IN ('ocr_pending', 'ocr_running')
+		   AND $3 > 0
+		   AND ocr_lease_generation = $3
+		FROM files
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE
+	`, id, userID, generation).Scan(&owned); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrOCRLeaseLost
+		}
+		return fmt.Errorf("lock OCR completion: %w", err)
+	}
+	if !owned {
+		return ErrOCRLeaseLost
+	}
+	if promote == nil {
+		return errors.New("OCR sidecar promotion is required")
+	}
+	if err := promote(); err != nil {
+		return fmt.Errorf("promote OCR sidecar: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `
 		UPDATE files
 		SET extract_status = 'ready',
 		    extract_error = NULL,
@@ -679,17 +723,20 @@ func (r *FileRepository) CompleteOCR(id, userID int64, extractedPath string, tok
 		    ocr_next_retry_at = NULL
 		WHERE id = $1
 		  AND user_id = $2
+		  AND ocr_lease_generation = $5
 		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
-	`, id, userID, extractedPath, tokenEstimate)
+	`, id, userID, extractedPath, tokenEstimate, generation)
 	if err != nil {
-		return false, fmt.Errorf("failed to complete OCR file: %w", err)
+		return fmt.Errorf("update completed OCR file: %w", err)
 	}
-	rows, _ := result.RowsAffected()
-	if rows > 0 {
-		return true, nil
+	if err := requireOCRLeaseMutation(result); err != nil {
+		return err
 	}
-	return false, nil
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit OCR completion: %w", err)
+	}
+	return nil
 }
 
 func (r *FileRepository) FailOCR(id, userID int64, errorType, message string) error {
@@ -700,6 +747,7 @@ func (r *FileRepository) FailOCR(id, userID int64, errorType, message string) er
 		    ocr_error_type = NULLIF($4, ''),
 		    ocr_completed_at = NOW(),
 		    ocr_lease_until = NULL,
+		    ocr_lease_generation = ocr_lease_generation + 1,
 		    ocr_next_retry_at = NULL
 		WHERE id = $1
 		  AND user_id = $2
@@ -710,6 +758,28 @@ func (r *FileRepository) FailOCR(id, userID int64, errorType, message string) er
 		return fmt.Errorf("failed to mark OCR file failed: %w", err)
 	}
 	return nil
+}
+
+func (r *FileRepository) FailOCRClaim(id, userID, generation int64, errorType, message string) error {
+	result, err := r.db.Exec(`
+		UPDATE files
+		SET extract_status = 'failed',
+		    extract_error = NULLIF($4, ''),
+		    ocr_error_type = NULLIF($5, ''),
+		    ocr_completed_at = NOW(),
+		    ocr_lease_until = NULL,
+		    ocr_next_retry_at = NULL
+		WHERE id = $1
+		  AND user_id = $2
+		  AND $3 > 0
+		  AND ocr_lease_generation = $3
+		  AND status = 'staged'
+		  AND extract_status IN ('ocr_pending', 'ocr_running')
+	`, id, userID, generation, message, errorType)
+	if err != nil {
+		return fmt.Errorf("fail owned OCR claim: %w", err)
+	}
+	return requireOCRLeaseMutation(result)
 }
 
 func (r *FileRepository) ClearOCRSourcePath(id, userID int64, sourcePath string) error {
@@ -726,6 +796,24 @@ func (r *FileRepository) ClearOCRSourcePath(id, userID int64, sourcePath string)
 		return fmt.Errorf("clear OCR source path: %w", err)
 	}
 	return nil
+}
+
+func (r *FileRepository) ClearOCRSourcePathClaim(id, userID, generation int64, sourcePath string) error {
+	result, err := r.db.Exec(`
+		UPDATE files
+		SET ocr_source_path = NULL
+		WHERE id = $1
+		  AND user_id = $2
+		  AND $3 > 0
+		  AND ocr_lease_generation = $3
+		  AND status = 'staged'
+		  AND extract_status = 'ready'
+		  AND ocr_source_path = NULLIF($4, '')
+	`, id, userID, generation, sourcePath)
+	if err != nil {
+		return fmt.Errorf("clear owned OCR source path: %w", err)
+	}
+	return requireOCRLeaseMutation(result)
 }
 
 func (r *FileRepository) ClaimRecoverableOCRTasks(provider string, now time.Time, lease time.Duration, maxConcurrency int) ([]*model.File, error) {
@@ -777,13 +865,14 @@ func (r *FileRepository) ClaimRecoverableOCRTasks(provider string, now time.Time
 			LIMIT $4
 		)
 		UPDATE files f
-		SET ocr_lease_until = $3
+		SET ocr_lease_until = $3,
+		    ocr_lease_generation = f.ocr_lease_generation + 1
 		FROM candidates c
 		WHERE f.id = c.id
 		RETURNING f.id, f.user_id, f.session_id, f.file_name, f.file_path, f.file_type, f.file_size, f.file_hash, f.status,
 		          f.extracted_text_path, f.extract_status, f.extract_error, f.token_estimate,
 		          f.ocr_provider, f.ocr_task_id, f.ocr_page_count, f.ocr_progress_pages, f.ocr_started_at, f.ocr_completed_at, f.ocr_error_type,
-		          f.ocr_source_path, f.ocr_lease_until, f.ocr_attempts, f.ocr_next_retry_at, f.created_at
+		          f.ocr_source_path, f.ocr_lease_until, f.ocr_lease_generation, f.ocr_attempts, f.ocr_next_retry_at, f.created_at
 	`, provider, now, now.Add(lease), available)
 	if err != nil {
 		return nil, fmt.Errorf("claim OCR tasks: %w", err)
@@ -799,21 +888,23 @@ func (r *FileRepository) ClaimRecoverableOCRTasks(provider string, now time.Time
 	return files, nil
 }
 
-func (r *FileRepository) ReleaseOCRLease(id, userID int64, retryAt time.Time) error {
-	_, err := r.db.Exec(`
+func (r *FileRepository) ReleaseOCRLease(id, userID, generation int64, retryAt time.Time) error {
+	result, err := r.db.Exec(`
 		UPDATE files
 		SET ocr_lease_until = NULL,
 		    ocr_error_type = NULL,
-		    ocr_next_retry_at = $3
+		    ocr_next_retry_at = $4
 		WHERE id = $1
 		  AND user_id = $2
-			  AND status = 'staged'
+		  AND $3 > 0
+		  AND ocr_lease_generation = $3
+		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
-	`, id, userID, retryAt)
+	`, id, userID, generation, retryAt)
 	if err != nil {
 		return fmt.Errorf("release OCR lease: %w", err)
 	}
-	return nil
+	return requireOCRLeaseMutation(result)
 }
 
 func (r *FileRepository) RestartOCR(id, userID int64, now, sourceCutoff time.Time) (*model.File, error) {
@@ -838,6 +929,7 @@ func (r *FileRepository) RestartOCR(id, userID int64, now, sourceCutoff time.Tim
 		    ocr_attempts = 0,
 		    ocr_completed_at = NULL,
 		    ocr_lease_until = NULL,
+		    ocr_lease_generation = ocr_lease_generation + 1,
 		    ocr_next_retry_at = $3
 		WHERE id = $1
 		  AND user_id = $2
@@ -866,7 +958,7 @@ func (r *FileRepository) ExpireStaleOCROriginals(cutoff, now time.Time, limit in
 		SELECT files.id, files.user_id, files.session_id, files.file_name, files.file_path, files.file_type, files.file_size, files.file_hash, files.status,
 		       files.extracted_text_path, files.extract_status, files.extract_error, files.token_estimate,
 		       files.ocr_provider, files.ocr_task_id, files.ocr_page_count, files.ocr_progress_pages, files.ocr_started_at, files.ocr_completed_at, files.ocr_error_type,
-		       files.ocr_source_path, files.ocr_lease_until, files.ocr_attempts, files.ocr_next_retry_at, files.created_at
+		       files.ocr_source_path, files.ocr_lease_until, files.ocr_lease_generation, files.ocr_attempts, files.ocr_next_retry_at, files.created_at
 		FROM files
 		LEFT JOIN sessions owner_session ON owner_session.id = files.session_id
 		WHERE files.status IN ('staged', 'formal')
@@ -921,6 +1013,7 @@ func (r *FileRepository) ExpireStaleOCROriginals(cutoff, now time.Time, limit in
 			    ocr_error_type = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN 'ocr_source_expired' ELSE ocr_error_type END,
 			    ocr_task_id = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN NULL ELSE ocr_task_id END,
 			    ocr_lease_until = NULL,
+			    ocr_lease_generation = ocr_lease_generation + 1,
 			    ocr_next_retry_at = NULL,
 			    ocr_completed_at = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN $2 ELSE ocr_completed_at END
 			WHERE id = $1
@@ -942,7 +1035,7 @@ func scanOCRWorkRows(rows *sql.Rows) ([]*model.File, error) {
 			&f.ID, &f.UserID, &f.SessionID, &f.FileName, &f.FilePath, &f.FileType, &f.FileSize, &f.FileHash, &f.Status,
 			&f.ExtractedTextPath, &f.ExtractStatus, &f.ExtractError, &f.TokenEstimate,
 			&f.OCRProvider, &f.OCRTaskID, &f.OCRPageCount, &f.OCRProgressPages, &f.OCRStartedAt, &f.OCRCompletedAt, &f.OCRErrorType,
-			&f.OCRSourcePath, &f.OCRLeaseUntil, &f.OCRAttempts, &f.OCRNextRetryAt, &f.CreatedAt,
+			&f.OCRSourcePath, &f.OCRLeaseUntil, &f.OCRLeaseGeneration, &f.OCRAttempts, &f.OCRNextRetryAt, &f.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan OCR work item: %w", err)
 		}
@@ -952,6 +1045,17 @@ func scanOCRWorkRows(rows *sql.Rows) ([]*model.File, error) {
 		return nil, fmt.Errorf("iterate OCR work items: %w", err)
 	}
 	return files, nil
+}
+
+func requireOCRLeaseMutation(result sql.Result) error {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read OCR mutation result: %w", err)
+	}
+	if rows == 0 {
+		return ErrOCRLeaseLost
+	}
+	return nil
 }
 
 func scanFileCleanupClaims(rows *sql.Rows) ([]FileCleanupClaim, error) {

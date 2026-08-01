@@ -27,7 +27,7 @@ type quotaStore interface {
 	AdmitRetryChatRun(ctx context.Context, input repository.ChatRunReservationInput, targetMessageID int64) (repository.ChatRunAdmission, error)
 	AdmitEditedRetryChatRun(ctx context.Context, input repository.ChatRunReservationInput, targetMessageID int64, replacement *model.Message) (repository.ChatRunAdmission, error)
 	GetChatRun(ctx context.Context, runID string) (repository.ChatRunRecord, error)
-	ReserveOCRSubmission(ctx context.Context, fileID, userID int64, pageCount int) (bool, error)
+	ReserveOCRSubmission(ctx context.Context, fileID, userID, generation int64, pageCount int) (bool, error)
 }
 
 func NewQuotaService(repo quotaStore) *QuotaService {
@@ -314,13 +314,13 @@ func repositoryChatRunInput(input ChatRunQuotaInput) repository.ChatRunReservati
 	}
 }
 
-func (s *QuotaService) ReserveOCRSubmission(ctx context.Context, fileID, userID int64, pageCount int) (bool, error) {
+func (s *QuotaService) ReserveOCRSubmission(ctx context.Context, fileID, userID, generation int64, pageCount int) (bool, error) {
 	if s == nil || s.repo == nil {
 		return true, nil
 	}
 	ctx, cancel := s.operationContext(ctx)
 	defer cancel()
-	reserved, err := s.repo.ReserveOCRSubmission(ctx, fileID, userID, pageCount)
+	reserved, err := s.repo.ReserveOCRSubmission(ctx, fileID, userID, generation, pageCount)
 	return reserved, mapRepositoryQuotaError(err)
 }
 

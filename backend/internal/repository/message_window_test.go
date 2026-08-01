@@ -153,6 +153,13 @@ func TestMessageRepositoryWindowUsesActiveCompactionCheckpoint(t *testing.T) {
 	if err := repo.PersistCheckpoint(summary, beforeMessageID); err != nil {
 		t.Fatal(err)
 	}
+	var summaryCompressionID sql.NullInt64
+	if err := db.QueryRow("SELECT compression_summary_id FROM messages WHERE id = $1", summary.ID).Scan(&summaryCompressionID); err != nil {
+		t.Fatal(err)
+	}
+	if summaryCompressionID.Valid {
+		t.Fatalf("active checkpoint %d unexpectedly points to compression summary %d", summary.ID, summaryCompressionID.Int64)
+	}
 
 	immediate, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 16)
 	if err != nil {

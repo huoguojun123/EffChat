@@ -877,7 +877,7 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 			 AND history.id <> checkpoint.id
 			WHERE checkpoint.session_id = $1
 			  AND checkpoint.deleted_at IS NULL
-			  AND checkpoint.id = checkpoint.compression_summary_id
+			  AND checkpoint.compressed_at IS NULL
 			  AND COALESCE(checkpoint.message_data->'metadata'->>'compaction_summary', '') = 'true'
 			  AND history.deleted_at IS NULL
 			  AND history.role = 'user'

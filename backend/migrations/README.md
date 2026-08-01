@@ -1,10 +1,11 @@
 # 数据库迁移说明
 
-0.3.0 预发布后，迁移体系只保留一条线：
+迁移体系只有一个可执行入口：
 
-- `init.sql`：全新数据库的 schema 快照，只建表、索引、触发器、视图，不写模型、配置、用户组或测试数据。
-- `production/*.sql`：唯一增量迁移链，已有数据库升级只跑这里，并用 `schema_migrations.version/checksum` 记录文件名和内容指纹。
-- `init_db.sh`：本地初始化/升级脚本，内部同样按 `production/*.sql` 顺序执行。
+- `production/*.sql`：全新安装和已有数据库升级都完整执行的唯一生产链，并用 `schema_migrations.version/checksum` 记录文件名和内容指纹。
+- `init.sql`：只能由 `production/001_schema.sql` 引用的历史 schema 基线，不是当前快照，也不能单独作为 fresh-install 命令。
+- `build_migration_script.sh`：Compose 与 `init_db.sh` 共用的 runner 生成器，统一 checksum、锁和事务所有权。
+- `init_db.sh`：本地初始化/升级入口，复用同一个 runner。
 
 不再保留顶层 `001_*.sql` 到 `025_*.sql` 的重复迁移，也不提供测试数据脚本。
 
@@ -12,29 +13,31 @@
 
 | 文件 | 说明 |
 |------|------|
-| `init.sql` | 当前 schema 快照，供全新库快速建库，也被 `production/001_schema.sql` 引用 |
-| `production/001_schema.sql` | 生产基线迁移，使用 `\ir ../init.sql` 相对引用 schema 快照 |
+| `init.sql` | 不可独立执行的 001 历史 schema 基线；首次公开后不得回改 |
+| `production/001_schema.sql` | 使用 `\ir ../init.sql` 引用历史基线的首条生产迁移 |
 | `production/002_*.sql` 及后续 | 生产增量迁移，只允许追加新文件，不回改已发布迁移 |
-| `init_db.sh` | 本地脚本，创建数据库、确保 `schema_migrations`、按 production 文件名顺序执行未记录迁移 |
+| `build_migration_script.sh` | 生成单会话、逐 migration 原子执行的 psql 脚本 |
+| `legacy-checksums.txt` | 只列出可一次性 reconcile 的精确历史 checksum；未知值仍失败 |
+| `init_db.sh` | 本地脚本，创建数据库并执行统一 production runner |
 
 ## Docker 部署
 
-Docker Compose 会挂载：
+Docker Compose 只读挂载整个 migration 目录：
 
 ```text
-backend/migrations/init.sql -> /migrations/init.sql
-backend/migrations/production -> /migrations/production
+backend/migrations -> /migrations
 ```
 
 迁移容器启动后会：
 
 1. 创建 `schema_migrations(version, checksum, applied_at)`。
-2. 在同一 PostgreSQL advisory lock 会话中按文件名顺序扫描 `/migrations/production/*.sql`。
-3. 已记录且已有指纹的迁移先校验内容指纹，未记录的迁移执行成功后写入文件名和指纹。`001_schema.sql` 的指纹同时覆盖它引用的 `init.sql` 快照；旧库中没有指纹的历史记录首次升级时属于一次性信任回填（TOFU），之后所有不匹配都会失败。
+2. 在同一 PostgreSQL session advisory lock 下按文件名顺序扫描 `/migrations/production/*.sql`。
+3. 每条 migration SQL 与对应 `schema_migrations` 行在同一个 `BEGIN/COMMIT` 中提交；失败连接退出时整条回滚，下一次可从同一账本状态重试。
+4. 已记录迁移先校验内容指纹。001 的指纹同时覆盖 `001_schema.sql` 与 `init.sql`；空指纹和 `legacy-checksums.txt` 中的精确历史值只允许一次性 reconcile，未知不匹配立即失败。
 
-`init_db.sh` 使用相同的锁和校验规则，不能与 Compose 的迁移容器交错执行。
+`init_db.sh` 使用完全相同的生成器。即使它与 Compose migrate 同时启动，也会由 advisory lock 串行化并读取同一账本。
 
-`production/001_schema.sql` 使用 `\ir ../init.sql`，因此在 Docker 和本机 `psql -f production/001_schema.sql` 下都能解析到同一个 schema 快照。
+`production/001_schema.sql` 保留 `\ir ../init.sql` 的相对引用，统一 runner 会把同一历史基线内联到受控事务中；不要直接运行 001，因为单文件执行不会建立完整版本账本。
 
 ## 本地初始化/升级
 
@@ -69,22 +72,23 @@ CONFIRM_RESET=DELETE_EFFCHAT_DB ./init_db.sh reset
 
 ## 手动执行
 
-全新库可以直接执行 schema 快照：
+不要直接执行 `init.sql` 或手工挑选 migration。需要显式控制数据库时，仍使用统一 runner：
 
 ```bash
-createdb -h localhost -U postgres effchat
-psql -h localhost -U postgres -d effchat -f init.sql
+backend/migrations/build_migration_script.sh > /tmp/effchat-migrations.sql
+psql -v ON_ERROR_STOP=1 -d effchat -f /tmp/effchat-migrations.sql
 ```
 
-如果要模拟生产升级，请执行 production 链并记录 `schema_migrations`，不要手动挑选顶层历史迁移。
+正常安装优先使用 Docker Compose 或 `init_db.sh`，它们会创建数据库并调用同一生成器。
 
 ## 新增迁移规则
 
-1. 只在 `production/` 里追加下一个编号文件，例如 `021_example.sql`。
-2. 同步更新 `init.sql`，保证全新库和升级库结构一致。
+1. 只在 `production/` 里追加下一个编号文件，例如 `044_example.sql`。
+2. 不再同步修改 `init.sql`；全新库也会完整执行 001 到最新 migration。
 3. 已经进入发布包并可能被记录到 `schema_migrations` 的迁移文件不要回改内容；需要修正时追加新迁移。
-4. 迁移脚本必须保护真实数据，避免清空 `users`、`sessions`、`messages`、`files`、`skills`、`font_assets` 等业务表。
-5. 发布包不包含测试数据入口；演示数据如未来需要，应放在单独的开发文档和非发布脚本中。
+4. migration 文件不得自行写 `BEGIN`、`COMMIT`、`ROLLBACK` 或 `CREATE INDEX CONCURRENTLY`；runner 在生成期拒绝这些语句，事务所有权只保留一层。
+5. 迁移脚本必须保护真实数据，避免清空 `users`、`sessions`、`messages`、`files`、`skills`、`font_assets` 等业务表。
+6. 发布包不包含测试数据入口；故障 fixture 只放在 `backend/migrations/testdata/`，不会被 production runner 扫描。
 
 ## 常见问题
 
@@ -94,9 +98,9 @@ psql -h localhost -U postgres -d effchat -f init.sql
 
 ### 已有库没有 `schema_migrations` 怎么办？
 
-`init_db.sh` 和 Docker 迁移容器都会先创建 `schema_migrations`。第一次接入 production 链时会按文件名执行迁移；这些迁移应保持幂等，已有列、表、索引会跳过或安全更新。
+`init_db.sh` 和 Docker migrate 都会先创建 `schema_migrations`。没有账本的既有数据库会完整执行 production 链；执行前必须先备份并在隔离副本验证，因为 runner 不会猜测任意手工 schema 的来源。
 
-`001_schema.sql` 是迁移链收敛前的历史基线，因此统一记录为 `legacy-baseline-v1`，不再把会随 fresh install 演进的 `init.sql` 内容作为它的校验和。`002` 及之后的迁移仍逐文件严格校验；任何不匹配都会拒绝升级。
+`001_schema.sql` 的当前指纹包含它和不可变 `init.sql`。历史 `legacy-baseline-v1`、已知旧指纹和旧空指纹只按 `legacy-checksums.txt` 的规则 reconcile；除此以外任何不匹配都会拒绝升级。
 
 ### 为什么不再保留测试数据？
 

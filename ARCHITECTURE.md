@@ -74,6 +74,8 @@ backend (Gin)
 
 会话压缩后的冷加载窗口以最新 active checkpoint 为历史左边界。窗口和对话 turn 索引只选择未压缩 user turn；当分页到达最旧未压缩页时附带 checkpoint 摘要，立即刷新且尚无新 turn 时则只返回该摘要。这样 divider 不会在中间页重复，旧压缩消息也不会重新混入窗口；Agent context 仍由独立的压缩上下文查询负责。
 
+压缩模型是输出受限且结果会持久化为后续上下文的 utility consumer。它复用当前会话的模型和渠道，但在克隆的任务请求上关闭可选 thinking，避免 reasoning 抢占摘要预算；收流后、checkpoint 落库前还会复用主聊天的 inline `<think>` 分离边界，防止兼容网关忽略请求开关并把隐藏推理写入 durable summary。原始会话请求保持不变，主聊天的 thinking 配置不受影响。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

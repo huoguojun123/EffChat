@@ -181,14 +181,15 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 		default:
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"compaction-boundary-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"<summary>继续上下文</summary>\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"<think>内部推理\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"过程</think>继续上下文\"},\"finish_reason\":\"stop\"}]}\n\n")
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
 
 	einoAgent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
 	req := &ChatRequest{
-		ModelID:         "compaction-boundary-model",
+		ModelID:         "deepseek-ai/DeepSeek-V4-Flash",
 		Provider:        "compaction-boundary-channel",
 		MaxTokens:       64000,
 		ContextWindow:   128000,
@@ -234,14 +235,24 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 	if got, _ := providerRequest["max_tokens"].(float64); int(got) != compactionMaxOutputTokens {
 		t.Fatalf("provider max_tokens = %v, want %d", providerRequest["max_tokens"], compactionMaxOutputTokens)
 	}
+	thinking, ok := providerRequest["thinking"].(map[string]interface{})
+	if !ok || thinking["type"] != "disabled" {
+		t.Fatalf("provider thinking = %#v, want disabled", providerRequest["thinking"])
+	}
 	if checkpoint == nil || checkpoint.CompressBefore != 42 || checkpoint.Provider != req.Provider || checkpoint.ModelID != req.ModelID {
 		t.Fatalf("checkpoint = %#v", checkpoint)
 	}
 	if !strings.Contains(string(checkpoint.SummaryData), "继续上下文") {
 		t.Fatalf("summary data = %s", checkpoint.SummaryData)
 	}
+	if strings.Contains(string(checkpoint.SummaryData), "内部推理") {
+		t.Fatalf("summary data retained inline thinking: %s", checkpoint.SummaryData)
+	}
 	if req.MaxTokens != 64000 {
 		t.Fatalf("PrepareCompaction mutated the active request MaxTokens = %d", req.MaxTokens)
+	}
+	if req.SuppressThinking {
+		t.Fatal("PrepareCompaction mutated the active request SuppressThinking")
 	}
 }
 

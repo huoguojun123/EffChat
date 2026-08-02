@@ -17,6 +17,8 @@ function model(patch: Partial<Model>): Model {
     enabled: true,
     min_group_level: 0,
     sort_order: 0,
+    catalog_source: "manual",
+    lifecycle_status: "unknown",
     ...patch,
   }
 }

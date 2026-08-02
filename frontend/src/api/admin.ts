@@ -411,6 +411,9 @@ export interface CreateModelInput {
   enabled: boolean
   min_group_level: number
   sort_order: number
+  catalog_source?: Model["catalog_source"]
+  catalog_checked_at?: string
+  lifecycle_status?: Model["lifecycle_status"]
 }
 
 export interface UpdateModelInput {
@@ -426,6 +429,9 @@ export interface UpdateModelInput {
   enabled?: boolean
   min_group_level?: number
   sort_order?: number
+  catalog_source?: Model["catalog_source"]
+  catalog_checked_at?: string
+  lifecycle_status?: Model["lifecycle_status"]
 }
 
 export interface CreateGroupInput {

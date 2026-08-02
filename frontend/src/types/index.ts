@@ -207,6 +207,11 @@ export interface Model {
   enabled: boolean
   min_group_level: number
   sort_order: number
+  // Catalog metadata is persisted separately from runtime/channel status so
+  // administrators can see where capability values came from.
+  catalog_source: "manual" | "channel" | "models_dev" | "builtin" | "unknown"
+  catalog_checked_at?: string
+  lifecycle_status: "active" | "preview" | "deprecated" | "retired" | "unknown"
   resolved_thinking_format?: string
   default_thinking_effort?: string
   thinking_effort_options?: ThinkingEffortOption[]

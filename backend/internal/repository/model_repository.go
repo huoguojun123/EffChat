@@ -18,7 +18,8 @@ func NewModelRepository(db *sql.DB) *ModelRepository {
 }
 
 const modelColumns = `id, display_name, provider, vision, tool_use, reasoning,
-	thinking_format, search_impl, context_window, max_output, enabled, min_group_level, sort_order, created_at, updated_at`
+	thinking_format, search_impl, context_window, max_output, enabled, min_group_level, sort_order,
+	catalog_source, catalog_checked_at, lifecycle_status, created_at, updated_at`
 
 func scanModel(s interface {
 	Scan(dest ...interface{}) error
@@ -27,6 +28,7 @@ func scanModel(s interface {
 	err := s.Scan(
 		&m.ID, &m.DisplayName, &m.Provider, &m.Vision, &m.ToolUse, &m.Reasoning,
 		&m.ThinkingFormat, &m.SearchImpl, &m.ContextWindow, &m.MaxOutput, &m.Enabled, &m.MinGroupLevel, &m.SortOrder,
+		&m.CatalogSource, &m.CatalogCheckedAt, &m.LifecycleStatus,
 		&m.CreatedAt, &m.UpdatedAt,
 	)
 	if err != nil {
@@ -105,8 +107,9 @@ func (r *ModelRepository) Get(id string) (*model.Model, error) {
 func (r *ModelRepository) Upsert(m *model.Model) error {
 	query := `
 		INSERT INTO models (id, display_name, provider, vision, tool_use, reasoning,
-			thinking_format, search_impl, context_window, max_output, enabled, min_group_level, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			thinking_format, search_impl, context_window, max_output, enabled, min_group_level, sort_order,
+			catalog_source, catalog_checked_at, lifecycle_status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (id) DO UPDATE SET
 			display_name = EXCLUDED.display_name,
 			provider = EXCLUDED.provider,
@@ -119,13 +122,17 @@ func (r *ModelRepository) Upsert(m *model.Model) error {
 			max_output = EXCLUDED.max_output,
 			enabled = EXCLUDED.enabled,
 			min_group_level = EXCLUDED.min_group_level,
-			sort_order = EXCLUDED.sort_order
+			sort_order = EXCLUDED.sort_order,
+			catalog_source = EXCLUDED.catalog_source,
+			catalog_checked_at = EXCLUDED.catalog_checked_at,
+			lifecycle_status = EXCLUDED.lifecycle_status
 		RETURNING created_at, updated_at
 	`
 	err := r.db.QueryRow(
 		query,
 		m.ID, m.DisplayName, m.Provider, m.Vision, m.ToolUse, m.Reasoning,
 		modelbank.NormalizeThinkingFormat(m.ThinkingFormat), m.SearchImpl, m.ContextWindow, m.MaxOutput, m.Enabled, m.MinGroupLevel, m.SortOrder,
+		model.NormalizeCatalogSource(m.CatalogSource), m.CatalogCheckedAt, model.NormalizeModelLifecycleStatus(m.LifecycleStatus),
 	).Scan(&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to upsert model: %w", err)

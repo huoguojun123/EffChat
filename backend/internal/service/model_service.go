@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
@@ -30,35 +31,41 @@ func NewModelService(modelRepo *repository.ModelRepository, channelServices ...*
 
 // CreateModelRequest 新建模型请求
 type CreateModelRequest struct {
-	ID             string `json:"id" binding:"required"`
-	DisplayName    string `json:"display_name" binding:"required"`
-	Provider       string `json:"provider" binding:"required"`
-	Vision         bool   `json:"vision"`
-	ToolUse        bool   `json:"tool_use"`
-	Reasoning      bool   `json:"reasoning"`
-	ThinkingFormat string `json:"thinking_format"`
-	SearchImpl     string `json:"search_impl"`
-	ContextWindow  int    `json:"context_window"`
-	MaxOutput      int    `json:"max_output"`
-	Enabled        *bool  `json:"enabled"` // 指针：缺省时默认 true
-	MinGroupLevel  int    `json:"min_group_level"`
-	SortOrder      int    `json:"sort_order"`
+	ID               string     `json:"id" binding:"required"`
+	DisplayName      string     `json:"display_name" binding:"required"`
+	Provider         string     `json:"provider" binding:"required"`
+	Vision           bool       `json:"vision"`
+	ToolUse          bool       `json:"tool_use"`
+	Reasoning        bool       `json:"reasoning"`
+	ThinkingFormat   string     `json:"thinking_format"`
+	SearchImpl       string     `json:"search_impl"`
+	ContextWindow    int        `json:"context_window"`
+	MaxOutput        int        `json:"max_output"`
+	Enabled          *bool      `json:"enabled"` // 指针：缺省时默认 true
+	MinGroupLevel    int        `json:"min_group_level"`
+	SortOrder        int        `json:"sort_order"`
+	CatalogSource    string     `json:"catalog_source"`
+	CatalogCheckedAt *time.Time `json:"catalog_checked_at"`
+	LifecycleStatus  string     `json:"lifecycle_status"`
 }
 
 // UpdateModelRequest 更新模型请求（指针字段，仅更新提供的项）
 type UpdateModelRequest struct {
-	DisplayName    *string `json:"display_name"`
-	Provider       *string `json:"provider"`
-	Vision         *bool   `json:"vision"`
-	ToolUse        *bool   `json:"tool_use"`
-	Reasoning      *bool   `json:"reasoning"`
-	ThinkingFormat *string `json:"thinking_format"`
-	SearchImpl     *string `json:"search_impl"`
-	ContextWindow  *int    `json:"context_window"`
-	MaxOutput      *int    `json:"max_output"`
-	Enabled        *bool   `json:"enabled"`
-	MinGroupLevel  *int    `json:"min_group_level"`
-	SortOrder      *int    `json:"sort_order"`
+	DisplayName      *string    `json:"display_name"`
+	Provider         *string    `json:"provider"`
+	Vision           *bool      `json:"vision"`
+	ToolUse          *bool      `json:"tool_use"`
+	Reasoning        *bool      `json:"reasoning"`
+	ThinkingFormat   *string    `json:"thinking_format"`
+	SearchImpl       *string    `json:"search_impl"`
+	ContextWindow    *int       `json:"context_window"`
+	MaxOutput        *int       `json:"max_output"`
+	Enabled          *bool      `json:"enabled"`
+	MinGroupLevel    *int       `json:"min_group_level"`
+	SortOrder        *int       `json:"sort_order"`
+	CatalogSource    *string    `json:"catalog_source"`
+	CatalogCheckedAt *time.Time `json:"catalog_checked_at"`
+	LifecycleStatus  *string    `json:"lifecycle_status"`
 }
 
 // validModelFields 模型字段校验值
@@ -91,6 +98,12 @@ func validateModelInput(m *model.Model) error {
 	}
 	if m.MinGroupLevel < 0 {
 		return fmt.Errorf("%w: min_group_level must be >= 0", ErrModelInvalid)
+	}
+	if !model.IsValidCatalogSource(m.CatalogSource) {
+		return fmt.Errorf("%w: invalid catalog_source", ErrModelInvalid)
+	}
+	if !model.IsValidModelLifecycleStatus(m.LifecycleStatus) {
+		return fmt.Errorf("%w: invalid lifecycle_status", ErrModelInvalid)
 	}
 	return nil
 }
@@ -152,19 +165,22 @@ func (s *ModelService) Create(req *CreateModelRequest) (*model.Model, error) {
 	}
 
 	m := &model.Model{
-		ID:             req.ID,
-		DisplayName:    req.DisplayName,
-		Provider:       req.Provider,
-		Vision:         req.Vision,
-		ToolUse:        req.ToolUse,
-		Reasoning:      req.Reasoning,
-		ThinkingFormat: modelbank.NormalizeThinkingFormat(req.ThinkingFormat),
-		SearchImpl:     req.SearchImpl,
-		ContextWindow:  req.ContextWindow,
-		MaxOutput:      req.MaxOutput,
-		Enabled:        enabled,
-		MinGroupLevel:  req.MinGroupLevel,
-		SortOrder:      req.SortOrder,
+		ID:               req.ID,
+		DisplayName:      req.DisplayName,
+		Provider:         req.Provider,
+		Vision:           req.Vision,
+		ToolUse:          req.ToolUse,
+		Reasoning:        req.Reasoning,
+		ThinkingFormat:   modelbank.NormalizeThinkingFormat(req.ThinkingFormat),
+		SearchImpl:       req.SearchImpl,
+		ContextWindow:    req.ContextWindow,
+		MaxOutput:        req.MaxOutput,
+		Enabled:          enabled,
+		MinGroupLevel:    req.MinGroupLevel,
+		SortOrder:        req.SortOrder,
+		CatalogSource:    model.NormalizeCatalogSource(req.CatalogSource),
+		CatalogCheckedAt: req.CatalogCheckedAt,
+		LifecycleStatus:  model.NormalizeModelLifecycleStatus(req.LifecycleStatus),
 	}
 
 	if err := validateModelInput(m); err != nil {
@@ -224,6 +240,15 @@ func (s *ModelService) Update(id string, req *UpdateModelRequest) (*model.Model,
 	}
 	if req.SortOrder != nil {
 		m.SortOrder = *req.SortOrder
+	}
+	if req.CatalogSource != nil {
+		m.CatalogSource = model.NormalizeCatalogSource(*req.CatalogSource)
+	}
+	if req.CatalogCheckedAt != nil {
+		m.CatalogCheckedAt = req.CatalogCheckedAt
+	}
+	if req.LifecycleStatus != nil {
+		m.LifecycleStatus = model.NormalizeModelLifecycleStatus(*req.LifecycleStatus)
 	}
 
 	if err := validateModelInput(m); err != nil {

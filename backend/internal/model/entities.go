@@ -96,21 +96,24 @@ type ThinkingEffortOption struct {
 // Model 模型能力记录（models 表）
 // 字段与 modelbank.ModelInfo / ModelCapabilities 对齐，由 repository 层映射。
 type Model struct {
-	ID             string    `json:"id"`
-	DisplayName    string    `json:"display_name"`
-	Provider       string    `json:"provider"`
-	Vision         bool      `json:"vision"`
-	ToolUse        bool      `json:"tool_use"`
-	Reasoning      bool      `json:"reasoning"`
-	ThinkingFormat string    `json:"thinking_format"` // auto, none, deepseek_v4, openai_reasoning_effort...
-	SearchImpl     string    `json:"search_impl"`     // '', internal, params, tool
-	ContextWindow  int       `json:"context_window"`
-	MaxOutput      int       `json:"max_output"`
-	Enabled        bool      `json:"enabled"`
-	MinGroupLevel  int       `json:"min_group_level"` // 最低可见组等级，0=所有人可见
-	SortOrder      int       `json:"sort_order"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID               string     `json:"id"`
+	DisplayName      string     `json:"display_name"`
+	Provider         string     `json:"provider"`
+	Vision           bool       `json:"vision"`
+	ToolUse          bool       `json:"tool_use"`
+	Reasoning        bool       `json:"reasoning"`
+	ThinkingFormat   string     `json:"thinking_format"` // auto, none, deepseek_v4, openai_reasoning_effort...
+	SearchImpl       string     `json:"search_impl"`     // '', internal, params, tool
+	ContextWindow    int        `json:"context_window"`
+	MaxOutput        int        `json:"max_output"`
+	Enabled          bool       `json:"enabled"`
+	MinGroupLevel    int        `json:"min_group_level"` // 最低可见组等级，0=所有人可见
+	SortOrder        int        `json:"sort_order"`
+	CatalogSource    string     `json:"catalog_source"`
+	CatalogCheckedAt *time.Time `json:"catalog_checked_at,omitempty"`
+	LifecycleStatus  string     `json:"lifecycle_status"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 
 	ResolvedThinkingFormat string                 `json:"resolved_thinking_format,omitempty"`
 	DefaultThinkingEffort  string                 `json:"default_thinking_effort,omitempty"`

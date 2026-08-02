@@ -15,12 +15,14 @@ import (
 const (
 	modelProbeFirstOutputTimeout = 30 * time.Second
 	modelProbeMaxOutputTokens    = 16
+	modelProbeExpectedOutput     = "OK"
 )
 
 // ModelProbeResult 是后台“模型连通性探测”的最小结果。
 // 这里只关心模型能否完成一次最短文本回复，不验证工具、多模态、搜索、思考参数或长上下文能力。
 type ModelProbeResult struct {
 	Output     string
+	Matched    bool
 	DurationMs int64
 }
 
@@ -93,14 +95,24 @@ func (a *EinoAgent) RunPreparedModelProbe(runCtx context.Context, prepared *Prep
 	if err != nil {
 		return nil, sanitizeModelRuntimeError(prepared.request.Provider, prepared.request.ModelID, err)
 	}
-	output := ""
-	if resp != nil {
-		output = strings.TrimSpace(resp.Content)
-	}
+	output, matched := classifyModelProbeOutput(resp)
 	return &ModelProbeResult{
 		Output:     truncateProbeOutput(output),
+		Matched:    matched,
 		DurationMs: time.Since(prepared.startedAt).Milliseconds(),
 	}, nil
+}
+
+// classifyModelProbeOutput keeps transport success separate from probe success.
+// The prompt asks for one exact sentinel, so an empty/nil response or any extra
+// text proves only that the provider returned a stream, not that the configured
+// model followed the minimal request contract.
+func classifyModelProbeOutput(resp *schema.Message) (string, bool) {
+	if resp == nil {
+		return "", false
+	}
+	output := strings.TrimSpace(resp.Content)
+	return output, output == modelProbeExpectedOutput
 }
 
 func truncateProbeOutput(output string) string {

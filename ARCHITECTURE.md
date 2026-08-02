@@ -158,7 +158,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 提示与知识：底层提示词、提示词库、Skills。
 - 系统：实例状态、系统配置、字体、文件清理。
 
-管理员模型 probe 保持 `200 + ok=false` 的状态型失败协议，避免单个模型检测失败升级为管理后台全局异常；请求字段缺失为稳定 400，probe runtime 缺失为带 request ID 的 retryable 503。setup 和 provider stream 故障只返回稳定 code、retryable 与经 Agent 分类的安全 message/diagnostic，原始渠道、数据库、URL、密钥、响应正文和路径只进入内部日志。probe 仍只验证最小文本连通性；是否严格接受 `OK` 由独立的 probe 真阳性整改负责。
+管理员模型 probe 保持 `200 + ok=false` 的状态型失败协议，避免单个模型检测失败升级为管理后台全局异常；请求字段缺失为稳定 400，probe runtime 缺失为带 request ID 的 retryable 503。setup 和 provider stream 故障只返回稳定 code、retryable 与经 Agent 分类的安全 message/diagnostic，原始渠道、数据库、URL、密钥、响应正文和路径只进入内部日志。probe 只验证最小文本连通性，并且只有完整收流后的正文在去除首尾空白后精确等于 `OK` 才返回 `ok=true`；nil、空文本、`NOT OK` 或任何附加文本都以 `model_probe_unexpected_output` 返回 `200 + ok=false`，不能把“上游返回了某些内容”误报为模型可用。
 
 models.dev 单模型目录查询对空 ID 返回 `models_dev_model_invalid` 400，对缺失 provider 或 model 返回稳定 404 code，均携带 `retryable=false` 且不回显用户输入；目录获取失败继续为带 request ID 的 retryable 502。该公共错误契约不改变缓存、目录导入、能力来源、退役标记或候选日 freshness 门禁，后者仍由模型目录生命周期独立负责。
 

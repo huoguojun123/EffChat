@@ -79,7 +79,7 @@ func modelListConfigForChannel(channel *model.AIChannel) (modelListConfig, error
 
 func supportedModelListAdapter(adapter string) bool {
 	switch adapter {
-	case service.AdapterOpenAICompatible, service.AdapterAnthropic, service.AdapterGoogle:
+	case service.AdapterOpenAICompatible, service.AdapterOpenAIResponses, service.AdapterAnthropic, service.AdapterGoogle:
 		return true
 	default:
 		return false
@@ -134,7 +134,7 @@ type upstreamModelMeta struct {
 
 func fetchChannelModels(ctx context.Context, cfg modelListConfig) ([]upstreamModelMeta, error) {
 	switch cfg.adapter {
-	case service.AdapterOpenAICompatible:
+	case service.AdapterOpenAICompatible, service.AdapterOpenAIResponses:
 		return fetchGatewayModels(ctx, cfg.baseURL, cfg.apiKey)
 	case service.AdapterAnthropic:
 		return fetchAnthropicModels(ctx, cfg.baseURL, cfg.apiKey)

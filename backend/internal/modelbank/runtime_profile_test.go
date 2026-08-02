@@ -79,6 +79,21 @@ func TestRuntimeProfileUsesChannelAdapterAndDisplayName(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileExposesOpenAIResponsesWireProtocol(t *testing.T) {
+	profile := RuntimeProfileForModelWithAdapter(&model.Model{
+		ID:             "gpt-5.1",
+		Provider:       "openai",
+		Reasoning:      true,
+		ThinkingFormat: "openai_reasoning_effort",
+	}, "openai_responses")
+	if profile.WireProtocol != WireProtocolOpenAIResponses {
+		t.Fatalf("wire_protocol = %q, want %q", profile.WireProtocol, WireProtocolOpenAIResponses)
+	}
+	if profile.Family != "openai" {
+		t.Fatalf("family = %q, want openai", profile.Family)
+	}
+}
+
 func TestRuntimeProfileExposesGPT56Efforts(t *testing.T) {
 	profile := RuntimeProfileForModel(&model.Model{
 		ID:             "gpt-5.6-sol",

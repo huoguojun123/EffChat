@@ -10,8 +10,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/service"
 	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
@@ -19,6 +23,65 @@ import (
 type preparedChatEventWriter struct {
 	mu     sync.Mutex
 	events []string
+}
+
+func TestBuildChatModelUsesOpenAIResponsesProtocol(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_agent\",\"status\":\"in_progress\",\"model\":\"gpt-5.1\",\"output\":[]}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"responses ready\",\"logprobs\":[]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_agent\",\"status\":\"completed\",\"model\":\"gpt-5.1\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n")
+	}))
+	defer server.Close()
+
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID:        "gpt-5.1",
+		Provider:       "responses-channel",
+		MaxTokens:      321,
+		Reasoning:      true,
+		ThinkingFormat: string(modelbank.ThinkingFormatOpenAIReasoningEffort),
+		ThinkingEffort: string(modelbank.ThinkingEffortHigh),
+		RuntimeChannel: &model.AIChannel{
+			Key:     "responses-channel",
+			Adapter: service.AdapterOpenAIResponses,
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	}, modelbank.SearchDecision{})
+	if err != nil {
+		t.Fatalf("buildChatModel() error = %v", err)
+	}
+	result, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second)
+	if err != nil {
+		t.Fatalf("collect Responses stream: %v", err)
+	}
+	if result.Content != "responses ready" {
+		t.Fatalf("content = %q", result.Content)
+	}
+	body := <-requestBodies
+	if body["max_output_tokens"] != float64(321) || body["store"] != false {
+		t.Fatalf("request limits/state = %#v", body)
+	}
+	reasoning, _ := body["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" || reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+	if _, exists := body["previous_response_id"]; exists {
+		t.Fatalf("request must remain stateless: %#v", body)
+	}
 }
 
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {

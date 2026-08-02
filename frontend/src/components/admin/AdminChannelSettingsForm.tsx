@@ -25,6 +25,12 @@ const channelDefaults: Record<AIChannelInput["adapter"], { key: string; displayN
     baseURL: "https://api.openai.com/v1",
     sortOrder: 10,
   },
+  openai_responses: {
+    key: "openai-responses",
+    displayName: "OpenAI Responses",
+    baseURL: "https://api.openai.com/v1",
+    sortOrder: 15,
+  },
   anthropic: {
     key: "anthropic",
     displayName: "Anthropic",

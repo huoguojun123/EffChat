@@ -10,6 +10,7 @@ import (
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/openairesponses"
 	"github.com/huoguojun123/EffChat/internal/providerhttp"
 	"github.com/huoguojun123/EffChat/internal/service"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
@@ -47,6 +48,23 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		cm, err := openai.NewChatModel(ctx, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create channel %q chat model: %w", channel.Key, err)
+		}
+		return a.wrapUsageModel(cm, req), nil
+
+	case service.AdapterOpenAIResponses:
+		cfg := &openairesponses.Config{
+			Model:       req.ModelID,
+			APIKey:      channel.APIKey,
+			MaxTokens:   ptrIntPositive(req.MaxTokens),
+			Temperature: ptrFloat32(req.Temperature),
+			Reasoning:   openAIResponsesReasoning(runtimeReqForAdapter(req, "openai")),
+		}
+		if channel.BaseURL != "" {
+			cfg.BaseURL = channel.BaseURL
+		}
+		cm, err := openairesponses.NewChatModel(ctx, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create channel %q responses model: %w", channel.Key, err)
 		}
 		return a.wrapUsageModel(cm, req), nil
 

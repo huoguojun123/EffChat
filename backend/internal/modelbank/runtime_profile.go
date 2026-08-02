@@ -8,6 +8,7 @@ import (
 
 const (
 	WireProtocolOpenAICompatible = "openai-compatible"
+	WireProtocolOpenAIResponses  = "openai-responses"
 	WireProtocolAnthropicNative  = "anthropic-native"
 	WireProtocolGoogleNative     = "google-native"
 )
@@ -67,6 +68,8 @@ func inferWireProtocolWithAdapter(provider, adapter string) string {
 		return WireProtocolGoogleNative
 	case "openai_compatible":
 		return WireProtocolOpenAICompatible
+	case "openai_responses":
+		return WireProtocolOpenAIResponses
 	}
 	p := normalizeProvider(provider)
 	switch {

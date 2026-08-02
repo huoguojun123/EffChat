@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
@@ -61,7 +62,7 @@ func TestPrepareModelProbeDoesNotRetainCanceledSetupContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunPreparedModelProbe() error = %v", err)
 	}
-	if result == nil || result.Output != "OK" {
+	if result == nil || result.Output != "OK" || !result.Matched {
 		t.Fatalf("probe result = %#v", result)
 	}
 	var providerRequest map[string]interface{}
@@ -78,6 +79,35 @@ func TestPrepareModelProbeDoesNotRetainCanceledSetupContext(t *testing.T) {
 	}
 	if req.MaxTokens != 64000 {
 		t.Fatalf("PrepareModelProbe mutated active request MaxTokens = %d", req.MaxTokens)
+	}
+}
+
+func TestModelProbeRejectsUnexpectedCompleteOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-probe\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"probe-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"NOT OK\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	einoAgent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	result, err := einoAgent.TestModel(t.Context(), &ChatRequest{
+		ModelID:         "probe-model",
+		Provider:        "probe-channel",
+		RuntimeResolved: true,
+		RuntimeChannel: &model.AIChannel{
+			Key:     "probe-channel",
+			Adapter: service.AdapterOpenAICompatible,
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("TestModel() error = %v", err)
+	}
+	if result == nil || result.Output != "NOT OK" || result.Matched {
+		t.Fatalf("probe result = %#v", result)
 	}
 }
 
@@ -117,7 +147,7 @@ func TestPrepareModelProbeUsesOpenAIResponsesAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TestModel() error = %v", err)
 	}
-	if result.Output != "OK" {
+	if result.Output != "OK" || !result.Matched {
 		t.Fatalf("probe result = %#v", result)
 	}
 	body := <-requestBodies
@@ -126,6 +156,32 @@ func TestPrepareModelProbeUsesOpenAIResponsesAdapter(t *testing.T) {
 	}
 	if _, exists := body["reasoning"]; exists {
 		t.Fatalf("minimal probe must suppress reasoning: %#v", body)
+	}
+}
+
+func TestClassifyModelProbeOutputRequiresExactOK(t *testing.T) {
+	tests := []struct {
+		name        string
+		response    *schema.Message
+		wantOutput  string
+		wantMatched bool
+	}{
+		{name: "nil response"},
+		{name: "empty", response: schema.AssistantMessage("", nil)},
+		{name: "whitespace", response: schema.AssistantMessage("  \n\t", nil)},
+		{name: "exact", response: schema.AssistantMessage("OK", nil), wantOutput: "OK", wantMatched: true},
+		{name: "trimmed exact", response: schema.AssistantMessage(" \nOK\t", nil), wantOutput: "OK", wantMatched: true},
+		{name: "lowercase", response: schema.AssistantMessage("ok", nil), wantOutput: "ok"},
+		{name: "negative", response: schema.AssistantMessage("NOT OK", nil), wantOutput: "NOT OK"},
+		{name: "extra text", response: schema.AssistantMessage("OK - connected", nil), wantOutput: "OK - connected"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, matched := classifyModelProbeOutput(tt.response)
+			if output != tt.wantOutput || matched != tt.wantMatched {
+				t.Fatalf("classifyModelProbeOutput() = (%q, %t), want (%q, %t)", output, matched, tt.wantOutput, tt.wantMatched)
+			}
+		})
 	}
 }
 

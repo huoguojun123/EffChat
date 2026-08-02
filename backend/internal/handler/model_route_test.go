@@ -339,6 +339,28 @@ func TestWriteModelProbeFailureUsesSanitizedRuntimeClassification(t *testing.T) 
 	}
 }
 
+func TestWriteModelProbeUnexpectedOutputReturnsFalseWithoutRetry(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/models/test", nil)
+
+	writeModelProbeUnexpectedOutput(ctx, "fixture-model", "fixture-provider", &agent.ModelProbeResult{
+		Output:     "NOT OK",
+		DurationMs: 42,
+	})
+
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if recorder.Code != http.StatusOK || body["ok"] != false || body["code"] != "model_probe_unexpected_output" || body["retryable"] != false {
+		t.Fatalf("response = %#v status=%d", body, recorder.Code)
+	}
+	if body["scope"] != "minimal_chat_connectivity" || body["output"] != "NOT OK" || body["duration_ms"] != float64(42) {
+		t.Fatalf("probe evidence = %#v", body)
+	}
+}
+
 func TestInferModelDefaultsThinkingFormatAuto(t *testing.T) {
 	m := inferModel(upstreamModelMeta{ID: "deepseek-v4-flash", Reasoning: true}, 0)
 	if m.ThinkingFormat != "auto" {

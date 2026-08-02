@@ -66,6 +66,10 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 			writeModelProbeFailure(c, modelID, provider, "run", err)
 			return
 		}
+		if !result.Matched {
+			writeModelProbeUnexpectedOutput(c, modelID, provider, result)
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"ok":          true,
 			"model_id":    modelID,
@@ -75,6 +79,23 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 			"scope":       "minimal_chat_connectivity",
 		})
 	}
+}
+
+func writeModelProbeUnexpectedOutput(c *gin.Context, modelID, provider string, result *agent.ModelProbeResult) {
+	payload := gin.H{
+		"ok":          false,
+		"model_id":    modelID,
+		"provider":    provider,
+		"error":       "model probe returned an unexpected response",
+		"code":        "model_probe_unexpected_output",
+		"retryable":   false,
+		"scope":       "minimal_chat_connectivity",
+		"duration_ms": result.DurationMs,
+	}
+	if result.Output != "" {
+		payload["output"] = result.Output
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 func writeModelProbeFailure(c *gin.Context, modelID, provider, phase string, err error) {

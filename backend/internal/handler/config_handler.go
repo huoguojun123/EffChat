@@ -109,9 +109,6 @@ func validateDefaultModelConfig(key string, value json.RawMessage, modelServices
 	if err := json.Unmarshal(value, &modelID); err != nil {
 		return fmt.Errorf("%w: default_model_id must be a valid model id", repository.ErrConfigInvalid)
 	}
-	if modelID == "" {
-		return nil
-	}
 	if len(modelServices) == 0 || modelServices[0] == nil {
 		return fmt.Errorf("default model validation is unavailable")
 	}

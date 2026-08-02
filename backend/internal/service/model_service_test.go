@@ -74,6 +74,9 @@ func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicMo
 	})
 
 	svc := NewModelService(modelRepo, channelService)
+	if err := svc.ValidateDefaultModel(""); err == nil || !errors.Is(err, ErrModelInvalid) {
+		t.Fatalf("empty default with runnable public model error = %v, want invalid model configuration", err)
+	}
 	if err := svc.ValidateDefaultModel(modelID); err != nil {
 		t.Fatalf("validate runnable public default: %v", err)
 	}
@@ -88,6 +91,9 @@ func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicMo
 		t.Fatal("disabled model accepted as default")
 	} else if !errors.Is(err, ErrModelInvalid) {
 		t.Fatalf("disabled model error = %v, want invalid model configuration", err)
+	}
+	if err := svc.ValidateDefaultModel(""); err != nil {
+		t.Fatalf("empty default without runnable public model: %v", err)
 	}
 }
 

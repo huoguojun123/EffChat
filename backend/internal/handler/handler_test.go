@@ -725,6 +725,61 @@ func TestCreateSession_RejectsMissingModelWhenDefaultUnset(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("missing model_id without configured default: want 400, got %d body=%s", w.Code, w.Body.String())
 	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode missing default response: %v", err)
+	}
+	if body["code"] != "default_model_not_configured" {
+		t.Fatalf("missing default response = %#v", body)
+	}
+
+	w = env.doRequest(http.MethodGet, "/api/v1/sessions/readiness", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("readiness without default: want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode readiness response: %v", err)
+	}
+	if body["ready"] != false || body["code"] != "default_model_not_configured" {
+		t.Fatalf("readiness without default = %#v", body)
+	}
+}
+
+func TestSessionCreateReadinessUsesConfiguredDefault(t *testing.T) {
+	env := setupTestEnv(t)
+	w := env.doRequest(http.MethodGet, "/api/v1/sessions/readiness", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("configured readiness: want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode configured readiness: %v", err)
+	}
+	if body["ready"] != true {
+		t.Fatalf("configured readiness = %#v", body)
+	}
+}
+
+func TestAdminCannotClearRunnableDefaultModel(t *testing.T) {
+	env := setupTestEnv(t)
+	var before []byte
+	if err := env.db.QueryRow("SELECT value FROM system_config WHERE key = 'default_model_id'").Scan(&before); err != nil {
+		t.Fatalf("load default before update: %v", err)
+	}
+
+	w := env.doRequest(http.MethodPatch, "/api/v1/admin/config", map[string]interface{}{
+		"updates": map[string]interface{}{"default_model_id": ""},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("clear runnable default: want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	var after []byte
+	if err := env.db.QueryRow("SELECT value FROM system_config WHERE key = 'default_model_id'").Scan(&after); err != nil {
+		t.Fatalf("load default after update: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("default changed after rejected clear: before=%s after=%s", before, after)
+	}
 }
 
 func TestGetSession_NotFound(t *testing.T) {

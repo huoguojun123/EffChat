@@ -40,6 +40,8 @@ func writeSessionMutationError(c *gin.Context, operation string, err error) {
 			payload["model_id"] = modelErr.ModelID
 		}
 		c.JSON(status, payload)
+	case errors.Is(err, service.ErrDefaultModelNotConfigured):
+		writePublicError(c, http.StatusBadRequest, "default_model_not_configured", "default model is not configured", false)
 	case errors.Is(err, service.ErrSessionInvalid):
 		message := strings.TrimPrefix(err.Error(), service.ErrSessionInvalid.Error()+": ")
 		writePublicError(c, http.StatusBadRequest, "session_invalid", message, false)

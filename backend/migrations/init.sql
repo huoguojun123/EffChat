@@ -699,7 +699,7 @@ CREATE TABLE IF NOT EXISTS ai_channels (
     id           BIGSERIAL PRIMARY KEY,
     channel_key  VARCHAR(80) NOT NULL UNIQUE,
     display_name VARCHAR(160) NOT NULL,
-    adapter      VARCHAR(40) NOT NULL CHECK (adapter IN ('openai_compatible', 'openai_responses', 'anthropic', 'google')),
+    adapter      VARCHAR(40) NOT NULL CHECK (adapter IN ('openai_compatible', 'anthropic', 'google')),
     base_url     TEXT NOT NULL DEFAULT '',
     api_key      TEXT,
     enabled      BOOLEAN NOT NULL DEFAULT true,

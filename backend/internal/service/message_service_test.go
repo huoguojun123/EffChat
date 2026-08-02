@@ -1086,7 +1086,7 @@ func TestMessageServiceUndoRejectsAutomaticCompaction(t *testing.T) {
 		t.Fatalf("persist automatic checkpoint: %v", err)
 	}
 
-	if _, err := svc.UndoLastCompaction(session.ID, user.ID); err == nil || !strings.Contains(err.Error(), "latest manual compaction") {
+	if _, err := svc.UndoLastCompaction(session.ID, user.ID); !errors.Is(err, ErrCompactionUndoDenied) {
 		t.Fatalf("undo automatic compaction error = %v", err)
 	}
 	messages, err := messageRepo.ListAllBySession(session.ID)

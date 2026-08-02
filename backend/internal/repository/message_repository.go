@@ -68,6 +68,9 @@ var (
 	ErrMessageUnchanged       = errors.New("message content is unchanged")
 	ErrChatRunActive          = errors.New("chat run is still active")
 	ErrChatRunTerminal        = errors.New("chat run is no longer running")
+	ErrCompactionNotFound     = errors.New("compaction checkpoint not found")
+	ErrCompactionUndoDenied   = errors.New("compaction checkpoint cannot be undone")
+	ErrCompactionUndoStale    = errors.New("compaction checkpoint has newer messages")
 )
 
 func NewMessageRepository(db *sql.DB) *MessageRepository {
@@ -1279,7 +1282,7 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		LIMIT 1
 	`, sessionID).Scan(&summaryMessageID)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("no compaction checkpoint to undo")
+		return 0, ErrCompactionNotFound
 	}
 	if err != nil {
 		return 0, fmt.Errorf("failed to find latest compaction checkpoint: %w", err)
@@ -1293,7 +1296,7 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		return 0, fmt.Errorf("failed to read compaction checkpoint: %w", err)
 	}
 	if kind != "manual" {
-		return 0, fmt.Errorf("only the latest manual compaction can be undone")
+		return 0, ErrCompactionUndoDenied
 	}
 
 	var hasNewMessages bool
@@ -1309,7 +1312,7 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		return 0, fmt.Errorf("failed to validate compaction checkpoint: %w", err)
 	}
 	if hasNewMessages {
-		return 0, fmt.Errorf("cannot undo compaction after new messages")
+		return 0, ErrCompactionUndoStale
 	}
 
 	res, err := tx.ExecContext(ctx, `

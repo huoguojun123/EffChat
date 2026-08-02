@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -85,5 +86,20 @@ func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicMo
 	}
 	if err := svc.ValidateDefaultModel(modelID); err == nil {
 		t.Fatal("disabled model accepted as default")
+	} else if !errors.Is(err, ErrModelInvalid) {
+		t.Fatalf("disabled model error = %v, want invalid model configuration", err)
+	}
+}
+
+func TestValidateDefaultModelPreservesRepositoryFailure(t *testing.T) {
+	db := setupMessageTestDB(t)
+	modelRepo := repository.NewModelRepository(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	err := NewModelService(modelRepo, nil).ValidateDefaultModel("example-model")
+	if err == nil || errors.Is(err, ErrModelInvalid) {
+		t.Fatalf("repository error = %v, want internal failure", err)
 	}
 }

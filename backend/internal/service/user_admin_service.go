@@ -6,10 +6,22 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"golang.org/x/crypto/bcrypt"
+)
+
+var ErrUserAdminInvalid = errors.New("invalid administrator user request")
+
+const (
+	adminUsernameMinRunes = 3
+	adminUsernameMaxRunes = 50
+	userNicknameMaxRunes  = 100
+	userEmailMaxRunes     = 255
+	userPasswordMinBytes  = 6
+	userPasswordMaxBytes  = 72
 )
 
 type UserAdminService struct {
@@ -67,6 +79,9 @@ type SetGroupRequest struct {
 
 // SetGroup 设置用户所属分级组。
 func (s *UserAdminService) SetGroup(userID int64, groupID *int64) (*UserResponse, error) {
+	if groupID != nil && *groupID <= 0 {
+		return nil, fmt.Errorf("%w: group_id must be a positive integer or null", ErrUserAdminInvalid)
+	}
 	if err := s.userRepo.SetGroup(userID, groupID); err != nil {
 		return nil, err
 	}
@@ -95,9 +110,18 @@ func (s *UserAdminService) List(limit, offset int) ([]*UserResponse, int, error)
 }
 
 func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error) {
+	if err := validateUsername(req.Username); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if err := validateUserPassword(req.Password); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if err := validateUserNickname(req.Nickname); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
 	email, err := normalizeOptionalEmail(req.Email)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
 	existing, err := s.userRepo.GetByUsername(req.Username)
@@ -105,7 +129,7 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 		return nil, err
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("username already exists")
+		return nil, repository.ErrUserConflict
 	}
 
 	role := req.Role
@@ -113,7 +137,7 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 		role = "user"
 	}
 	if err := validateRole(role); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
 	isActive := true
@@ -126,7 +150,7 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 		permissions = []byte(`{}`)
 	}
 	if !json.Valid(permissions) {
-		return nil, fmt.Errorf("permissions must be valid json")
+		return nil, fmt.Errorf("%w: permissions must be valid json", ErrUserAdminInvalid)
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -162,12 +186,15 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 	invalidateActiveRuns := (req.Role != nil && *req.Role != user.Role) || (req.IsActive != nil && *req.IsActive != user.IsActive)
 	email, err := normalizeOptionalEmail(req.Email)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if err := validateUserNickname(req.Nickname); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
 	if req.Role != nil {
 		if err := validateRole(*req.Role); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 		}
 		user.Role = *req.Role
 	}
@@ -186,7 +213,7 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 	}
 	if len(req.Permissions) > 0 {
 		if !json.Valid(req.Permissions) {
-			return nil, fmt.Errorf("permissions must be valid json")
+			return nil, fmt.Errorf("%w: permissions must be valid json", ErrUserAdminInvalid)
 		}
 		user.Permissions = req.Permissions
 	}
@@ -200,7 +227,7 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 	return toUserResponse(user), nil
 }
 
-// normalizeOptionalEmail 统一管理员创建/更新用户时的邮箱口径。
+// normalizeOptionalEmail 统一个人资料与管理员用户维护的邮箱口径。
 //
 // 前端为了保持表单可控，空输入会自然提交为空字符串；如果仍把 gin 的
 // binding:"omitempty,email" 放在 *string 字段上，空字符串指针有时会先触发
@@ -214,6 +241,9 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
+	if utf8.RuneCountInString(trimmed) > userEmailMaxRunes {
+		return nil, fmt.Errorf("email must be at most %d characters", userEmailMaxRunes)
+	}
 	addr, err := mail.ParseAddress(trimmed)
 	if err != nil || addr.Address != trimmed {
 		return nil, fmt.Errorf("invalid email")
@@ -222,6 +252,9 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 }
 
 func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest) error {
+	if err := validateUserPassword(req.Password); err != nil {
+		return fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
 	if _, err := s.userRepo.GetByIDIncludeInactive(userID); err != nil {
 		return err
 	}
@@ -260,6 +293,29 @@ func toUserResponse(u *model.User) *UserResponse {
 func validateRole(role string) error {
 	if role != "admin" && role != "user" {
 		return fmt.Errorf("invalid role: must be admin or user")
+	}
+	return nil
+}
+
+func validateUsername(username string) error {
+	length := utf8.RuneCountInString(username)
+	if length < adminUsernameMinRunes || length > adminUsernameMaxRunes {
+		return fmt.Errorf("username must be between %d and %d characters", adminUsernameMinRunes, adminUsernameMaxRunes)
+	}
+	return nil
+}
+
+func validateUserNickname(nickname *string) error {
+	if nickname != nil && utf8.RuneCountInString(*nickname) > userNicknameMaxRunes {
+		return fmt.Errorf("nickname must be at most %d characters", userNicknameMaxRunes)
+	}
+	return nil
+}
+
+func validateUserPassword(password string) error {
+	length := len(password)
+	if length < userPasswordMinBytes || length > userPasswordMaxBytes {
+		return fmt.Errorf("password must be between %d and %d bytes", userPasswordMinBytes, userPasswordMaxBytes)
 	}
 	return nil
 }

@@ -209,7 +209,7 @@ func (r *SessionRepository) UpdateFields(sessionID, userID int64, patch SessionP
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rows != 1 {
-		return fmt.Errorf("session not found or already deleted")
+		return fmt.Errorf("session not found or already deleted: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -232,7 +232,7 @@ func (r *SessionRepository) UpdateEnabledSkills(sessionID, userID int64, ids []s
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rows != 1 {
-		return fmt.Errorf("session not found or already deleted")
+		return fmt.Errorf("session not found or already deleted: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -297,7 +297,7 @@ func (r *SessionRepository) Delete(id, userID int64) error {
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("session not found or already deleted")
+		return fmt.Errorf("session not found or already deleted: %w", ErrNotFound)
 	}
 	if err := cancelRunningChatRuns(context.Background(), tx, userID, &id, "session_deleted", "session_deleted", "会话已删除", false); err != nil {
 		return fmt.Errorf("failed to cancel deleted session runs: %w", err)

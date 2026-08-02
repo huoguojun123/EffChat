@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -272,6 +273,21 @@ func TestMemoryTool_InvalidJSONReturnsStructuredError(t *testing.T) {
 	}
 	if out.OK || out.Error == "" {
 		t.Fatalf("expected structured failure, got %+v", out)
+	}
+}
+
+func TestMemoryTool_InternalFailureReturnsGoError(t *testing.T) {
+	tool := NewMemoryTool(&fakeMemoryStore{
+		data:   map[int64]string{},
+		getErr: errors.New("postgres://fixture:secret@db.example/effchat /srv/private/memory"),
+	}, 1, 1)
+	args, _ := json.Marshal(MemoryInput{Action: "read"})
+	raw, err := tool.InvokableRun(context.Background(), string(args))
+	if err == nil {
+		t.Fatalf("expected internal failure, got result %q", raw)
+	}
+	if raw != "" || !strings.Contains(err.Error(), "read memory") || !strings.Contains(err.Error(), "fixture:secret") {
+		t.Fatalf("internal failure was not preserved for Tool governance: raw=%q err=%v", raw, err)
 	}
 }
 

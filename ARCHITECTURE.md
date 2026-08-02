@@ -74,6 +74,28 @@ backend (Gin)
 
 会话压缩只改变 Agent 实际携带的上下文，不改变用户可回看的消息历史。完整加载、冷加载窗口、turn 索引和分页继续包含压缩前的 user/assistant/tool 消息；active checkpoint 作为逻辑 divider 插在它所压缩的最后一个 user turn 之后，并且只随包含该锚点的一个页面返回。刷新、重新登录和分页因此保持历史可见，而 Agent context 仍由独立的压缩上下文查询过滤已压缩消息并注入 checkpoint。撤销只撤销 checkpoint 对后续模型上下文的作用，不承担恢复 UI 可见性的职责。
 
+会话详情、消息分页/turn/window、Markdown 导出，以及 Run/记忆入口的会话归属查询共享同一隐私边界：不存在与无权访问均公开为 `session_not_found`，但 PostgreSQL 和扫描故障必须保留到带 request ID 的 retryable 5xx，不能在 service 层压成 404。消息 window 的目标 turn 不存在使用独立 404；本地 cursor/limit/window 参数错误使用稳定 400。
+
+会话列表的 `limit/offset/folder_id` 同样是显式查询契约：limit 只接受 1–100，offset 必须非负，folder scope 只接受 `all`、`unfiled` 或正整数 ID；非法值统一返回 `session_list_query_invalid` 400，不静默回退默认分页。该校验不改变 `has_more/next_offset`、置顶排序、folder 归属或前端加载更多行为，repository 故障仍使用带 request ID 的 retryable `session_list_failed` 5xx。
+
+全局对话检索只接受 2–120 字符 query、`all/unfiled/folder` scope、folder scope 的正整数 ID 和 1–50 的 limit；非法值统一返回 `conversation_search_query_invalid` 400，不再以裸 error 或默认 limit 隐藏错误。检索仍只读取当前用户未删除会话及可见 selected answer，repository query/scan/iteration 故障统一为带 request ID 的 retryable `conversation_search_failed` 5xx；前端既有 debounce、迟到响应 owner 和结果跳转行为不变。
+
+Run active/status/resume/cancel 入口先复用会话归属边界，再对 run id 和 replay cursor 做稳定 400 校验。durable reservation 或 RunHub 中的 run 缺失、跨会话或跨用户都收敛为 `run_not_found` 404，quota repository 和 stream writer 故障为带 request ID 的 retryable 5xx。RunHub 使用 typed not-found sentinel 仅支撑 HTTP 分类；SSE replay/gap、多订阅、terminal snapshot、停止幂等和 durable-first 生命周期不变。
+
+accepted run 的 HTTP fallback 与 durable terminal 使用同一公共错误 payload builder。取消或 setup-timeout 的 terminal 持久化失败、以及 execution owner 建立后 SSE writer 无法打开时，响应必须保留 request ID；后者还返回 run ID，提示客户端稍后恢复。该关联信息只用于追踪和恢复，不改变后台 worker 继续执行、terminal 重试、replay 或 exactly-once 所有权。
+
+run admission 已发现 durable terminal，或 BeginExecution 已被另一 observer/worker 占有但当前连接又无法建立 SSE 时，409 fallback 同样保留 request ID、稳定 `retryable=false`，execution-owned 还返回原 run ID。客户端应刷新或按 run ID 恢复，不能通过重试 admission 创建第二个执行 owner；reservation、replay 和 terminal 事实不变。
+
+accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request ID、run ID 和 `retryable=true`，提示稍后恢复；既有 run replay 发生 scope/not-found 时保留同样关联字段并使用 `retryable=false`。内部 RunHub cause 只进入日志，不能进入 SSE；这两条旁路不取消 worker、不重放 provider，也不改变 durable terminal。
+
+回答版本切换复用会话归属与 answer attempt 事务边界：无效 ID 为 400，会话或 attempt 缺失为 404，目标不属于最后一轮或没有可选择输出为 409，repository/transaction 故障为带 request ID 的 retryable 5xx。该公共错误契约不改变选择 revision、可见消息导航或选择成功后的单会话记忆重整行为。
+
+会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。
+
+会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功；该公共错误契约不改变复合 PATCH 字段的更新语义。
+
+send/preflight/retry/manual compaction 在 run accepted 前沿用相同公共错误契约：会话缺失为 404，账号失效为 401，消息输入为 400/413，retry 尾部竞态、已产生回答和附件失效为稳定 409；用户、Skill、历史、压缩任务状态、run reservation 和 SSE writer 的内部故障只返回带 request ID 的 retryable 5xx。manual compaction 一旦被 RunHub 接受，setup 阶段的会话/账号消失和 preserve target 竞态会写入同一 durable terminal 公共码，刷新和 replay 不会退化成内部错误原文。撤销压缩把缺失 checkpoint 归为 404，把非 manual 或已有新消息归为 409，repository/事务故障归为可追踪 5xx。
+
 checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成的上下文治理记录，不是用户发送消息。每日消息配额、准入检查和 Admin 今日用量统一排除 `metadata.compaction_summary=true`；普通用户消息即使后来被 retry 或删除，仍按既有消费语义计数。
 
 压缩模型是输出受限且结果会持久化为后续上下文的 utility consumer。它复用当前会话的模型和渠道，但在克隆的任务请求上关闭可选 thinking，避免 reasoning 抢占摘要预算；收流后、checkpoint 落库前还会复用主聊天的 inline `<think>` 分离边界。摘要抽取器同时容忍兼容网关把 opening `<analysis>` 移入 reasoning 字段、却在 content 中留下 orphan `</analysis>` 与 `<summary>` 包装的情况，防止隐藏推理进入 durable summary。原始会话请求保持不变，主聊天的 thinking 配置不受影响。
@@ -81,7 +103,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。
-- 管理后台可启停现有工具并配置超时；错误以结构化工具结果显示在消息内。
+- 管理后台可启停现有工具并配置超时；工具自身返回的受控业务失败保持结构化结果。repository、持久化或受管文件 I/O 等内部失败必须作为 wrapped Go error 交给 Tool governance，不能伪装成成功 envelope 内的 `error` 字段；治理边界也会把带显式公共 `message` 的结构化失败改写为该公共文案。模型、RunHub 和消息树只接收稳定失败，原始 repository、路径或 provider 原因仅进入受控内部诊断；已有 `error_code` 的网页 typed 失败继续由网页工具自己的分类器负责。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
 - 网页提取链路由管理员为 Firecrawl、Jina、Tavily 和 Exa 独立配置并排序；Basic 固定为最后兜底。
 - 网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。
@@ -91,6 +113,12 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 ## 文件与 OCR
 
 - 文件元数据在 `files` 表，解析文本保存在受管理的数据目录。
+- 文件 list/download/preview/OCR refresh 的公共读取契约区分本地参数 400、用户域内缺失 404、解析未完成 409 与 repository/受管存储/sidecar 读取的带 request ID 5xx；缺失与无权访问保持不可区分。`ApiError` 保留后端 `code/retryable/request_id`，文件预览按稳定 code 展示缺失或暂无正文，并只在公共协议允许重试时提供重试入口，不再解析中英文错误字符串。列表扫描统一检查 `rows.Err()`，中途数据库故障不能伪装成部分成功结果。
+- 文件上传准入与持久化复用同一公共错误协议：缺少 multipart/file/session 参数为稳定 400，文件与解析输出超限为 413，声明 MIME 不一致为 400，白名单或解析器不支持为 415，损坏/无可读正文为 422，会话文件数达到上限为 409；会话不存在或无权访问统一为 404，但 session/repository、受管存储、OCR queue 和 metadata 故障必须返回带 request ID 的 retryable 5xx。extractor owner 用 sentinel 区分用户内容、资源上限与依赖故障，Python sidecar 的响应正文、内部路径和上游原因不会传播到 Go 公共错误或 request log；metadata 创建失败会补偿删除本轮刚写入的原件、OCR buffer 或 extracted sidecar。
+- 前端上传预校验的 limits 接口与真实上传入口读取同一个 fail-closed policy；策略在冷启动不可用时二者都返回 `file_policy_unavailable`、带 request ID 的 retryable 503，不能由只读入口退化为无关联信息的裸错误。last-known-good、degraded 标记和实际上传最终裁决保持不变。
+- 人工 OCR retry 在 mutation 前分别校验附件 policy、Go/Python runtime 依赖和 MinerU 渠道配置；管理员未启用返回稳定 409，控制面或 runtime 暂不可读返回带 request ID 的 retryable 503。文件不存在或无权访问统一为 404，repository mutation 故障为可追踪 5xx。`RestartOCR` 提交新的 pending generation 后才复核受管原件：过期或确实缺失会用 `FailOCR` 补偿闭合为 failed 并返回 409，越界路径、非缺失型文件系统错误或补偿失败返回稳定可追踪 5xx；只有复核成功才唤醒 recovery runner。
+- 用户删除附件只先提交数据库 tombstone/cleanup claim，不在请求内删除受管字节。无效参数为 400，缺失或无权访问统一为 404，不可用生命周期状态为 409；lookup、受管路径校验和删除事务故障返回带 request ID 的 retryable 5xx。删除事务继续负责 fencing OCR worker，并在 formal attachment 上同步写入历史消息 tombstone；物理清理由管理员维护入口按租约完成。
+- 管理员批量 cleanup 在任何 claim 前先完成只读统计，随后分别过期 OCR source、按 lease claim 文件、删除受管字节并用 claim token finalize；单文件失败不会中止同批其他文件。顶层参数错误为 400，repository 阶段故障为带 request ID 的 retryable 5xx；200 部分成功响应的每项失败都包含稳定 `code/error/retryable`，并在存在失败时携带 request ID。物理删除或 finalize 失败会尝试立即释放 claim；释放本身失败使用独立 code，避免把延迟重试的 lease 状态隐藏在泛化错误中。
 - 图片保留原图；文档类文件不承诺长期保留原始 PDF/Word。
 - PDF 当前策略是 MinerU 优先，本地 Python 解析兜底。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。
@@ -110,6 +138,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 记忆维护只走完整流式消费。provider 以 `length`、`max_tokens`、`max_output_tokens` 等原因达到输出上限时，本次结果一律不解析、不保存，并在 `model_task_runs` 记录 `memory_output_limit`；能力不足记录 `memory_output_budget_insufficient`。
 - 用户手动整理和重试使用独立的 durable `memory_maintenance` RunHub run 与 SSE 观察链。固定 timeout 只守护首个有效模型输出；浏览器断线、关闭弹窗或刷新不会取消已经 accepted 的任务，重新打开弹窗会从活动 run 的游标继续观察。
 - 手动维护先生成并校验候选记忆，再在同一 PostgreSQL 事务中提交 durable terminal、记忆 CAS、`session_memory_changes` 和 `model_task_runs`。`session_memory_changes.run_id` 使 ambiguous terminal commit 的恢复重试不会重复写入记忆历史。
+- 记忆 REST 与维护任务的 HTTP 准入遵循公共错误契约：内容或 change id 校验为 400，缺失 change 为 404，CAS/不可撤销状态为 409，不可用维护服务为 503；memory repository、响应重建和 stream 初始化故障为带 request ID 的 retryable 5xx。任务一旦进入 RunHub，后续失败继续由既有 SSE/terminal 公共事件收口，原始错误只进入内部 task run 与日志。
+- 记忆 GET/PUT/undo、记忆维护与回答版本切换共享同一个 session ID 解析边界；非正整数统一返回 `session_id_invalid` 400、`retryable=false`，不能因入口不同退化为裸错误。该共享校验不改变会话所有权查询、记忆 CAS、RunHub 维护任务或回答选择事务。
 
 ## 数据库与迁移
 
@@ -122,12 +152,39 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 - 模型与服务：模型、渠道、搜索/提取/OCR 服务。
 - 治理与用量：用量、用户组、用户、工具。用量支持今天、7 天、30 天快捷范围，以及最长 90 天的自定义日期范围；历史范围不改变“今日用户组限额”。
+- Admin Usage 查询只接受空值默认 7 天、`today/7d/30d` 预设，或成对的 RFC3339 `start_at/end_at` 自定义范围；非法组合、日期和超过 90 天的窗口统一返回 `invalid_usage_range` 400 且不可重试，不再静默回退到 7 天。repository 聚合故障继续使用带 request ID 的 retryable `usage_summary_failed` 5xx；该 HTTP 契约不改变 OCR 事件时间口径或前端 query generation owner。
 - 提示与知识：底层提示词、提示词库、Skills。
 - 系统：实例状态、系统配置、字体、文件清理。
+
+管理员模型 probe 保持 `200 + ok=false` 的状态型失败协议，避免单个模型检测失败升级为管理后台全局异常；请求字段缺失为稳定 400，probe runtime 缺失为带 request ID 的 retryable 503。setup 和 provider stream 故障只返回稳定 code、retryable 与经 Agent 分类的安全 message/diagnostic，原始渠道、数据库、URL、密钥、响应正文和路径只进入内部日志。probe 仍只验证最小文本连通性；是否严格接受 `OK` 由独立的 probe 真阳性整改负责。
+
+models.dev 单模型目录查询对空 ID 返回 `models_dev_model_invalid` 400，对缺失 provider 或 model 返回稳定 404 code，均携带 `retryable=false` 且不回显用户输入；目录获取失败继续为带 request ID 的 retryable 502。该公共错误契约不改变缓存、目录导入、能力来源、退役标记或候选日 freshness 门禁，后者仍由模型目录生命周期独立负责。
+
+Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导入预览和 Git/Zip 更新共享领域错误出口：本地输入与 archive/selection 校验为稳定 400/413，Skill 或 Skill file 缺失为 404，无权启用为 403，来源或候选状态冲突为 409；Git 来源执行故障为带 request ID 的 retryable 502，repository、受管包存储和预览重建故障为带 request ID 的 retryable 5xx。服务层的 typed error 只携带刻意公开的文案，Git 输出、URL、数据库、路径和 wrapped cause 只进入内部日志。preview、create/update/delete 和 package owner 切换不得忽略 repository/path 查询失败；本契约不改变多 Skill 导入的 batch transaction 边界。
+
+Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。
+
+个人与共享 Prompt CRUD 复用同一领域错误出口：ID、分页、标题、正文与分组字段的本地约束为稳定 400，缺失 Prompt 或不可访问分组为 404，个人入口修改可见共享 Prompt 为 403，repository、transaction、rows iteration 与 rows-affected 故障为带 request ID 的 retryable 5xx。共享 Prompt 仍只能由管理员入口创建、更新和删除；个人私有 Prompt 与共享库的可见性隔离不变。本契约不把有界 page 当完整 catalog，不改变前端 editor owner，也不改变 partial PATCH 的完整对象写回语义；这些分别继续由 P2-27、P2-23 与 P2-47 收口。
+
+管理员 User Group list/create/update/delete 复用稳定资源错误边界：ID、名称、描述、等级与配额限制校验为 400，名称重名及撤销/删除最后默认组的 invariant 冲突为 409，缺失资源为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。默认组 advisory-lock 与事务保护继续由 repository 持有；本契约不改变 effective group 解析、request context 传播或 partial PATCH 并发所有权。
+
+管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名及最后活动管理员 invariant 为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
+
+个人 profile 读取、资料更新与改密共享账户错误边界：邮箱、昵称和新密码的本地约束为稳定 400，当前用户缺失为 404，邮箱重名为 409，repository、事务和密码哈希故障为带 request ID 的 retryable 5xx；错误旧密码继续作为不泄漏账户内部状态的受控 400。密码在 bcrypt 前按 6–72 bytes 校验，资料更新在 repository 约束 owner 保留 unique 与 rows-affected 分类，改密成功仍沿既有事务递增 auth version、取消数据库 run 与 RunHub run。本契约不改变头像文件生命周期、Settings 草稿所有权、HTTP request context 或字段级 PATCH/lost-update 语义。
+
+头像 upload/delete/serve 使用独立的文件与账户错误边界：缺少文件、无效图片和大小超限为稳定 400/413，用户缺失为 404，读取、处理、受管目录/文件写入与 repository 故障为带 request ID 的 retryable 5xx。已写入新文件后若 profile 读取或头像更新失败，handler 继续补偿删除本请求新文件。本公共错误契约不改变头像的并发 swap、旧文件删除 owner 或 profile partial PATCH 策略；这些仍由 P2-47 收口。
+
+字体 list/upload/update/select/delete/file 使用独立的资源与存储错误边界：ID、slot、metadata、multipart、内容类型和大小校验为稳定 400/413，字体缺失为 404，已停用字体不可选择为 409；repository、配置解析、请求体读取、受管目录/文件写入和已登记字体文件缺失等内部故障为带 request ID 的 retryable 5xx。repository 列表与 mutation 必须检查 iterator/rows-affected 错误，配置中的非法字体 ID 不能静默退回系统默认。本公共错误契约不改变字体槽位的多键事务与并发 owner、显式 null/legacy 回退或 FontAsset partial PATCH 语义；这些仍分别由 P2-29、P2-30 与 P2-47 收口。
+
+注册与登录共享认证错误边界：注册用户名、邮箱、昵称、密码和 preferences 的本地约束为稳定 400，用户名或邮箱重名为 409，登录的未知账号与错误密码统一为 `invalid_credentials` 401，待审核或停用账号为受控 401，限流为带 `Retry-After` 的 retryable 429；repository、注册事务、密码哈希与 token 签发故障为带 request ID 的 retryable 5xx。注册在数据库查询和 bcrypt 前完成可判定输入校验，repository 在实际 registration unique constraint owner 保留 conflict 分类；首用户管理员、后续用户待审批和现有限流计数/重置算法不变。
+
+认证 middleware 在所有受保护 API 前重新读取当前活动账号与 auth version，不信任 token 中的用户名或角色。缺少/非法 Authorization header、无效 token、非法 claims 和已失效账号使用稳定 401 code，非管理员访问为稳定 403；账号状态 repository 故障为带 request ID 的 retryable 5xx，并保留底层 cause 供内部诊断而不进入响应。该契约不改变 JWT 七天有效期、legacy token 的 auth version 兼容或账号变更后的 run 取消行为。
 
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。
+
+模型、渠道、外部服务、系统配置与 Tool 配置的普通 JSON 失败使用稳定的 `error`、`code`、`retryable` 契约。纯本地字段、模板或排序校验返回可修改的 400，资源不存在返回 404，模型重复创建返回 409，外部服务 probe 失败返回 502；repository、registry 和其他内部故障返回带 request ID 的 5xx。默认模型校验也必须保留数据库/渠道读取故障的内部分类，不能把运行故障伪装成“模型不存在”。只有受控本地校验文案可以公开，SQL、内部路径、provider 原文和凭据化 URL 只保留在服务端诊断。
 
 ## 发布入口
 

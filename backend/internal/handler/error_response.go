@@ -8,16 +8,21 @@ import (
 )
 
 func writeInvalidJSON(c *gin.Context) {
-	c.JSON(http.StatusBadRequest, gin.H{
-		"error": "invalid request body",
-		"code":  "invalid_request_body",
-	})
+	writePublicError(c, http.StatusBadRequest, "invalid_request_body", "invalid request body", false)
+}
+
+func writePublicError(c *gin.Context, status int, code, message string, retryable bool) {
+	payload := gin.H{"error": message, "retryable": retryable}
+	if code != "" {
+		payload["code"] = code
+	}
+	c.JSON(status, payload)
 }
 
 func writeServerError(c *gin.Context, status int, code, message string, err error) {
 	requestID := c.GetString("request_id")
 	logger.Error("request failed: request_id=%q method=%s path=%s status=%d code=%s err=%v", requestID, c.Request.Method, c.Request.URL.Path, status, code, err)
-	payload := gin.H{"error": message}
+	payload := gin.H{"error": message, "retryable": true}
 	if code != "" {
 		payload["code"] = code
 	}

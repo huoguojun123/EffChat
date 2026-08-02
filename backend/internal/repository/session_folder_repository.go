@@ -48,6 +48,9 @@ func (r *SessionFolderRepository) ListByUser(userID int64) ([]*model.SessionFold
 		}
 		folders = append(folders, folder)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate session folders: %w", err)
+	}
 	return folders, nil
 }
 
@@ -78,7 +81,7 @@ func (r *SessionFolderRepository) SetPinned(id, userID int64, pinned bool) error
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rows != 1 {
-		return fmt.Errorf("session folder not found")
+		return fmt.Errorf("session folder not found: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -98,7 +101,7 @@ func (r *SessionFolderRepository) Update(folder *model.SessionFolder) error {
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("session folder not found")
+		return fmt.Errorf("session folder not found: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -114,7 +117,7 @@ func (r *SessionFolderRepository) Delete(id, userID int64) error {
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("session folder not found")
+		return fmt.Errorf("session folder not found: %w", ErrNotFound)
 	}
 	return nil
 }

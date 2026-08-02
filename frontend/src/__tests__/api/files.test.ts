@@ -62,13 +62,15 @@ describe("fetchFileBlob", () => {
       ok: false,
       status: 404,
       statusText: "Not Found",
-      json: async () => ({ error: "file not found" }),
+      json: async () => ({ error: "file not found", code: "file_not_found", retryable: false }),
     }))
 
     await expect(fetchFileBlob(404)).rejects.toEqual(expect.objectContaining({
       name: "ApiError",
       status: 404,
       message: "file not found",
+      code: "file_not_found",
+      retryable: false,
     } satisfies Partial<ApiError>))
   })
 })
@@ -102,5 +104,37 @@ describe("filesApi.preview", () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(preview).toMatchObject({ content: "第二段", nextCursor: "djE6NDI", hasMore: true, truncated: true })
+  })
+
+  it("preserves preview state codes without parsing messages", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        file: {
+          id: 8,
+          user_id: 1,
+          file_name: "pending.pdf",
+          file_type: "application/pdf",
+          file_size: 42,
+          status: "staged",
+          extract_status: "ocr_pending",
+          created_at: "2026-07-27T00:00:00Z",
+        },
+        content: "",
+        next_cursor: "",
+        has_more: false,
+        truncated: false,
+        error: "no extracted text",
+        code: "file_text_unavailable",
+        retryable: true,
+      }),
+    }))
+
+    await expect(filesApi.preview(8)).resolves.toMatchObject({
+      error: "no extracted text",
+      code: "file_text_unavailable",
+      retryable: true,
+    })
   })
 })

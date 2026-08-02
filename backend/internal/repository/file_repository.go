@@ -300,21 +300,7 @@ func (r *FileRepository) ListByUser(userID int64, limit, offset int) ([]*model.F
 		return nil, fmt.Errorf("failed to list files: %w", err)
 	}
 	defer rows.Close()
-
-	var files []*model.File
-	for rows.Next() {
-		f := &model.File{}
-		if err := rows.Scan(
-			&f.ID, &f.UserID, &f.SessionID, &f.FileName, &f.FilePath, &f.FileType, &f.FileSize, &f.FileHash, &f.Status,
-			&f.ExtractedTextPath, &f.ExtractStatus, &f.ExtractError, &f.TokenEstimate,
-			&f.OCRProvider, &f.OCRTaskID, &f.OCRPageCount, &f.OCRProgressPages, &f.OCRStartedAt, &f.OCRCompletedAt, &f.OCRErrorType, &f.OCRSourcePath,
-			&f.CreatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("failed to scan file: %w", err)
-		}
-		files = append(files, f)
-	}
-	return files, nil
+	return scanFileRows(rows)
 }
 
 func (r *FileRepository) ListBySession(userID, sessionID int64, limit, offset int) ([]*model.File, error) {

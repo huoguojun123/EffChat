@@ -6,10 +6,17 @@ const UPLOAD_TIMEOUT_MS = 180000
 
 class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  code?: string
+  retryable?: boolean
+  requestId?: string
+
+  constructor(status: number, message: string, details: { code?: string; retryable?: boolean; requestId?: string } = {}) {
     super(message)
     this.name = "ApiError"
     this.status = status
+    this.code = details.code
+    this.retryable = details.retryable
+    this.requestId = details.requestId
   }
 }
 
@@ -28,9 +35,14 @@ export function handleAuthExpired(expectedToken?: string | null) {
   window.location.href = "/login"
 }
 
-export async function readApiErrorMessage(res: Response): Promise<string> {
-  const body = await res.json().catch(() => ({ error: res.statusText }))
-  return typeof body.error === "string" && body.error ? body.error : res.statusText
+export async function readApiError(res: Response, fallbackMessage = res.statusText): Promise<ApiError> {
+  const body = await res.json().catch(() => null) as Record<string, unknown> | null
+  const message = typeof body?.error === "string" && body.error ? body.error : fallbackMessage
+  return new ApiError(res.status, message, {
+    code: typeof body?.code === "string" ? body.code : undefined,
+    retryable: typeof body?.retryable === "boolean" ? body.retryable : undefined,
+    requestId: typeof body?.request_id === "string" ? body.request_id : undefined,
+  })
 }
 
 async function request<T>(
@@ -60,9 +72,9 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    const message = await readApiErrorMessage(res)
+    const error = await readApiError(res)
     if (res.status === 401 && token && !path.startsWith("/auth/")) handleAuthExpired(token)
-    throw new ApiError(res.status, message)
+    throw error
   }
 
   if (res.status === 204) return undefined as T
@@ -93,9 +105,9 @@ export const api = {
       throw new ApiError(0, "网络连接失败，请检查后端服务或网络")
     }
     if (!res.ok) {
-      const message = await readApiErrorMessage(res)
+      const error = await readApiError(res)
       if (res.status === 401 && token) handleAuthExpired(token)
-      throw new ApiError(res.status, message)
+      throw error
     }
     return res
   },

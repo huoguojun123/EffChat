@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	"github.com/huoguojun123/EffChat/internal/tool"
 )
@@ -22,7 +24,7 @@ func ListAIChannelsHandler(channelService *service.ChannelService) gin.HandlerFu
 	return func(c *gin.Context) {
 		channels, err := channelService.ListAIChannels(true)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list channels"})
+			writeServerError(c, http.StatusInternalServerError, "channel_list_failed", "failed to list channels", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"channels": channels})
@@ -38,7 +40,7 @@ func SaveAIChannelHandler(channelService *service.ChannelService) gin.HandlerFun
 		}
 		channel, err := channelService.SaveAIChannel(&req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeChannelError(c, "channel", "save", err)
 			return
 		}
 		c.JSON(http.StatusOK, channel)
@@ -48,7 +50,7 @@ func SaveAIChannelHandler(channelService *service.ChannelService) gin.HandlerFun
 func DeleteAIChannelHandler(channelService *service.ChannelService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := channelService.DeleteAIChannel(strings.TrimSpace(c.Param("key"))); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeChannelError(c, "channel", "delete", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "channel deleted"})
@@ -59,7 +61,7 @@ func ListExternalServicesHandler(channelService *service.ChannelService) gin.Han
 	return func(c *gin.Context) {
 		services, err := channelService.ListExternalServices(true)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list external services"})
+			writeServerError(c, http.StatusInternalServerError, "external_service_list_failed", "failed to list external services", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"services": services})
@@ -75,7 +77,7 @@ func SaveExternalServiceHandler(channelService *service.ChannelService) gin.Hand
 		}
 		item, err := channelService.SaveExternalServiceContext(c.Request.Context(), &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeChannelError(c, "external_service", "save", err)
 			return
 		}
 		c.JSON(http.StatusOK, item)
@@ -85,7 +87,7 @@ func SaveExternalServiceHandler(channelService *service.ChannelService) gin.Hand
 func DeleteExternalServiceHandler(channelService *service.ChannelService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := channelService.DeleteExternalService(strings.TrimSpace(c.Param("key"))); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeChannelError(c, "external_service", "delete", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "external service deleted"})
@@ -101,7 +103,7 @@ func ReorderExternalServicesHandler(channelService *service.ChannelService) gin.
 		}
 		services, err := channelService.ReorderExternalServices(req.Kind, req.Keys)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeChannelError(c, "external_service", "reorder", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"services": services})
@@ -117,15 +119,20 @@ func TestExternalServiceHandler(channelService *service.ChannelService) gin.Hand
 		}
 		item, err := service.ValidateExternalService(&req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeChannelError(c, "external_service", "validate", err)
 			return
 		}
 		if item.Kind == service.ServiceKindOCR {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "OCR 服务请通过上传文件验证"})
+			writePublicError(c, http.StatusBadRequest, "external_service_probe_unsupported", "OCR 服务请通过上传文件验证", false)
 			return
 		}
 		if strings.TrimSpace(item.APIKey) == "" {
-			if saved, lookupErr := channelService.GetExternalService(item.Key); lookupErr == nil && service.CanReuseExternalServiceCredential(saved, item) {
+			saved, lookupErr := channelService.GetExternalService(item.Key)
+			if lookupErr != nil {
+				writeServerError(c, http.StatusInternalServerError, "external_service_load_failed", "failed to load external service", lookupErr)
+				return
+			}
+			if service.CanReuseExternalServiceCredential(saved, item) {
 				item.APIKey = saved.APIKey
 			}
 		}
@@ -156,9 +163,21 @@ func TestExternalServiceHandler(channelService *service.ChannelService) gin.Hand
 		}
 		if err != nil {
 			log.Printf("[external_service] probe_failed key=%s kind=%s err=%v", item.Key, item.Kind, err)
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "服务测试失败，请检查地址、Key 和网络连接"})
+			writeServerError(c, http.StatusBadGateway, "external_service_probe_failed", "服务测试失败，请检查地址、Key 和网络连接", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "duration_ms": time.Since(started).Milliseconds()})
+	}
+}
+
+func writeChannelError(c *gin.Context, resource, operation string, err error) {
+	switch {
+	case errors.Is(err, service.ErrChannelInvalid):
+		// ErrChannelInvalid only wraps local field and ordering validation.
+		writePublicError(c, http.StatusBadRequest, resource+"_invalid", err.Error(), false)
+	case errors.Is(err, service.ErrChannelNotFound), errors.Is(err, repository.ErrNotFound):
+		writePublicError(c, http.StatusNotFound, resource+"_not_found", strings.ReplaceAll(resource, "_", " ")+" not found", false)
+	default:
+		writeServerError(c, http.StatusInternalServerError, resource+"_"+operation+"_failed", "failed to "+operation+" "+strings.ReplaceAll(resource, "_", " "), err)
 	}
 }

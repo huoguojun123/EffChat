@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 const maxInt64ForJWTClaim = int64(^uint64(0) >> 1)
@@ -27,7 +28,7 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 		// 从 Header 获取 token
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+			writeAuthError(c, http.StatusUnauthorized, "auth_header_missing", "missing authorization header", false)
 			c.Abort()
 			return
 		}
@@ -35,7 +36,7 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 		// 解析 Bearer token
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header format"})
+			writeAuthError(c, http.StatusUnauthorized, "auth_header_invalid", "invalid authorization header format", false)
 			c.Abort()
 			return
 		}
@@ -45,7 +46,7 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 		// 验证 token
 		claims, err := authService.ValidateToken(tokenString)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+			writeAuthError(c, http.StatusUnauthorized, "auth_token_invalid", "invalid or expired token", false)
 			c.Abort()
 			return
 		}
@@ -53,7 +54,7 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 		// 新 token 用 json.Number 保留整数精度；旧 token 仍兼容 float64。
 		userID, ok := claimInt64((*claims)["user_id"])
 		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "malformed token claims"})
+			writeAuthError(c, http.StatusUnauthorized, "auth_claims_invalid", "malformed token claims", false)
 			c.Abort()
 			return
 		}
@@ -61,7 +62,7 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 		if value, exists := (*claims)["auth_version"]; exists {
 			version, valid := claimInt64(value)
 			if !valid || version > int64(maxInt) {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "malformed token claims"})
+				writeAuthError(c, http.StatusUnauthorized, "auth_claims_invalid", "malformed token claims", false)
 				c.Abort()
 				return
 			}
@@ -70,13 +71,11 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 
 		user, err := resolveCurrentUser(userID, authVersion)
 		if err != nil {
-			status := http.StatusInternalServerError
-			message := "authentication service unavailable"
 			if errors.Is(err, service.ErrAuthenticationUnavailable) {
-				status = http.StatusUnauthorized
-				message = "account is unavailable or token has been invalidated"
+				writeAuthError(c, http.StatusUnauthorized, "auth_session_invalid", "account is unavailable or token has been invalidated", false)
+			} else {
+				writeAuthServerError(c, "auth_state_load_failed", "authentication service unavailable", err)
 			}
-			c.JSON(status, gin.H{"error": message})
 			c.Abort()
 			return
 		}
@@ -87,6 +86,20 @@ func authMiddleware(authService *service.AuthService, resolveCurrentUser authSta
 
 		c.Next()
 	}
+}
+
+func writeAuthError(c *gin.Context, status int, code, message string, retryable bool) {
+	c.JSON(status, gin.H{"error": message, "code": code, "retryable": retryable})
+}
+
+func writeAuthServerError(c *gin.Context, code, message string, err error) {
+	requestID := c.GetString("request_id")
+	logger.Error("authentication request failed: request_id=%q method=%s path=%s code=%s err=%v", requestID, c.Request.Method, c.Request.URL.Path, code, err)
+	payload := gin.H{"error": message, "code": code, "retryable": true}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	c.JSON(http.StatusInternalServerError, payload)
 }
 
 func claimInt64(value interface{}) (int64, bool) {
@@ -109,7 +122,7 @@ func claimInt64(value interface{}) (int64, bool) {
 func AdminMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if GetRole(c) != "admin" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "admin access required"})
+			writeAuthError(c, http.StatusForbidden, "admin_access_required", "admin access required", false)
 			c.Abort()
 			return
 		}

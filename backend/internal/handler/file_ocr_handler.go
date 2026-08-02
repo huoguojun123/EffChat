@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -12,21 +13,26 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/huoguojun123/EffChat/internal/extractor"
 	"github.com/huoguojun123/EffChat/internal/filepolicy"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
-func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, _ int, _ int64) (*model.File, int, gin.H) {
+func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, _ int, _ int64) (*model.File, error) {
 	if opts.channelService == nil || opts.extractorClient == nil || !opts.extractorClient.Enabled() || opts.ocrRecovery == nil {
-		return nil, 0, nil
+		return nil, nil
 	}
-	if !opts.channelService.ResolveMinerUOCRConfig().Enabled {
-		return nil, 0, nil
+	ocrConfig, err := opts.channelService.ResolveMinerUOCRConfigContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errOCRConfigLoad, err)
+	}
+	if !ocrConfig.Enabled {
+		return nil, nil
 	}
 	sourcePath := filepath.Join(sourceDir, storedName)
 	if err := filepolicy.WriteFile(sourcePath, content, 0o600); err != nil {
-		return nil, http.StatusInternalServerError, gin.H{"error": "failed to save OCR upload buffer"}
+		return nil, fmt.Errorf("%w: %v", errOCRUploadBufferWrite, err)
 	}
 	provider := "mineru"
 	extractedPath := extractedTextSidecarPath(userID, storedName)
@@ -40,23 +46,16 @@ func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, op
 	if err := fileRepo.Create(f); err != nil {
 		_ = filepolicy.Remove(sourcePath)
 		log.Printf("[file_ocr] metadata_create_failed user=%d session=%d file=%q err=%v", userID, sessionID, safeName, err)
-		return nil, http.StatusInternalServerError, gin.H{"error": "failed to save OCR file metadata"}
+		return nil, fmt.Errorf("%w: %v", errOCRMetadataCreate, err)
 	}
 
 	opts.ocrRecovery.Wake()
 	log.Printf("[file_ocr] queued user=%d session=%d file_id=%d file=%q", userID, sessionID, f.ID, safeName)
-	return f, http.StatusAccepted, nil
+	return f, nil
 }
 
-func writePDFExtractionFailure(c *gin.Context, minerUStatus int, minerUBody gin.H) {
-	if minerUBody != nil {
-		if minerUStatus == 0 {
-			minerUStatus = http.StatusBadRequest
-		}
-		c.JSON(minerUStatus, minerUBody)
-		return
-	}
-	c.JSON(http.StatusBadRequest, gin.H{"error": "未能从 PDF 提取到文字；如需更高质量解析，请先在管理员后台启用 MinerU 精准 OCR 并配置 Token"})
+func writePDFExtractionFailure(c *gin.Context) {
+	writePublicError(c, http.StatusUnprocessableEntity, "attachment_no_readable_text", "未能从 PDF 提取到文字；如需更高质量解析，请先在管理员后台启用 MinerU 精准 OCR 并配置 Token", false)
 }
 
 func isPDFUpload(contentType, filename string) bool {
@@ -64,11 +63,7 @@ func isPDFUpload(contentType, filename string) bool {
 }
 
 func shouldOfferMinerUOCR(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "no readable text") || strings.Contains(text, "empty text")
+	return errors.Is(err, extractor.ErrNoReadableText)
 }
 
 func humanizeOCRError(err error) string {

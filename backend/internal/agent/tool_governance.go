@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -117,15 +116,18 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 				}
 				if err != nil {
 					errText := err.Error()
+					code := "tool_execution_failed"
+					publicMessage := "Tool call failed. Continue with the best available information."
 					retryable := false
 					if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-						errText = fmt.Sprintf("tool %s timed out after %s", input.Name, timeout)
+						code = "tool_timeout"
+						publicMessage = "Tool call timed out. Continue with the best available information."
 						retryable = true
 					}
 					errorType := toolUsageErrorType(err, callCtx)
 					log.Printf("[tool_governance] call_failed user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s retryable=%t",
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), errorType, retryable)
-					result := marshalToolError(input.Name, errText, retryable)
+					result := marshalToolError(input.Name, code, publicMessage, retryable)
 					if budget != nil {
 						result = budget.finishToolResult(input.Name, result, grant)
 					}
@@ -133,13 +135,17 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 					finishToolUsage(usageService, reservation, meta, input, false, outcome.ContextTokens, outcome.Truncated, duration, errorType, errText)
 					return &compose.ToolOutput{Result: result}, nil
 				}
+				internalDiagnostic := ""
+				if output != nil {
+					output.Result, internalDiagnostic = sanitizeStructuredToolFailure(input.Name, output.Result)
+				}
 				if output != nil && budget != nil {
 					output.Result = budget.finishToolResult(input.Name, output.Result, grant)
 				} else if budget != nil {
 					budget.cancelToolGrant(grant, false)
 				}
 				if output == nil || strings.TrimSpace(output.Result) == "" {
-					result := marshalToolError(input.Name, "tool returned an empty result", false)
+					result := marshalToolError(input.Name, "tool_empty_result", "Tool returned no result. Continue with the best available information.", false)
 					if budget != nil {
 						result = budget.accountUnreservedResult(input.Name, result)
 					}
@@ -157,11 +163,60 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 					log.Printf("[tool_governance] call_business_failure user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d result_chars=%d context_tokens=%d truncated=%t error_type=%s",
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), resultLen, outcome.ContextTokens, outcome.Truncated, outcome.ErrorType)
 				}
-				finishToolUsage(usageService, reservation, meta, input, outcome.Success, outcome.ContextTokens, outcome.Truncated, duration, outcome.ErrorType, outcome.ErrorMessage)
+				diagnostic := outcome.ErrorMessage
+				if internalDiagnostic != "" {
+					diagnostic = internalDiagnostic
+				}
+				finishToolUsage(usageService, reservation, meta, input, outcome.Success, outcome.ContextTokens, outcome.Truncated, duration, outcome.ErrorType, diagnostic)
 				return output, nil
 			}
 		},
 	}
+}
+
+// sanitizeStructuredToolFailure is the final trust boundary for Tool results
+// that report failure inside a successful JSON envelope. Tool implementations
+// may retain a private cause in the error field for usage diagnostics, but only
+// their explicit public message may enter model context, RunHub events, or the
+// frontend tool tree. Typed web failures already carry an error_code and are
+// produced by the web tool's separate public classifier, so they remain intact.
+func sanitizeStructuredToolFailure(toolName, result string) (string, string) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil || len(payload) == 0 {
+		return result, ""
+	}
+	errorText, _ := payload["error"].(string)
+	errorText = strings.TrimSpace(errorText)
+	if errorText == "" {
+		return result, ""
+	}
+	if errorCode, _ := payload["error_code"].(string); strings.TrimSpace(errorCode) != "" {
+		return result, ""
+	}
+	publicMessage, _ := payload["message"].(string)
+	publicMessage = strings.TrimSpace(publicMessage)
+	if publicMessage == "" {
+		return result, ""
+	}
+	payload["error"] = publicMessage
+	payload["ok"] = false
+	if code, _ := payload["code"].(string); strings.TrimSpace(code) == "" {
+		payload["code"] = "tool_business_failure"
+	}
+	if _, ok := payload["retryable"].(bool); !ok {
+		payload["retryable"] = false
+	}
+	if source, _ := payload["source"].(string); strings.TrimSpace(source) == "" {
+		payload["source"] = "tool"
+	}
+	if toolKey, _ := payload["tool"].(string); strings.TrimSpace(toolKey) == "" && strings.TrimSpace(toolName) != "" {
+		payload["tool"] = toolName
+	}
+	sanitized, err := json.Marshal(payload)
+	if err != nil {
+		return result, ""
+	}
+	return string(sanitized), errorText
 }
 
 func semanticToolParentCause(ctx context.Context) error {
@@ -330,12 +385,13 @@ func normalizeToolOutcomeCode(value string) string {
 	return b.String()
 }
 
-func marshalToolError(toolName, errText string, retryable bool) string {
+func marshalToolError(toolName, code, message string, retryable bool) string {
 	out := toolErrorOutput{
 		OK:        false,
 		Tool:      toolName,
-		Error:     errText,
-		Message:   "Tool call failed. Explain the failure briefly and continue with the best available information.",
+		Code:      code,
+		Error:     message,
+		Message:   message,
 		Retryable: retryable,
 		Source:    "tool_governance",
 	}

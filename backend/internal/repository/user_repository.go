@@ -8,11 +8,14 @@ import (
 	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/lib/pq"
 )
 
 var (
-	ErrNotFound        = errors.New("not found")
-	ErrLastActiveAdmin = errors.New("cannot remove the last active admin")
+	ErrNotFound         = errors.New("not found")
+	ErrLastActiveAdmin  = errors.New("cannot remove the last active admin")
+	ErrUserConflict     = errors.New("user identity conflict")
+	ErrUserGroupMissing = errors.New("user group not found")
 )
 
 const userAdminInvariantLock = int64(0x4653484154434841)
@@ -53,6 +56,9 @@ func (r *UserRepository) Create(user *model.User) error {
 	).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: username or email already exists", ErrUserConflict)
+		}
 		return fmt.Errorf("failed to create user: %w", err)
 	}
 
@@ -85,6 +91,9 @@ func (r *UserRepository) CreateRegistrationUser(user *model.User) error {
 		RETURNING id, auth_version, created_at, updated_at
 	`
 	if err := tx.QueryRow(query, user.Username, user.Email, user.PasswordHash, user.Nickname, user.Role, user.Permissions, user.Preferences, user.IsActive).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: username or email already exists", ErrUserConflict)
+		}
 		return fmt.Errorf("create registration user: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -199,7 +208,7 @@ func (r *UserRepository) Update(user *model.User) error {
 		WHERE id = $6
 	`
 
-	_, err := r.db.Exec(
+	result, err := r.db.Exec(
 		query,
 		user.Email,
 		user.Nickname,
@@ -210,7 +219,17 @@ func (r *UserRepository) Update(user *model.User) error {
 	)
 
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: email already exists", ErrUserConflict)
+		}
 		return fmt.Errorf("failed to update user: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated user rows: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 
 	return nil
@@ -266,9 +285,15 @@ func (r *UserRepository) UpdateAdminFields(user *model.User) error {
 		user.ID,
 	)
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: email already exists", ErrUserConflict)
+		}
 		return fmt.Errorf("failed to update user: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated administrator user rows: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("user not found: %w", ErrNotFound)
 	}
@@ -352,6 +377,9 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 		}
 		users = append(users, user)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate users: %w", err)
+	}
 	return users, nil
 }
 
@@ -359,13 +387,24 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 func (r *UserRepository) SetGroup(userID int64, groupID *int64) error {
 	result, err := r.db.Exec(`UPDATE users SET group_id = $1, updated_at = NOW() WHERE id = $2`, groupID, userID)
 	if err != nil {
+		if isUserGroupForeignKeyViolation(err) {
+			return fmt.Errorf("%w: selected user group does not exist", ErrUserGroupMissing)
+		}
 		return fmt.Errorf("failed to set user group: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read assigned user group rows: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 	return nil
+}
+
+func isUserGroupForeignKeyViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23503" && pqErr.Constraint == "users_group_id_fkey"
 }
 
 // GetGroupLevel 返回用户所属组的 level；未分组（NULL）或组不存在时返回 0（默认最低级）。

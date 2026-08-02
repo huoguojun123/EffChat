@@ -3,10 +3,16 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/huoguojun123/EffChat/internal/model"
+)
+
+var (
+	ErrPromptGroupInvalid  = errors.New("invalid prompt group")
+	ErrPromptGroupConflict = errors.New("prompt group conflict")
 )
 
 type PromptGroupRepository struct {
@@ -34,7 +40,7 @@ func (r *PromptGroupRepository) ListByUser(userID int64) ([]*model.PromptGroup, 
 func (r *PromptGroupRepository) Create(userID int64, name string) (*model.PromptGroup, error) {
 	name = normalizePromptGroupName(name)
 	if name == "" {
-		return nil, fmt.Errorf("group name is required")
+		return nil, fmt.Errorf("%w: group name is required", ErrPromptGroupInvalid)
 	}
 	group := &model.PromptGroup{UserID: userID, Name: name}
 	err := r.db.QueryRow(`
@@ -43,6 +49,9 @@ func (r *PromptGroupRepository) Create(userID int64, name string) (*model.Prompt
 		RETURNING id, created_at, updated_at
 	`, userID, name).Scan(&group.ID, &group.CreatedAt, &group.UpdatedAt)
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: prompt group name already exists", ErrPromptGroupConflict)
+		}
 		return nil, fmt.Errorf("failed to create prompt group: %w", err)
 	}
 	return group, nil
@@ -71,7 +80,7 @@ func (r *PromptGroupRepository) Update(id int64, userID int64, name string) (*mo
 func (r *PromptGroupRepository) UpdateContext(ctx context.Context, id int64, userID int64, name string) (*model.PromptGroup, error) {
 	name = normalizePromptGroupName(name)
 	if name == "" {
-		return nil, fmt.Errorf("group name is required")
+		return nil, fmt.Errorf("%w: group name is required", ErrPromptGroupInvalid)
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -90,6 +99,9 @@ func (r *PromptGroupRepository) UpdateContext(ctx context.Context, id int64, use
 		return nil, ErrNotFound
 	}
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return nil, fmt.Errorf("%w: prompt group name already exists", ErrPromptGroupConflict)
+		}
 		return nil, fmt.Errorf("failed to update prompt group: %w", promptContextError(ctx, err))
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE prompts SET group_name = $1, updated_at = NOW() WHERE group_id = $2`, name, id); err != nil {
@@ -130,7 +142,11 @@ func (r *PromptGroupRepository) DeleteContext(ctx context.Context, id int64, use
 	if err != nil {
 		return fmt.Errorf("failed to delete prompt group: %w", promptContextError(ctx, err))
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get deleted prompt group count: %w", promptContextError(ctx, err))
+	}
+	if rows == 0 {
 		return ErrNotFound
 	}
 	if err := tx.Commit(); err != nil {

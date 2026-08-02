@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -12,6 +13,22 @@ import (
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
+
+var (
+	ErrSessionNotFound = errors.New("session not found")
+	ErrSessionInvalid  = errors.New("invalid session input")
+)
+
+// sessionLookupError preserves the privacy invariant that missing and
+// unauthorized sessions are indistinguishable, while retaining repository
+// failures for the handler's retryable 5xx path instead of misreporting them as
+// user-correctable 404 responses.
+func sessionLookupError(err error) error {
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrSessionNotFound
+	}
+	return fmt.Errorf("load session: %w", err)
+}
 
 type SessionService struct {
 	sessionRepo *repository.SessionRepository
@@ -50,10 +67,11 @@ func (s *SessionService) SetRunHub(runHub *RunHub) {
 }
 
 type RuntimeModelError struct {
-	Code     string `json:"code"`
-	Message  string `json:"error"`
-	Provider string `json:"provider,omitempty"`
-	ModelID  string `json:"model_id,omitempty"`
+	Code      string `json:"code"`
+	Message   string `json:"error"`
+	Provider  string `json:"provider,omitempty"`
+	ModelID   string `json:"model_id,omitempty"`
+	Retryable bool   `json:"retryable"`
 }
 
 func (e *RuntimeModelError) Error() string {
@@ -146,7 +164,7 @@ const (
 
 func validateSessionSystemPrompt(prompt *string) error {
 	if prompt != nil && len(*prompt) > maxSessionSystemPromptBytes {
-		return fmt.Errorf("system_prompt must not exceed %d bytes", maxSessionSystemPromptBytes)
+		return fmt.Errorf("%w: system_prompt must not exceed %d bytes", ErrSessionInvalid, maxSessionSystemPromptBytes)
 	}
 	return nil
 }
@@ -170,15 +188,19 @@ func (s *SessionService) Create(userID int64, req *CreateSessionRequest) (*model
 
 	// 验证消息格式
 	if messageFormat != "v1" && messageFormat != "v2" {
-		return nil, fmt.Errorf("invalid message_format: must be v1 or v2")
+		return nil, fmt.Errorf("%w: message_format must be v1 or v2", ErrSessionInvalid)
 	}
 
 	modelID := strings.TrimSpace(req.ModelID)
 	if modelID == "" {
-		modelID = s.defaultModelID()
+		var err error
+		modelID, err = s.defaultModelID()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if modelID == "" {
-		return nil, fmt.Errorf("model_id is required")
+		return nil, fmt.Errorf("%w: model_id is required", ErrSessionInvalid)
 	}
 
 	provider := req.Provider
@@ -186,7 +208,7 @@ func (s *SessionService) Create(userID int64, req *CreateSessionRequest) (*model
 		provider = modelbank.GetOrDefault(modelID, "").Provider
 	}
 	if provider == "" {
-		return nil, fmt.Errorf("provider is required")
+		return nil, fmt.Errorf("%w: provider is required", ErrSessionInvalid)
 	}
 	if err := s.ValidateModelForUser(userID, modelID, provider); err != nil {
 		return nil, err
@@ -243,16 +265,20 @@ func (s *SessionService) Create(userID int64, req *CreateSessionRequest) (*model
 	return session, nil
 }
 
-func (s *SessionService) defaultModelID() string {
+func (s *SessionService) defaultModelID() (string, error) {
 	if s.configRepo != nil {
-		modelID := strings.TrimSpace(s.configRepo.GetString("default_model_id", ""))
+		value, err := s.configRepo.GetStringContext(context.Background(), "default_model_id", "")
+		if err != nil {
+			return "", fmt.Errorf("load default session model: %w", err)
+		}
+		modelID := strings.TrimSpace(value)
 		if modelID != "" {
 			if info := modelbank.Get(modelID); info != nil {
-				return modelID
+				return modelID, nil
 			}
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // GetByID 获取会话（含权限检查）
@@ -263,7 +289,7 @@ func (s *SessionService) GetByID(sessionID, userID int64) (*model.Session, error
 func (s *SessionService) GetByIDContext(ctx context.Context, sessionID, userID int64) (*model.Session, error) {
 	session, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	return session, nil
 }
@@ -296,16 +322,16 @@ func (s *SessionService) ValidateModelForUser(userID int64, modelID, provider st
 
 func validateSessionGenerationParameters(m *model.Model, temperature *float64, maxTokens *int) error {
 	if temperature != nil && (math.IsNaN(*temperature) || math.IsInf(*temperature, 0) || *temperature < 0 || *temperature > maxSessionTemperature) {
-		return fmt.Errorf("temperature must be between 0 and %.1f", maxSessionTemperature)
+		return fmt.Errorf("%w: temperature must be between 0 and %.1f", ErrSessionInvalid, maxSessionTemperature)
 	}
 	if maxTokens == nil {
 		return nil
 	}
 	if *maxTokens <= 0 {
-		return fmt.Errorf("max_tokens must be positive")
+		return fmt.Errorf("%w: max_tokens must be positive", ErrSessionInvalid)
 	}
 	if m != nil && m.MaxOutput > 0 && *maxTokens > m.MaxOutput {
-		return fmt.Errorf("max_tokens must not exceed this model's max_output (%d)", m.MaxOutput)
+		return fmt.Errorf("%w: max_tokens must not exceed this model's max_output (%d)", ErrSessionInvalid, m.MaxOutput)
 	}
 	return nil
 }
@@ -320,10 +346,13 @@ func (s *SessionService) runnableModel(session *model.Session) (*model.Model, er
 		return nil, &RuntimeModelError{Code: "session_model_missing", Message: "当前会话没有可用模型，请切换模型", Provider: provider, ModelID: modelID}
 	}
 	if s.modelRepo == nil {
-		return nil, &RuntimeModelError{Code: "model_runtime_unavailable", Message: "模型配置暂不可用，请稍后重试", Provider: provider, ModelID: modelID}
+		return nil, &RuntimeModelError{Code: "model_runtime_unavailable", Message: "模型配置暂不可用，请稍后重试", Provider: provider, ModelID: modelID, Retryable: true}
 	}
 	m, err := s.modelRepo.Get(modelID)
-	if err != nil || m == nil {
+	if err != nil {
+		return nil, fmt.Errorf("load session model: %w", err)
+	}
+	if m == nil {
 		return nil, &RuntimeModelError{Code: "session_model_missing", Message: fmt.Sprintf("模型 %q 不存在，请切换模型", modelID), Provider: provider, ModelID: modelID}
 	}
 	if !m.Enabled {
@@ -339,7 +368,10 @@ func (s *SessionService) runnableModel(session *model.Session) (*model.Model, er
 	}
 	if s.channels != nil {
 		channel, err := s.channels.GetAIChannel(provider)
-		if err != nil || channel == nil {
+		if err != nil {
+			return nil, fmt.Errorf("load session model channel: %w", err)
+		}
+		if channel == nil {
 			return nil, &RuntimeModelError{Code: "channel_not_configured", Message: fmt.Sprintf("渠道 %q 未配置，请切换模型", provider), Provider: provider, ModelID: modelID}
 		}
 		if !channel.Enabled {
@@ -354,17 +386,26 @@ func (s *SessionService) runnableModel(session *model.Session) (*model.Model, er
 
 func (s *SessionService) validateModelAccess(userID int64, m *model.Model, provider string) error {
 	if s.userRepo == nil {
-		return &RuntimeModelError{Code: "model_runtime_unavailable", Message: "模型权限配置暂不可用，请稍后重试", Provider: provider, ModelID: m.ID}
+		return &RuntimeModelError{Code: "model_runtime_unavailable", Message: "模型权限配置暂不可用，请稍后重试", Provider: provider, ModelID: m.ID, Retryable: true}
 	}
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
+		if !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("load session model account: %w", err)
+		}
 		return &RuntimeModelError{Code: "model_access_denied", Message: "当前账号无权使用该模型", Provider: provider, ModelID: m.ID}
 	}
 	if user.Role == "admin" {
 		return nil
 	}
 	level, err := s.userRepo.GetGroupLevel(userID)
-	if err != nil || level < m.MinGroupLevel {
+	if err != nil {
+		if !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("load session model access level: %w", err)
+		}
+		return &RuntimeModelError{Code: "model_access_denied", Message: "当前账号无权使用该模型", Provider: provider, ModelID: m.ID}
+	}
+	if level < m.MinGroupLevel {
 		return &RuntimeModelError{Code: "model_access_denied", Message: "当前账号无权使用该模型", Provider: provider, ModelID: m.ID}
 	}
 	return nil
@@ -423,7 +464,7 @@ func (s *SessionService) Update(sessionID, userID int64, req *UpdateSessionReque
 	// 先检查权限
 	session, err := s.sessionRepo.GetByID(sessionID, userID)
 	if err != nil {
-		return fmt.Errorf("session not found or access denied")
+		return sessionLookupError(err)
 	}
 
 	if req.ModelID != nil || req.Provider != nil {
@@ -503,6 +544,9 @@ func (s *SessionService) Update(sessionID, userID int64, req *UpdateSessionReque
 		patch.SearchMode = &session.SearchMode
 	}
 	if err := s.sessionRepo.UpdateFields(sessionID, userID, patch); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrSessionNotFound
+		}
 		return fmt.Errorf("failed to update session: %w", err)
 	}
 
@@ -512,6 +556,9 @@ func (s *SessionService) Update(sessionID, userID int64, req *UpdateSessionReque
 // Delete 删除会话
 func (s *SessionService) Delete(sessionID, userID int64) error {
 	if err := s.sessionRepo.Delete(sessionID, userID); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrSessionNotFound
+		}
 		return fmt.Errorf("failed to delete session: %w", err)
 	}
 	if s.runHub != nil {
@@ -530,13 +577,16 @@ func (s *SessionService) validateFolderID(userID int64, folderID *int64) (*int64
 		return nil, nil
 	}
 	if *folderID <= 0 {
-		return nil, fmt.Errorf("invalid folder_id")
+		return nil, fmt.Errorf("%w: folder_id must be positive", ErrSessionInvalid)
 	}
 	if s.folderRepo == nil {
 		return nil, fmt.Errorf("session folders are not configured")
 	}
 	if _, err := s.folderRepo.GetByID(*folderID, userID); err != nil {
-		return nil, fmt.Errorf("session folder not found or access denied")
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, fmt.Errorf("%w: session folder not found or access denied", ErrSessionInvalid)
+		}
+		return nil, fmt.Errorf("load session folder: %w", err)
 	}
 	return folderID, nil
 }

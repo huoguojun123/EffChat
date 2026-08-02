@@ -58,12 +58,12 @@ func GetSessionMemoryHandler(sessionService *service.SessionService, memoryRepo 
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		resp, err := buildSessionMemoryResponse(c.Request.Context(), memoryRepo, taskRunRepo, configRepo, session.ID, userID, session.MemoryEnabled)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load memory", "code": "memory_load_failed"})
+			writeServerError(c, http.StatusInternalServerError, "memory_load_failed", "failed to load memory", err)
 			return
 		}
 		c.JSON(http.StatusOK, resp)
@@ -79,7 +79,7 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		var req saveSessionMemoryRequest
@@ -94,12 +94,12 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 		limits := memoryLimitsFromConfig(configRepo)
 		normalized, _, err := sessionmemory.NormalizeWithLimits(content, limits)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_memory_content"})
+			writePublicError(c, http.StatusBadRequest, "invalid_memory_content", err.Error(), false)
 			return
 		}
 		before, updatedAt, err := memoryRepo.GetWithUpdatedAt(c.Request.Context(), sessionID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save memory", "code": "memory_save_failed"})
+			writeServerError(c, http.StatusInternalServerError, "memory_save_failed", "failed to save memory", err)
 			return
 		}
 		if req.ExpectedUpdatedAt != nil && (updatedAt.IsZero() || !updatedAt.Equal(*req.ExpectedUpdatedAt)) {
@@ -126,7 +126,7 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 				c.JSON(http.StatusConflict, sessionMemoryConflictPayload())
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to save memory", "code": "memory_save_failed"})
+			writeServerError(c, http.StatusInternalServerError, "memory_save_failed", "failed to save memory", err)
 			return
 		}
 		if req.Enabled != nil {
@@ -134,7 +134,7 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 		}
 		resp, err := buildSessionMemoryResponse(c.Request.Context(), memoryRepo, taskRunRepo, configRepo, session.ID, userID, session.MemoryEnabled)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load memory", "code": "memory_load_failed"})
+			writeServerError(c, http.StatusInternalServerError, "memory_load_failed", "failed to load memory", err)
 			return
 		}
 		c.JSON(http.StatusOK, resp)
@@ -184,33 +184,37 @@ func UndoSessionMemoryChangeHandler(sessionService *service.SessionService, memo
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		changeID, err := strconv.ParseInt(c.Param("change_id"), 10, 64)
 		if err != nil || changeID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid change_id"})
+			writePublicError(c, http.StatusBadRequest, "memory_change_id_invalid", "invalid change_id", false)
 			return
 		}
 		if _, err := memoryRepo.UndoChange(c.Request.Context(), sessionID, userID, changeID); err != nil {
-			c.JSON(http.StatusBadRequest, memoryUndoErrorPayload(err))
+			writeMemoryUndoError(c, err)
 			return
 		}
 		session, _ := sessionService.GetByID(sessionID, userID)
 		resp, err := buildSessionMemoryResponse(c.Request.Context(), memoryRepo, taskRunRepo, configRepo, sessionID, userID, session != nil && session.MemoryEnabled)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load memory", "code": "memory_load_failed"})
+			writeServerError(c, http.StatusInternalServerError, "memory_load_failed", "failed to load memory", err)
 			return
 		}
 		c.JSON(http.StatusOK, resp)
 	}
 }
 
-func memoryUndoErrorPayload(err error) gin.H {
-	if errors.Is(err, repository.ErrMemoryChangeNotFound) {
-		return gin.H{"error": "memory change not found", "code": "memory_change_not_found"}
+func writeMemoryUndoError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, repository.ErrMemoryChangeNotFound):
+		writePublicError(c, http.StatusNotFound, "memory_change_not_found", "memory change not found", false)
+	case errors.Is(err, repository.ErrMemoryChangeNotUndoable):
+		writePublicError(c, http.StatusConflict, "memory_undo_unavailable", "only the latest memory organization can be undone", false)
+	default:
+		writeServerError(c, http.StatusInternalServerError, "memory_undo_failed", "failed to undo memory change", err)
 	}
-	return gin.H{"error": "only the latest memory organization can be undone", "code": "memory_undo_unavailable"}
 }
 
 func memoryModelRequest(session *model.Session, userID int64, userPreferences []byte) *agent.ChatRequest {
@@ -376,7 +380,7 @@ func memoryLimitsFromConfig(configRepo *repository.ConfigRepository) sessionmemo
 func parseSessionID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 		return 0, false
 	}
 	return id, true

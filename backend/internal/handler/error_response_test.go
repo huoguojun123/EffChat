@@ -33,4 +33,7 @@ func TestWriteServerErrorHidesInternalDetails(t *testing.T) {
 	if body["error"] != "failed to load usage" || body["code"] != "usage_summary_failed" || body["request_id"] != "req-test-123" {
 		t.Fatalf("unexpected response: %#v", body)
 	}
+	if body["retryable"] != true {
+		t.Fatalf("server error must be retryable: %#v", body)
+	}
 }

@@ -35,6 +35,10 @@ type sidecarResponse struct {
 	Warnings       []string `json:"warnings"`
 }
 
+type sidecarErrorResponse struct {
+	Detail string `json:"detail"`
+}
+
 type MinerUStartResult struct {
 	TaskID    string
 	State     string
@@ -129,26 +133,26 @@ func (c *SidecarClient) Health(ctx context.Context) error {
 
 func (c *SidecarClient) Extract(ctx context.Context, content []byte, contentType, filename string) (*Result, error) {
 	if !c.Enabled() {
-		return nil, fmt.Errorf("python extractor is not configured")
+		return nil, fmt.Errorf("%w: sidecar is not configured", ErrUnavailable)
 	}
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("file", filename)
 	if err != nil {
-		return nil, fmt.Errorf("create multipart file: %w", err)
+		return nil, fmt.Errorf("%w: create multipart file: %v", ErrUnavailable, err)
 	}
 	if _, err := part.Write(content); err != nil {
-		return nil, fmt.Errorf("write multipart file: %w", err)
+		return nil, fmt.Errorf("%w: write multipart file: %v", ErrUnavailable, err)
 	}
 	if err := writer.WriteField("filename", filename); err != nil {
-		return nil, fmt.Errorf("write filename field: %w", err)
+		return nil, fmt.Errorf("%w: write filename field: %v", ErrUnavailable, err)
 	}
 	if err := writer.WriteField("content_type", contentType); err != nil {
-		return nil, fmt.Errorf("write content_type field: %w", err)
+		return nil, fmt.Errorf("%w: write content_type field: %v", ErrUnavailable, err)
 	}
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("close multipart body: %w", err)
+		return nil, fmt.Errorf("%w: close multipart body: %v", ErrUnavailable, err)
 	}
 
 	endpoint, err := url.JoinPath(c.baseURL, "extract")
@@ -157,31 +161,48 @@ func (c *SidecarClient) Extract(ctx context.Context, content []byte, contentType
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
 	if err != nil {
-		return nil, fmt.Errorf("create extractor request: %w", err)
+		return nil, fmt.Errorf("%w: create request: %v", ErrUnavailable, err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("python extractor request failed: %w", err)
+		return nil, fmt.Errorf("%w: request failed: %v", ErrUnavailable, err)
 	}
 	defer resp.Body.Close()
 
 	limited := io.LimitReader(resp.Body, int64(len(content))+8<<20)
 	data, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, fmt.Errorf("read extractor response: %w", err)
+		return nil, fmt.Errorf("%w: read response: %v", ErrUnavailable, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("python extractor returned %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		var payload sidecarErrorResponse
+		_ = json.Unmarshal(data, &payload)
+		switch resp.StatusCode {
+		case http.StatusRequestEntityTooLarge:
+			return nil, fmt.Errorf("%w: sidecar returned %d", ErrLimitExceeded, resp.StatusCode)
+		case http.StatusUnsupportedMediaType:
+			return nil, fmt.Errorf("%w: sidecar returned %d", ErrUnsupported, resp.StatusCode)
+		case http.StatusBadRequest, http.StatusUnprocessableEntity:
+			if strings.EqualFold(strings.TrimSpace(payload.Detail), "no readable text extracted") {
+				return nil, fmt.Errorf("%w: sidecar returned %d", ErrNoReadableText, resp.StatusCode)
+			}
+			return nil, fmt.Errorf("%w: sidecar returned %d", ErrUnprocessable, resp.StatusCode)
+		default:
+			// The sidecar owns detailed parser/upstream diagnostics. The Go boundary keeps
+			// response bodies out of propagated errors so file contents, paths, and provider
+			// messages cannot escape through API responses or backend request logs.
+			return nil, fmt.Errorf("%w: sidecar returned %d", ErrUnavailable, resp.StatusCode)
+		}
 	}
 
 	var parsed sidecarResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return nil, fmt.Errorf("decode extractor response: %w", err)
+		return nil, fmt.Errorf("%w: decode response: %v", ErrUnavailable, err)
 	}
 	if strings.TrimSpace(parsed.Text) == "" {
-		return nil, fmt.Errorf("python extractor returned empty text")
+		return nil, fmt.Errorf("%w: sidecar returned empty text", ErrNoReadableText)
 	}
 	return &Result{
 		Text:           parsed.Text,

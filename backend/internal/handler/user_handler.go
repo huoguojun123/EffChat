@@ -1,9 +1,7 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/middleware"
@@ -16,7 +14,7 @@ func GetMeHandler(authService *service.AuthService) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		user, err := authService.GetProfile(userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			writeUserProfileError(c, "load", err)
 			return
 		}
 		c.JSON(http.StatusOK, user)
@@ -36,11 +34,7 @@ func UpdateMeHandler(authService *service.AuthService) gin.HandlerFunc {
 
 		user, err := authService.UpdateProfile(userID, &req)
 		if err != nil {
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeUserProfileError(c, "update", err)
 			return
 		}
 
@@ -60,11 +54,7 @@ func ChangePasswordHandler(authService *service.AuthService) gin.HandlerFunc {
 		}
 
 		if err := authService.ChangePassword(userID, &req); err != nil {
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeUserProfileError(c, "change_password", err)
 			return
 		}
 
@@ -75,22 +65,14 @@ func ChangePasswordHandler(authService *service.AuthService) gin.HandlerFunc {
 // ListUsersHandler 管理员获取用户列表
 func ListUsersHandler(userAdminService *service.UserAdminService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		limit := 50
-		offset := 0
-		if v := c.Query("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-				limit = n
-			}
-		}
-		if v := c.Query("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				offset = n
-			}
+		limit, offset, ok := adminUserPagination(c)
+		if !ok {
+			return
 		}
 
 		users, total, err := userAdminService.List(limit, offset)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list users"})
+			writeAdminUserError(c, "list", err)
 			return
 		}
 
@@ -112,7 +94,7 @@ func CreateUserHandler(userAdminService *service.UserAdminService) gin.HandlerFu
 
 		user, err := userAdminService.Create(&req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAdminUserError(c, "create", err)
 			return
 		}
 
@@ -124,10 +106,8 @@ func CreateUserHandler(userAdminService *service.UserAdminService) gin.HandlerFu
 func UpdateUserHandler(userAdminService *service.UserAdminService, limiters ...*AuthRateLimiter) gin.HandlerFunc {
 	limiter := firstAuthRateLimiter(limiters)
 	return func(c *gin.Context) {
-		idStr := c.Param("id")
-		userID, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		userID, ok := adminUserID(c)
+		if !ok {
 			return
 		}
 
@@ -138,7 +118,7 @@ func UpdateUserHandler(userAdminService *service.UserAdminService, limiters ...*
 		}
 		user, err := userAdminService.Update(userID, &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAdminUserError(c, "update", err)
 			return
 		}
 		if req.IsActive != nil && *req.IsActive {
@@ -152,10 +132,8 @@ func UpdateUserHandler(userAdminService *service.UserAdminService, limiters ...*
 // ResetUserPasswordHandler 管理员重置用户密码
 func ResetUserPasswordHandler(userAdminService *service.UserAdminService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		idStr := c.Param("id")
-		userID, err := strconv.ParseInt(idStr, 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		userID, ok := adminUserID(c)
+		if !ok {
 			return
 		}
 
@@ -166,7 +144,7 @@ func ResetUserPasswordHandler(userAdminService *service.UserAdminService) gin.Ha
 		}
 
 		if err := userAdminService.ResetPassword(userID, &req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAdminUserError(c, "reset_password", err)
 			return
 		}
 
@@ -177,9 +155,8 @@ func ResetUserPasswordHandler(userAdminService *service.UserAdminService) gin.Ha
 // SetUserGroupHandler 管理员设置用户分级组（group_id 为 null 时清空）
 func SetUserGroupHandler(userAdminService *service.UserAdminService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		userID, ok := adminUserID(c)
+		if !ok {
 			return
 		}
 
@@ -191,7 +168,7 @@ func SetUserGroupHandler(userAdminService *service.UserAdminService) gin.Handler
 
 		resp, err := userAdminService.SetGroup(userID, req.GroupID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAdminUserError(c, "set_group", err)
 			return
 		}
 		c.JSON(http.StatusOK, resp)

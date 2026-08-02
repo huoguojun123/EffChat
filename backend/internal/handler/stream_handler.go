@@ -60,7 +60,7 @@ func reserveSessionRun(c *gin.Context, runHub *service.RunHub, heartbeat, firstO
 				"retryable": true,
 			})
 		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeServerError(c, http.StatusInternalServerError, "run_reservation_failed", "failed to reserve run", err)
 		}
 		return nil, true
 	}
@@ -70,7 +70,7 @@ func reserveSessionRun(c *gin.Context, runHub *service.RunHub, heartbeat, firstO
 
 	writer, err := streaming.NewSSEWriter(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+		writeStreamUnavailable(c, err)
 		return nil, true
 	}
 	replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, snapshot.RunID, 0)
@@ -106,7 +106,7 @@ func replayKnownSessionRun(c *gin.Context, runHub *service.RunHub, quotaService 
 		writeRunIDConflict(c)
 		return true
 	} else if !errors.Is(err, repository.ErrNotFound) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "任务状态读取失败，请重试", "code": "run_state_load_failed", "retryable": true})
+		writeServerError(c, http.StatusInternalServerError, "run_state_load_failed", "任务状态读取失败，请重试", err)
 		return true
 	} else if _, ok, matchErr := runHub.Match(runID, sessionID, userID, kind, intent); matchErr != nil {
 		writeRunIDConflict(c)
@@ -116,7 +116,7 @@ func replayKnownSessionRun(c *gin.Context, runHub *service.RunHub, quotaService 
 	}
 	writer, err := streaming.NewSSEWriter(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+		writeStreamUnavailable(c, err)
 		return true
 	}
 	replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runID, 0)
@@ -141,10 +141,7 @@ func failRunWithPublicErrorRetryable(c *gin.Context, runHub *service.RunHub, run
 
 func failRunWithRequestID(runHub *service.RunHub, runID, requestID, code, message string, retryable bool, err error) gin.H {
 	logger.Error("run failed: request_id=%q run_id=%q code=%s err=%v", requestID, runID, code, err)
-	payload := gin.H{"error": message, "code": code, "retryable": retryable}
-	if requestID != "" {
-		payload["request_id"] = requestID
-	}
+	payload := runPublicErrorPayload(requestID, code, message, retryable)
 	if _, transitionErr := transitionRun(runHub, runID, service.RunTerminal{
 		Status: service.RunStatusFailed, PublicErrorCode: code, PublicErrorMessage: message,
 		Event: streaming.EventError, Data: payload,
@@ -152,6 +149,24 @@ func failRunWithRequestID(runHub *service.RunHub, runID, requestID, code, messag
 		logger.Error("persist run failure failed: request_id=%q run_id=%q code=%s err=%v", requestID, runID, code, transitionErr)
 	}
 	return payload
+}
+
+func runPublicErrorPayload(requestID, code, message string, retryable bool) gin.H {
+	payload := gin.H{"error": message, "code": code, "retryable": retryable}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	return payload
+}
+
+func writeRunTerminalConflict(c *gin.Context) {
+	c.JSON(http.StatusConflict, runPublicErrorPayload(c.GetString("request_id"), "run_terminal", "任务已结束，请刷新会话", false))
+}
+
+func writeRunExecutionOwned(c *gin.Context, runID string) {
+	payload := runPublicErrorPayload(c.GetString("request_id"), "run_execution_owned", "任务已开始，请通过 run_id 恢复", false)
+	payload["run_id"] = runID
+	c.JSON(http.StatusConflict, payload)
 }
 
 func transitionRun(runHub *service.RunHub, runID string, terminal service.RunTerminal) (*service.RunEvent, error) {
@@ -202,9 +217,13 @@ func transitionCanceledRun(c *gin.Context, writer *streaming.SSEWriter, runHub *
 	}
 	event, err := transitionRun(runHub, runID, service.RunTerminal{Status: service.RunStatusCanceled, CancelCause: cause})
 	if err != nil {
-		logger.Error("persist run cancellation failed: run_id=%q cause=%s err=%v", runID, cause, err)
+		requestID := ""
+		if c != nil {
+			requestID = c.GetString("request_id")
+		}
+		logger.Error("persist run cancellation failed: request_id=%q run_id=%q cause=%s err=%v", requestID, runID, cause, err)
 		if writer == nil && c != nil && !c.Writer.Written() {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "任务取消状态保存失败，请重试", "code": "run_terminal_failed", "retryable": true})
+			c.JSON(http.StatusInternalServerError, runPublicErrorPayload(requestID, "run_terminal_failed", "任务取消状态保存失败，请重试", true))
 		}
 		return true
 	}
@@ -224,10 +243,7 @@ func transitionCanceledRun(c *gin.Context, writer *streaming.SSEWriter, runHub *
 		} else if cause == service.RunCancelSessionDeleted {
 			status = http.StatusGone
 		}
-		payload := gin.H{"error": message, "code": code, "retryable": retryable}
-		if requestID := c.GetString("request_id"); requestID != "" {
-			payload["request_id"] = requestID
-		}
+		payload := runPublicErrorPayload(c.GetString("request_id"), code, message, retryable)
 		c.JSON(status, payload)
 	}
 	return true
@@ -259,7 +275,7 @@ func bindMessageRequest(c *gin.Context, req *service.SendMessageRequest) bool {
 	if err := c.ShouldBindJSON(req); err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "消息过长，请拆分发送或作为文件上传", "code": "message_too_large"})
+			writePublicError(c, http.StatusRequestEntityTooLarge, "message_too_large", "消息过长，请拆分发送或作为文件上传", false)
 			return false
 		}
 		writeInvalidJSON(c)
@@ -277,7 +293,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 		sessionIDStr := c.Param("id")
 		sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
@@ -287,7 +303,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		intent := service.BuildSendRunIntent(session, &req)
@@ -321,8 +337,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 		}
 		userMessage, err := messageService.BuildUserMessagePreviewContext(c.Request.Context(), sessionID, userID, &req)
 		if err != nil {
-			status, code, message, retryable := messageCreationFailure(err)
-			c.JSON(status, gin.H{"error": message, "code": code, "retryable": retryable})
+			writeMessageCreationError(c, err)
 			return
 		}
 		firstOutputTimeout := effectiveFirstOutputTimeout(configuredFirstOutputTimeout, defaultChatFirstOutputTimeout)
@@ -354,7 +369,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 				return
 			}
 			if errors.Is(err, service.ErrRunTerminal) {
-				c.JSON(http.StatusConflict, gin.H{"error": "任务已结束，请刷新会话", "code": "run_terminal"})
+				writeRunTerminalConflict(c)
 				return
 			}
 			if errors.Is(err, service.ErrRunIDConflict) {
@@ -377,7 +392,7 @@ func SendMessageStreamHandler(messageService *service.MessageService, sessionSer
 		if runSnapshot.Status != service.RunStatusRunning {
 			writer, writerErr := streaming.NewSSEWriter(c)
 			if writerErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+				writeStreamUnavailable(c, writerErr)
 				return
 			}
 			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
@@ -408,12 +423,12 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 		messageID, err := strconv.ParseInt(c.Param("message_id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message id"})
+			writePublicError(c, http.StatusBadRequest, "message_id_invalid", "invalid message id", false)
 			return
 		}
 		clientRunID := strings.TrimSpace(c.Query("client_run_id"))
@@ -424,7 +439,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 			if err := c.ShouldBindJSON(&req); err != nil {
 				var maxBytesErr *http.MaxBytesError
 				if errors.As(err, &maxBytesErr) {
-					c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "消息过长，请缩短后重试", "code": "message_too_large"})
+					writePublicError(c, http.StatusRequestEntityTooLarge, "message_too_large", "消息过长，请缩短后重试", false)
 					return
 				}
 				writeInvalidJSON(c)
@@ -433,13 +448,13 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 			editedContent = req.Content
 			clientRunID = strings.TrimSpace(req.ClientRunID)
 			if clientRunID == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "缺少运行标识，请重新提交", "code": "client_run_id_required"})
+				writePublicError(c, http.StatusBadRequest, "client_run_id_required", "缺少运行标识，请重新提交", false)
 				return
 			}
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		intent := service.BuildRetryRunIntent(messageID)
@@ -454,7 +469,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 			return
 		}
 		if einoAgent == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "compaction is unavailable"})
+			writePublicError(c, http.StatusServiceUnavailable, "agent_unavailable", "agent is unavailable", true)
 			return
 		}
 		var retryUser *model.Message
@@ -465,47 +480,17 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 			retryUser, retryMessages, err = messageService.RetryAgentContext(c.Request.Context(), sessionID, userID, messageID)
 		}
 		if err != nil {
-			if errors.Is(err, service.ErrMessageAlreadyAnswered) {
-				c.JSON(http.StatusConflict, gin.H{"error": "助手已开始输出，不能再修改这条消息", "code": "message_already_answered", "retryable": false})
-				return
-			}
-			if errors.Is(err, service.ErrMessageUnchanged) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "内容没有变化，请直接使用重试", "code": "message_unchanged", "retryable": false})
-				return
-			}
-			if errors.Is(err, service.ErrRetryTargetStale) {
-				code := "retry_target_stale"
-				message := "会话已有新消息，请刷新后重试最后一条"
-				if edited {
-					code = "edit_target_stale"
-					message = "这条消息已不是会话末尾，请刷新后再编辑"
-				}
-				c.JSON(http.StatusConflict, gin.H{"error": message, "code": code, "retryable": false})
-				return
-			}
-			if errors.Is(err, repository.ErrAttachmentUnavailable) {
-				c.JSON(http.StatusConflict, gin.H{"error": "原附件已删除，无法完整重试", "code": "attachment_unavailable", "retryable": false})
-				return
-			}
-			if errors.Is(err, service.ErrInvalidMessageInput) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "修改后的消息内容无效", "code": "message_input_invalid", "retryable": false})
-				return
-			}
-			if errors.Is(err, service.ErrMessageTooLarge) {
-				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "消息过长，请缩短后重试", "code": "message_too_large", "retryable": false})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "重试上下文加载失败，请重试", "code": "retry_context_load_failed", "retryable": true})
+			writeRetryContextError(c, edited, err)
 			return
 		}
 		user, err := authService.GetProfileContext(c.Request.Context(), userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user not found"})
+			writeUserProfileLoadError(c, err)
 			return
 		}
 		enabledSkills, err := skillService.EnabledInstructionsForSessionContext(c.Request.Context(), user, session.Metadata)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to load skills"})
+			writeServerError(c, http.StatusInternalServerError, "skill_context_load_failed", "failed to load Skill context", err)
 			return
 		}
 		retryRequest := buildAgentRequestFromSession(session, user, retryMessages, titleService, enabledSkills, thinkingEffortFromMessage(retryUser))
@@ -517,11 +502,16 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 		}
 		needsCompaction, tokens, threshold, err := einoAgent.NeedsPreCompaction(c.Request.Context(), retryRequest)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check compaction"})
+			writeServerError(c, http.StatusInternalServerError, "compaction_check_failed", "failed to check compaction", err)
 			return
 		}
 		if taskRunRepo != nil {
-			if lastRun, _ := taskRunRepo.LatestForSession(c.Request.Context(), sessionID, userID, repository.ModelTaskCompression); lastRun != nil && lastRun.Status == repository.ModelTaskStatusFailed {
+			lastRun, loadErr := taskRunRepo.LatestForSession(c.Request.Context(), sessionID, userID, repository.ModelTaskCompression)
+			if loadErr != nil {
+				writeServerError(c, http.StatusInternalServerError, "compaction_state_load_failed", "failed to load compaction state", loadErr)
+				return
+			}
+			if lastRun != nil && lastRun.Status == repository.ModelTaskStatusFailed {
 				needsCompaction = true
 			}
 		}
@@ -575,7 +565,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 				return
 			}
 			if errors.Is(err, service.ErrRunTerminal) {
-				c.JSON(http.StatusConflict, gin.H{"error": "任务已结束，请刷新会话", "code": "run_terminal"})
+				writeRunTerminalConflict(c)
 				return
 			}
 			if errors.Is(err, service.ErrRunIDConflict) {
@@ -624,7 +614,7 @@ func retryMessageStreamHandler(messageService *service.MessageService, sessionSe
 		if runSnapshot.Status != service.RunStatusRunning {
 			writer, writerErr := streaming.NewSSEWriter(c)
 			if writerErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+				writeStreamUnavailable(c, writerErr)
 				return
 			}
 			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
@@ -685,15 +675,20 @@ func failQuotaAdmission(c *gin.Context, runHub *service.RunHub, runID string, er
 func writeRuntimeModelError(c *gin.Context, err error) {
 	var modelErr *service.RuntimeModelError
 	if errors.As(err, &modelErr) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":    modelErr.Message,
-			"code":     modelErr.Code,
-			"provider": modelErr.Provider,
-			"model_id": modelErr.ModelID,
+		status := http.StatusBadRequest
+		if modelErr.Retryable {
+			status = http.StatusServiceUnavailable
+		}
+		c.JSON(status, gin.H{
+			"error":     modelErr.Message,
+			"code":      modelErr.Code,
+			"provider":  modelErr.Provider,
+			"model_id":  modelErr.ModelID,
+			"retryable": modelErr.Retryable,
 		})
 		return
 	}
-	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	writeServerError(c, http.StatusInternalServerError, "model_validation_failed", "failed to validate model", err)
 }
 
 func runtimeSnapshotPublicMessage(err error) string {
@@ -728,32 +723,43 @@ type messagePreflightFailure struct {
 	message   string
 	code      string
 	retryable bool
+	cause     error
 }
 
 func writeMessagePreflightFailure(c *gin.Context, failure *messagePreflightFailure) {
-	payload := gin.H{"error": failure.message}
-	if failure.code != "" {
-		payload["code"] = failure.code
-		payload["retryable"] = failure.retryable
+	if failure.cause != nil && failure.status >= http.StatusInternalServerError {
+		writeServerError(c, failure.status, failure.code, failure.message, failure.cause)
+		return
 	}
-	c.JSON(failure.status, payload)
+	writePublicError(c, failure.status, failure.code, failure.message, failure.retryable)
 }
 
 func evaluateMessagePreflight(ctx context.Context, messageService *service.MessageService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, taskRunRepo *repository.ModelTaskRunRepository, session *model.Session, userID int64, req *service.SendMessageRequest) (messagePreflightResponse, *messagePreflightFailure) {
 	if einoAgent == nil {
-		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusServiceUnavailable, message: "compaction is unavailable"}
+		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusServiceUnavailable, message: "agent is unavailable", code: "agent_unavailable", retryable: true}
 	}
 	user, err := authService.GetProfileContext(ctx, userID)
 	if err != nil {
-		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusBadRequest, message: "user not found"}
+		if errors.Is(err, repository.ErrNotFound) {
+			return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusUnauthorized, message: "account is unavailable", code: "account_unavailable"}
+		}
+		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusInternalServerError, message: "failed to load user profile", code: "user_profile_load_failed", retryable: true, cause: err}
 	}
 	enabledSkills, err := skillService.EnabledInstructionsForSessionContext(ctx, user, session.Metadata)
 	if err != nil {
-		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusBadRequest, message: "failed to load skills"}
+		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusInternalServerError, message: "failed to load Skill context", code: "skill_context_load_failed", retryable: true, cause: err}
 	}
 	messages, err := messageService.ListForAgentWithDraftContext(ctx, session.ID, userID, req)
 	if err != nil {
-		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusBadRequest, message: err.Error()}
+		if errors.Is(err, service.ErrSessionNotFound) {
+			return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusNotFound, message: "session not found", code: "session_not_found"}
+		}
+		status, code, message, retryable := messageCreationFailure(err)
+		failure := &messagePreflightFailure{status: status, message: message, code: code, retryable: retryable}
+		if status >= http.StatusInternalServerError {
+			failure.cause = err
+		}
+		return messagePreflightResponse{}, failure
 	}
 	agentReq := buildAgentRequestFromSession(session, user, messages, titleService, enabledSkills, req.ThinkingEffort)
 	agentReq.SchemaVersion = req.SchemaVersion
@@ -769,11 +775,14 @@ func evaluateMessagePreflight(ctx context.Context, messageService *service.Messa
 	}
 	needed, tokens, threshold, err := einoAgent.NeedsPreCompaction(ctx, agentReq)
 	if err != nil {
-		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusInternalServerError, message: "failed to check compaction"}
+		return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusInternalServerError, message: "failed to check compaction", code: "compaction_check_failed", retryable: true, cause: err}
 	}
 	var lastRun *repository.ModelTaskRun
 	if taskRunRepo != nil {
-		lastRun, _ = taskRunRepo.LatestForSession(ctx, session.ID, userID, repository.ModelTaskCompression)
+		lastRun, err = taskRunRepo.LatestForSession(ctx, session.ID, userID, repository.ModelTaskCompression)
+		if err != nil {
+			return messagePreflightResponse{}, &messagePreflightFailure{status: http.StatusInternalServerError, message: "failed to load compaction state", code: "compaction_state_load_failed", retryable: true, cause: err}
+		}
 	}
 	if lastRun != nil && lastRun.Status == repository.ModelTaskStatusFailed {
 		needed = true
@@ -801,7 +810,7 @@ func MessagePreflightHandler(messageService *service.MessageService, sessionServ
 		userID := middleware.GetUserID(c)
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 		var req service.SendMessageRequest
@@ -810,7 +819,7 @@ func MessagePreflightHandler(messageService *service.MessageService, sessionServ
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		if err := sessionService.ValidateRunnableModelForUser(session, userID); err != nil {
@@ -836,13 +845,13 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		userID := middleware.GetUserID(c)
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		clientRunID := strings.TrimSpace(c.Query("client_run_id"))
@@ -852,7 +861,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		if rawPreserveMessageID := strings.TrimSpace(c.Query("preserve_message_id")); rawPreserveMessageID != "" {
 			preserveMessageID, err = strconv.ParseInt(rawPreserveMessageID, 10, 64)
 			if err != nil || preserveMessageID <= 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preserve message id"})
+				writePublicError(c, http.StatusBadRequest, "preserve_message_id_invalid", "invalid preserve message id", false)
 				return
 			}
 		}
@@ -861,7 +870,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			return
 		}
 		if einoAgent == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "compaction is unavailable"})
+			writePublicError(c, http.StatusServiceUnavailable, "compaction_unavailable", "compaction is unavailable", true)
 			return
 		}
 		if err := sessionService.ValidateRunnableModelForUser(session, userID); err != nil {
@@ -870,12 +879,12 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		}
 		admissionUser, err := authService.GetProfileContext(c.Request.Context(), userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user not found"})
+			writeUserProfileLoadError(c, err)
 			return
 		}
 		admissionSkills, err := skillService.EnabledInstructionsForSessionContext(c.Request.Context(), admissionUser, session.Metadata)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to load skills"})
+			writeServerError(c, http.StatusInternalServerError, "skill_context_load_failed", "failed to load Skill context", err)
 			return
 		}
 		admissionRequest := buildAgentRequestFromSession(session, admissionUser, nil, titleService, admissionSkills, thinkingEffort)
@@ -913,7 +922,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 				return
 			}
 			if errors.Is(err, service.ErrRunTerminal) {
-				c.JSON(http.StatusConflict, gin.H{"error": "任务已结束，请刷新会话", "code": "run_terminal"})
+				writeRunTerminalConflict(c)
 				return
 			}
 			if errors.Is(err, service.ErrRunIDConflict) {
@@ -931,7 +940,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		if runSnapshot.Status != service.RunStatusRunning {
 			writer, writerErr := streaming.NewSSEWriter(c)
 			if writerErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+				writeStreamUnavailable(c, writerErr)
 				return
 			}
 			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
@@ -942,7 +951,7 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			if errors.Is(err, service.ErrRunTerminal) || errors.Is(err, service.ErrRunExecutionOwned) {
 				writer, writerErr := streaming.NewSSEWriter(c)
 				if writerErr != nil {
-					c.JSON(http.StatusConflict, gin.H{"error": "任务已开始，请通过 run_id 恢复", "code": "run_execution_owned", "run_id": runSnapshot.RunID})
+					writeRunExecutionOwned(c, runSnapshot.RunID)
 					return
 				}
 				replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
@@ -975,6 +984,11 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
 				return
 			}
+			if errors.Is(err, service.ErrSessionNotFound) {
+				payload := failRunWithPublicErrorRetryable(c, runHub, runSnapshot.RunID, "session_not_found", "session not found", false, err)
+				c.JSON(http.StatusNotFound, payload)
+				return
+			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "session_load_failed", "会话加载失败，请重试", err)
 			c.JSON(http.StatusInternalServerError, payload)
 			return
@@ -982,6 +996,11 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		user, err := authService.GetProfileContext(setupContext, userID)
 		if err != nil {
 			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
+				return
+			}
+			if errors.Is(err, repository.ErrNotFound) {
+				payload := failRunWithPublicErrorRetryable(c, runHub, runSnapshot.RunID, "account_unavailable", "account is unavailable", false, err)
+				c.JSON(http.StatusUnauthorized, payload)
 				return
 			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "user_profile_load_failed", "用户信息加载失败，请重试", err)
@@ -1010,6 +1029,16 @@ func CompactSessionHandler(messageService *service.MessageService, sessionServic
 		}
 		if err != nil {
 			if transitionRunSetupInterruption(c, writer, runHub, runSnapshot.RunID, c.GetString("request_id"), runContext, setupContext) {
+				return
+			}
+			if errors.Is(err, service.ErrSessionNotFound) {
+				payload := failRunWithPublicErrorRetryable(c, runHub, runSnapshot.RunID, "session_not_found", "session not found", false, err)
+				c.JSON(http.StatusNotFound, payload)
+				return
+			}
+			if errors.Is(err, service.ErrRetryTargetStale) {
+				payload := failRunWithPublicErrorRetryable(c, runHub, runSnapshot.RunID, "compaction_target_stale", "会话已有新消息，请刷新后重试", false, err)
+				c.JSON(http.StatusConflict, payload)
 				return
 			}
 			payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "conversation_history_load_failed", "会话历史加载失败，请重试", err)

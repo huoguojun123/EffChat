@@ -8,7 +8,10 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 )
 
-var ErrDefaultUserGroupRequired = errors.New("cannot remove the final default user group")
+var (
+	ErrDefaultUserGroupRequired = errors.New("cannot remove the final default user group")
+	ErrUserGroupConflict        = errors.New("user group conflict")
+)
 
 const userGroupDefaultInvariantLock = int64(0x4653484752504446)
 
@@ -121,6 +124,9 @@ func (r *UserGroupRepository) Create(g *model.UserGroup) error {
 	).
 		Scan(&g.ID, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: user group name already exists", ErrUserGroupConflict)
+		}
 		return fmt.Errorf("failed to create user group: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -184,9 +190,15 @@ func (r *UserGroupRepository) Update(g *model.UserGroup) error {
 		g.ID,
 	)
 	if err != nil {
+		if IsUniqueViolation(err) {
+			return fmt.Errorf("%w: user group name already exists", ErrUserGroupConflict)
+		}
 		return fmt.Errorf("failed to update user group: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get updated user group count: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("user group not found: %w", ErrNotFound)
 	}
@@ -226,7 +238,10 @@ func (r *UserGroupRepository) Delete(id int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete user group: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get deleted user group count: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("user group not found: %w", ErrNotFound)
 	}

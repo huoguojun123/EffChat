@@ -45,15 +45,15 @@ func MemoryMaintenanceStreamHandler(
 		}
 		session, err := sessionService.GetByID(sessionID, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		if operation == service.RunOperationMemoryRetry && !session.MemoryEnabled {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "session memory is disabled", "code": "memory_disabled"})
+			writePublicError(c, http.StatusBadRequest, "memory_disabled", "session memory is disabled", false)
 			return
 		}
 		if einoAgent == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "memory maintenance is unavailable"})
+			writePublicError(c, http.StatusServiceUnavailable, "memory_maintenance_unavailable", "memory maintenance is unavailable", true)
 			return
 		}
 
@@ -97,7 +97,7 @@ func MemoryMaintenanceStreamHandler(
 		if runSnapshot.Status != service.RunStatusRunning {
 			writer, writerErr := streaming.NewSSEWriter(c)
 			if writerErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+				writeServerError(c, http.StatusInternalServerError, "stream_unavailable", "streaming not supported", writerErr)
 				return
 			}
 			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)

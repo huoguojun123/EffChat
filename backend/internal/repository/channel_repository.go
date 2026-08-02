@@ -3,11 +3,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 )
+
+var ErrExternalServiceOrderInvalid = errors.New("invalid external service order")
 
 type ChannelRepository struct {
 	db *sql.DB
@@ -128,7 +131,7 @@ func (r *ChannelRepository) DeleteAIChannel(key string) error {
 		return fmt.Errorf("delete ai channel: %w", err)
 	}
 	if rows, _ := res.RowsAffected(); rows == 0 {
-		return fmt.Errorf("ai channel not found: %s", key)
+		return fmt.Errorf("ai channel not found: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -285,7 +288,7 @@ func (r *ChannelRepository) DeleteExternalService(key string) error {
 		return fmt.Errorf("delete external service: %w", err)
 	}
 	if rows, _ := res.RowsAffected(); rows == 0 {
-		return fmt.Errorf("external service not found: %s", key)
+		return fmt.Errorf("external service not found: %w", ErrNotFound)
 	}
 	return nil
 }
@@ -293,7 +296,7 @@ func (r *ChannelRepository) DeleteExternalService(key string) error {
 func (r *ChannelRepository) ReorderExternalServices(kind string, keys []string) error {
 	kind = normalizeConfigKey(kind)
 	if len(keys) == 0 {
-		return fmt.Errorf("service order cannot be empty")
+		return fmt.Errorf("%w: service order cannot be empty", ErrExternalServiceOrderInvalid)
 	}
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -317,16 +320,16 @@ func (r *ChannelRepository) ReorderExternalServices(kind string, keys []string) 
 		return fmt.Errorf("close external service keys: %w", err)
 	}
 	if len(existing) != len(keys) {
-		return fmt.Errorf("service order must include every configured %s service", kind)
+		return fmt.Errorf("%w: service order must include every configured %s service", ErrExternalServiceOrderInvalid, kind)
 	}
 	seen := make(map[string]struct{}, len(keys))
 	for index, raw := range keys {
 		key := normalizeConfigKey(raw)
 		if _, ok := existing[key]; !ok {
-			return fmt.Errorf("service %q is not configured for %s", raw, kind)
+			return fmt.Errorf("%w: service %q is not configured for %s", ErrExternalServiceOrderInvalid, raw, kind)
 		}
 		if _, duplicate := seen[key]; duplicate {
-			return fmt.Errorf("service order contains duplicate %q", raw)
+			return fmt.Errorf("%w: service order contains duplicate %q", ErrExternalServiceOrderInvalid, raw)
 		}
 		seen[key] = struct{}{}
 		if _, err := tx.Exec(`UPDATE external_services SET sort_order = $1, updated_at = NOW() WHERE service_key = $2 AND kind = $3 AND deleted_at IS NULL`, (index+1)*10, key, kind); err != nil {

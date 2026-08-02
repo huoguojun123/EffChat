@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func (s *SkillService) UpdateUserSkills(userID int64, ids []string) (*UserResponse, error) {
@@ -30,10 +32,13 @@ func (s *SkillService) UpdateSessionSkills(sessionID, userID int64, ids []string
 	clean := dedupeSkillIDs(ids)
 	for _, id := range clean {
 		if _, ok := allowed[id]; !ok {
-			return nil, fmt.Errorf("skill %s is not authorized", id)
+			return nil, newSkillError(SkillErrorNotAuthorized, "Skill is not authorized", nil)
 		}
 	}
 	if err := s.sessionRepo.UpdateEnabledSkills(sessionID, userID, clean); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorSessionNotFound, "session not found", err)
+		}
 		return nil, err
 	}
 	return clean, nil

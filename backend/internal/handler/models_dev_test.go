@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -255,6 +256,48 @@ func TestListModelsDevCatalogReturnsFailureWhenLocalModelsCannotLoad(t *testing.
 	}
 	if strings.Contains(recorder.Body.String(), "gpt-draft") {
 		t.Fatalf("handler returned catalog draft after local model failure: %s", recorder.Body.String())
+	}
+}
+
+func TestGetModelsDevCatalogModelReturnsStableQueryErrors(t *testing.T) {
+	resetModelsDevCatalogCache(t)
+	storeCatalog(map[string]modelsDevProvider{
+		"openai": {
+			ID: "openai",
+			Models: map[string]modelsDevModel{
+				"gpt-present": {ID: "gpt-present", Name: "Present"},
+			},
+		},
+	})
+	router := gin.New()
+	router.GET("/catalog/*id", GetModelsDevCatalogModelHandler())
+
+	tests := []struct {
+		name       string
+		target     string
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "missing id", target: "/catalog/", wantStatus: http.StatusBadRequest, wantCode: "models_dev_model_invalid"},
+		{name: "missing provider", target: "/catalog/gpt-present?provider=unknown", wantStatus: http.StatusNotFound, wantCode: "models_dev_provider_not_found"},
+		{name: "missing scoped model", target: "/catalog/gpt-missing?provider=openai", wantStatus: http.StatusNotFound, wantCode: "models_dev_model_not_found"},
+		{name: "missing unscoped model", target: "/catalog/gpt-missing", wantStatus: http.StatusNotFound, wantCode: "models_dev_model_not_found"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.target, nil))
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["code"] != test.wantCode || body["retryable"] != false {
+				t.Fatalf("response = %#v", body)
+			}
+		})
 	}
 }
 

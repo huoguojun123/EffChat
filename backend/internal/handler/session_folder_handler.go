@@ -31,7 +31,7 @@ func CreateSessionFolderHandler(folderService *service.SessionFolderService) gin
 		}
 		folder, err := folderService.Create(userID, &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionFolderError(c, "create", err)
 			return
 		}
 		c.JSON(http.StatusCreated, folder)
@@ -42,8 +42,8 @@ func UpdateSessionFolderHandler(folderService *service.SessionFolderService) gin
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid folder id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "session_folder_id_invalid", "invalid folder id", false)
 			return
 		}
 		var req service.UpdateSessionFolderRequest
@@ -53,7 +53,7 @@ func UpdateSessionFolderHandler(folderService *service.SessionFolderService) gin
 		}
 		folder, err := folderService.Update(id, userID, &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionFolderError(c, "update", err)
 			return
 		}
 		c.JSON(http.StatusOK, folder)
@@ -64,12 +64,12 @@ func DeleteSessionFolderHandler(folderService *service.SessionFolderService) gin
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid folder id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "session_folder_id_invalid", "invalid folder id", false)
 			return
 		}
 		if err := folderService.Delete(id, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionFolderError(c, "delete", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "session folder deleted"})

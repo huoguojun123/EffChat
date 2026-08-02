@@ -42,6 +42,29 @@ describe("api client", () => {
     await pending
   })
 
+  it("preserves structured public error metadata", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      json: async () => ({
+        error: "failed to load file",
+        code: "file_load_failed",
+        retryable: true,
+        request_id: "req-file-read",
+      }),
+    }))
+
+    await expect(api.get("/files/1")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 500,
+      message: "failed to load file",
+      code: "file_load_failed",
+      retryable: true,
+      requestId: "req-file-read",
+    })
+  })
+
   it("does not evict a newer login when a stale shared request receives 401", async () => {
     localStorage.setItem("token", "old-token")
     let resolveResponse!: (value: Response) => void

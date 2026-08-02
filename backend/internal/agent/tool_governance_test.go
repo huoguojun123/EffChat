@@ -28,7 +28,7 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	budget := &toolBudgetMiddleware{maxCalls: 8, maxResultTokens: 1000, maxContextTokens: 2000, maxSkillTokens: 1000}
 	middleware := toolGovernanceMiddleware(runtime, nil, nil, budget).Invokable
 	endpoint := middleware(func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-		return nil, errors.New("upstream unavailable")
+		return nil, errors.New("postgres://secret@internal/private/path")
 	})
 
 	out, err := endpoint(context.Background(), &compose.ToolInput{Name: "web_search", CallID: "call-1", Arguments: `{"query":"x"}`})
@@ -45,8 +45,56 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	if payload["ok"] != false || payload["tool"] != "web_search" || payload["source"] != "tool_governance" {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
+	if payload["code"] != "tool_execution_failed" || payload["retryable"] != false {
+		t.Fatalf("unexpected public classification: %#v", payload)
+	}
+	if strings.Contains(out.Result, "secret") || strings.Contains(out.Result, "/private/path") || strings.Contains(out.Result, "postgres") {
+		t.Fatalf("tool output leaked internal error: %s", out.Result)
+	}
 	if budget.contextUsed == 0 || budget.contextReserved != 0 {
 		t.Fatalf("structured Go error was not accounted: used=%d reserved=%d", budget.contextUsed, budget.contextReserved)
+	}
+}
+
+func TestToolGovernanceSanitizesStructuredFailureCause(t *testing.T) {
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 92})
+	middleware := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"file_list": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, usageService, nil).Invokable
+	endpoint := middleware(func(context.Context, *compose.ToolInput) (*compose.ToolOutput, error) {
+		return &compose.ToolOutput{Result: `{"error":"postgres://fixture:secret@db.example/effchat /srv/private/files","message":"Failed to list conversation files."}`}, nil
+	})
+
+	out, err := endpoint(modelusage.WithMeta(context.Background(), modelusage.Meta{UserID: 7, SessionID: 9, RunID: "run-1"}), &compose.ToolInput{Name: "file_list", CallID: "call-1"})
+	if err != nil {
+		t.Fatalf("structured Tool failure should remain a result: %v", err)
+	}
+	if out == nil || strings.Contains(out.Result, "secret") || strings.Contains(out.Result, "/srv/private") || strings.Contains(out.Result, "postgres") {
+		t.Fatalf("structured Tool result leaked private cause: %#v", out)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(out.Result), &payload); err != nil {
+		t.Fatalf("decode Tool result: %v", err)
+	}
+	if payload["error"] != "Failed to list conversation files." || payload["message"] != "Failed to list conversation files." ||
+		payload["ok"] != false || payload["code"] != "tool_business_failure" || payload["retryable"] != false || payload["tool"] != "file_list" || payload["source"] != "tool" {
+		t.Fatalf("public Tool failure = %#v", payload)
+	}
+	if usageStore.updated.Success || usageStore.updated.ErrorType != "tool_business_failure" {
+		t.Fatalf("usage outcome = %#v", usageStore.updated)
+	}
+	if strings.Contains(usageStore.updated.ErrorMessage, "fixture:secret@") {
+		t.Fatalf("usage diagnostic leaked private cause: %q", usageStore.updated.ErrorMessage)
+	}
+}
+
+func TestToolGovernanceKeepsTypedWebFailure(t *testing.T) {
+	result := `{"ok":false,"error_code":"url_blocked","error":"该地址被安全策略拦截","retryable":false}`
+	sanitized, diagnostic := sanitizeStructuredToolFailure("web_extract", result)
+	if sanitized != result || diagnostic != "" {
+		t.Fatalf("typed web failure changed: result=%s diagnostic=%q", sanitized, diagnostic)
 	}
 }
 
@@ -453,7 +501,7 @@ func TestToolOutcomeCodeAndDiagnosticsMatchStorageLimits(t *testing.T) {
 	}
 }
 
-func TestToolGovernanceRecordsTruncatedGoErrorWithoutLoggingSecret(t *testing.T) {
+func TestToolGovernanceCapsGoErrorDiagnosticWithoutLoggingSecret(t *testing.T) {
 	var logs bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logs)
@@ -478,8 +526,13 @@ func TestToolGovernanceRecordsTruncatedGoErrorWithoutLoggingSecret(t *testing.T)
 	if _, err := endpoint(ctx, &compose.ToolInput{Name: "web_search", CallID: "call-1"}); err != nil {
 		t.Fatalf("Go error should be converted to a structured result: %v", err)
 	}
-	if !usageStore.updated.Truncated || usageStore.updated.Success || usageStore.updated.ErrorType != "tool_error" {
+	// Truncated describes the model-visible Tool result, not the separately capped
+	// internal diagnostic. The stable public error fits within the result budget.
+	if usageStore.updated.Truncated || usageStore.updated.Success || usageStore.updated.ErrorType != "tool_error" {
 		t.Fatalf("Go error usage mismatch: %#v", usageStore.updated)
+	}
+	if len([]rune(usageStore.updated.ErrorMessage)) != 500 {
+		t.Fatalf("usage diagnostic length = %d, want storage cap", len([]rune(usageStore.updated.ErrorMessage)))
 	}
 	if strings.Contains(usageStore.updated.ErrorMessage, "private-value") || strings.Contains(usageStore.updated.ErrorMessage, "\n") {
 		t.Fatalf("usage diagnostic exposed secret/control characters: %q", usageStore.updated.ErrorMessage)

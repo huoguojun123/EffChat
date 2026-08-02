@@ -50,7 +50,7 @@ func (r *FontRepository) Create(font *model.FontAsset) error {
 	if font.Style == "" {
 		font.Style = "normal"
 	}
-	return r.db.QueryRow(
+	if err := r.db.QueryRow(
 		query,
 		font.DisplayName,
 		font.FamilyName,
@@ -63,7 +63,10 @@ func (r *FontRepository) Create(font *model.FontAsset) error {
 		font.Style,
 		font.Enabled,
 		font.CreatedBy,
-	).Scan(&font.ID, &font.CreatedAt, &font.UpdatedAt)
+	).Scan(&font.ID, &font.CreatedAt, &font.UpdatedAt); err != nil {
+		return fmt.Errorf("create font: %w", err)
+	}
+	return nil
 }
 
 func (r *FontRepository) List() ([]*model.FontAsset, error) {
@@ -103,6 +106,9 @@ func (r *FontRepository) List() ([]*model.FontAsset, error) {
 			return nil, fmt.Errorf("failed to scan font: %w", err)
 		}
 		fonts = append(fonts, font)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate fonts: %w", err)
 	}
 	return fonts, nil
 }
@@ -150,7 +156,10 @@ func (r *FontRepository) Update(font *model.FontAsset) error {
 	if err != nil {
 		return fmt.Errorf("failed to update font: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read updated font row count: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("font not found: %w", ErrNotFound)
 	}
@@ -166,7 +175,10 @@ func (r *FontRepository) Delete(id int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete font: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read deleted font row count: %w", err)
+	}
 	if rows == 0 {
 		return fmt.Errorf("font not found: %w", ErrNotFound)
 	}
@@ -289,11 +301,17 @@ func (r *FontRepository) getSelectedIDByKey(key string) (*int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get selected font: %w", err)
 	}
+	if string(raw) == "null" {
+		return nil, nil
+	}
 	var id int64
-	if err := json.Unmarshal(raw, &id); err == nil && id > 0 {
+	if err := json.Unmarshal(raw, &id); err != nil {
+		return nil, fmt.Errorf("decode selected font: %w", err)
+	}
+	if id > 0 {
 		return &id, nil
 	}
-	return nil, nil
+	return nil, fmt.Errorf("decode selected font: invalid font id %d", id)
 }
 
 func (r *FontRepository) setSelectedIDByKey(key string, id *int64) error {

@@ -170,7 +170,7 @@ func (t *SkillListTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	var input SkillListInput
 	if strings.TrimSpace(argumentsInJSON) != "" {
 		if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
-			return marshalSkillWorkspaceOutput(SkillListOutput{Error: "invalid input: " + err.Error(), Message: "skill_list input is invalid."})
+			return marshalSkillWorkspaceOutput(SkillListOutput{Error: "invalid input", Message: "skill_list input is invalid."})
 		}
 	}
 	input.SkillID = strings.TrimSpace(input.SkillID)
@@ -344,7 +344,7 @@ func (t *SkillReadTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 func (t *SkillReadTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...einoTool.Option) (string, error) {
 	var input SkillReadInput
 	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
-		return marshalSkillWorkspaceOutput(SkillReadOutput{Error: "invalid input: " + err.Error(), Message: "skill_read input is invalid."})
+		return marshalSkillWorkspaceOutput(SkillReadOutput{Error: "invalid input", Message: "skill_read input is invalid."})
 	}
 	input.SkillID = strings.TrimSpace(input.SkillID)
 	path := normalizeSkillToolPath(input.Path)
@@ -361,7 +361,7 @@ func (t *SkillReadTool) InvokableRun(ctx context.Context, argumentsInJSON string
 	}
 	content, err := readSkillStorageFile(file)
 	if err != nil {
-		return marshalSkillWorkspaceOutput(SkillReadOutput{SkillID: input.SkillID, Path: path, Kind: file.Kind, Error: err.Error(), Message: "Failed to read skill file."})
+		return "", fmt.Errorf("read skill file %q: %w", path, err)
 	}
 	content = strings.TrimSpace(content)
 	out := SkillReadOutput{SkillID: input.SkillID, Path: path, Kind: file.Kind}
@@ -405,7 +405,7 @@ func (t *SkillSearchTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 func (t *SkillSearchTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...einoTool.Option) (string, error) {
 	var input SkillSearchInput
 	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
-		return marshalSkillWorkspaceOutput(SkillSearchOutput{Error: "invalid input: " + err.Error(), Message: "skill_search input is invalid."})
+		return marshalSkillWorkspaceOutput(SkillSearchOutput{Error: "invalid input", Message: "skill_search input is invalid."})
 	}
 	input.Query = strings.TrimSpace(input.Query)
 	input.SkillID = strings.TrimSpace(input.SkillID)

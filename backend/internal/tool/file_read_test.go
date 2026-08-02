@@ -342,3 +342,32 @@ func TestFileReadToolUnreadableFileReturnsStructuredError(t *testing.T) {
 		t.Fatalf("file_id = %d, want 99", out.FileID)
 	}
 }
+
+func TestFileReadToolDoesNotExposeStoredExtractionCause(t *testing.T) {
+	privateCause := "provider secret /srv/private/extractor"
+	tool := NewFileReadTool(&fakeFileReadStore{files: map[int64]*model.File{
+		99: {
+			ID:            99,
+			FileName:      "fixture.pdf",
+			FileType:      "application/pdf",
+			ExtractStatus: "failed",
+			ExtractError:  &privateCause,
+		},
+	}}, 1, 2)
+	input, _ := json.Marshal(FileReadInput{FileID: 99})
+	raw, err := tool.InvokableRun(context.Background(), string(input))
+	if err != nil {
+		t.Fatalf("InvokableRun: %v", err)
+	}
+	if strings.Contains(raw, "secret") || strings.Contains(raw, "/srv/private") {
+		t.Fatalf("file_read exposed stored extraction cause: %s", raw)
+	}
+}
+
+func TestFileListToolRepositoryFailureReturnsGoError(t *testing.T) {
+	tool := NewFileListTool(&fakeFileReadStore{err: errors.New("postgres://fixture:secret@db.example/effchat")}, 1, 2)
+	raw, err := tool.InvokableRun(context.Background(), `{}`)
+	if err == nil || raw != "" || !strings.Contains(err.Error(), "list conversation files") {
+		t.Fatalf("repository failure was not preserved for Tool governance: raw=%q err=%v", raw, err)
+	}
+}

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -19,7 +18,7 @@ func ListPromptGroupsHandler(repo *repository.PromptGroupRepository) gin.Handler
 	return func(c *gin.Context) {
 		groups, err := repo.ListByUser(middleware.GetUserID(c))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list prompt groups"})
+			writePromptGroupError(c, "list", err)
 			return
 		}
 		if groups == nil {
@@ -38,7 +37,7 @@ func CreatePromptGroupHandler(repo *repository.PromptGroupRepository) gin.Handle
 		}
 		group, err := repo.Create(middleware.GetUserID(c), req.Name)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePromptGroupError(c, "create", err)
 			return
 		}
 		c.JSON(http.StatusCreated, group)
@@ -58,11 +57,7 @@ func UpdatePromptGroupHandler(repo *repository.PromptGroupRepository) gin.Handle
 		}
 		group, err := repo.UpdateContext(c.Request.Context(), id, middleware.GetUserID(c), req.Name)
 		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "prompt group not found"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePromptGroupError(c, "update", err)
 			return
 		}
 		c.JSON(http.StatusOK, group)
@@ -76,11 +71,7 @@ func DeletePromptGroupHandler(repo *repository.PromptGroupRepository) gin.Handle
 			return
 		}
 		if err := repo.DeleteContext(c.Request.Context(), id, middleware.GetUserID(c)); err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "prompt group not found"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePromptGroupError(c, "delete", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "prompt group deleted"})
@@ -90,7 +81,7 @@ func DeletePromptGroupHandler(repo *repository.PromptGroupRepository) gin.Handle
 func promptGroupID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt group id"})
+		writePublicError(c, http.StatusBadRequest, "prompt_group_id_invalid", "invalid prompt group id", false)
 		return 0, false
 	}
 	return id, true

@@ -57,13 +57,13 @@ func channelModelListConfig(channelService *service.ChannelService, requestedCha
 
 func modelListConfigForChannel(channel *model.AIChannel) (modelListConfig, error) {
 	if channel == nil {
-		return modelListConfig{}, fmt.Errorf("channel is not configured")
+		return modelListConfig{}, service.ErrChannelNotFound
 	}
 	if strings.TrimSpace(channel.APIKey) == "" {
-		return modelListConfig{}, fmt.Errorf("channel %q has no API key configured", channel.Key)
+		return modelListConfig{}, service.ErrChannelUnavailable
 	}
 	if !supportedModelListAdapter(channel.Adapter) {
-		return modelListConfig{}, fmt.Errorf("channel %q uses unsupported adapter %q", channel.Key, channel.Adapter)
+		return modelListConfig{}, service.ErrChannelUnavailable
 	}
 	baseURL := strings.TrimSpace(channel.BaseURL)
 	if baseURL == "" {

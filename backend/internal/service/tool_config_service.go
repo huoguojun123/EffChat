@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 )
 
 const defaultToolTimeoutSeconds = 20
+
+var ErrToolConfigInvalid = errors.New("invalid tool configuration")
 
 type ToolConfigService struct {
 	repo *repository.ToolConfigRepository
@@ -155,18 +158,18 @@ func (set ToolRuntimeConfigSet) Timeout(key string) time.Duration {
 
 func toolConfigFromInput(input *ToolConfigInput) (*model.ToolConfig, error) {
 	if input == nil {
-		return nil, fmt.Errorf("tool config input is required")
+		return nil, fmt.Errorf("%w: tool config input is required", ErrToolConfigInvalid)
 	}
 	key := normalizeToolKey(input.Key)
 	if key == "" {
-		return nil, fmt.Errorf("key is required")
+		return nil, fmt.Errorf("%w: key is required", ErrToolConfigInvalid)
 	}
 	if !knownToolKey(key) {
-		return nil, fmt.Errorf("unknown tool key: %s", key)
+		return nil, fmt.Errorf("%w: unknown tool key: %s", ErrToolConfigInvalid, key)
 	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" {
-		return nil, fmt.Errorf("display_name is required")
+		return nil, fmt.Errorf("%w: display_name is required", ErrToolConfigInvalid)
 	}
 	enabled := true
 	if input.Enabled != nil {

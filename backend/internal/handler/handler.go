@@ -341,19 +341,14 @@ func RegisterHandler(authService *service.AuthService, limiters ...*AuthRateLimi
 			return
 		}
 		if retryAfter, ok := limiter.Allow(requestClientIP(c), req.Username); !ok {
-			c.Header("Retry-After", retryAfterSeconds(retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+			writeAuthRateLimitError(c, retryAfter)
 			return
 		}
 
 		resp, err := authService.Register(&req)
 		if err != nil {
 			limiter.RecordFailure(requestClientIP(c), req.Username)
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAuthError(c, "register", err)
 			return
 		}
 		limiter.Reset(requestClientIP(c), req.Username)
@@ -372,20 +367,14 @@ func LoginHandler(authService *service.AuthService, limiters ...*AuthRateLimiter
 			return
 		}
 		if retryAfter, ok := limiter.Allow(requestClientIP(c), req.Username); !ok {
-			c.Header("Retry-After", retryAfterSeconds(retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+			writeAuthRateLimitError(c, retryAfter)
 			return
 		}
 
 		resp, err := authService.Login(&req)
 		if err != nil {
-			if errors.Is(err, service.ErrAccountInactive) {
-				limiter.RecordFailure(requestClientIP(c), req.Username)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "账号待审核或已停用"})
-				return
-			}
 			limiter.RecordFailure(requestClientIP(c), req.Username)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			writeAuthError(c, "login", err)
 			return
 		}
 		limiter.Reset(requestClientIP(c), req.Username)
@@ -421,7 +410,7 @@ func CreateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 
 		session, err := sessionService.Create(userID, &req)
 		if err != nil {
-			writeRuntimeModelError(c, err)
+			writeSessionMutationError(c, "create", err)
 			return
 		}
 
@@ -434,22 +423,14 @@ func ListSessionsHandler(sessionService *service.SessionService) gin.HandlerFunc
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 
-		limit := 100
-		offset := 0
-		if v := c.Query("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-				limit = n
-			}
-		}
-		if v := c.Query("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				offset = n
-			}
+		limit, offset, ok := parseSessionListPagination(c)
+		if !ok {
+			return
 		}
 
 		filter, err := parseSessionListFilter(c.Query("folder_id"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_list_query_invalid", "folder_id must be all, unfiled, or a positive integer", false)
 			return
 		}
 
@@ -465,6 +446,28 @@ func ListSessionsHandler(sessionService *service.SessionService) gin.HandlerFunc
 			"next_offset": result.NextOffset,
 		})
 	}
+}
+
+func parseSessionListPagination(c *gin.Context) (int, int, bool) {
+	limit := 100
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > 100 {
+			writePublicError(c, http.StatusBadRequest, "session_list_query_invalid", "limit must be between 1 and 100", false)
+			return 0, 0, false
+		}
+		limit = parsed
+	}
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			writePublicError(c, http.StatusBadRequest, "session_list_query_invalid", "offset must be zero or greater", false)
+			return 0, 0, false
+		}
+		offset = parsed
+	}
+	return limit, offset, true
 }
 
 func parseSessionListFilter(raw string) (service.SessionListFilter, error) {
@@ -490,13 +493,13 @@ func GetSessionHandler(sessionService *service.SessionService) gin.HandlerFunc {
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		session, err := sessionService.GetByID(uri.ID, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 
@@ -513,7 +516,7 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
@@ -524,7 +527,7 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 		}
 
 		if err := sessionService.Update(uri.ID, userID, &req); err != nil {
-			writeRuntimeModelError(c, err)
+			writeSessionMutationError(c, "update", err)
 			return
 		}
 
@@ -541,12 +544,12 @@ func DeleteSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		if err := sessionService.Delete(uri.ID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionMutationError(c, "delete", err)
 			return
 		}
 

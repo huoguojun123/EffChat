@@ -147,6 +147,64 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 	}
 }
 
+// buildResponsesAgenticModel constructs the native typed model used only by
+// the main Responses conversation. Utility calls can keep the classic adapter
+// because they do not run local Tools; the user-facing Agent path must not
+// convert function calls through ToolCallingChatModel before Eino sees them.
+func (a *EinoAgent) buildResponsesAgenticModel(ctx context.Context, req *ChatRequest) (einoModel.AgenticModel, error) {
+	if a == nil || a.channelService == nil {
+		return nil, fmt.Errorf("model channel configuration is not available")
+	}
+	channel := req.RuntimeChannel
+	if channel == nil {
+		var err error
+		channel, err = a.channelService.ResolveAIChannelContext(ctx, req.Provider)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if channel.Adapter != service.AdapterOpenAIResponses {
+		return nil, fmt.Errorf("channel %q is not an OpenAI Responses channel", channel.Key)
+	}
+	temperature, err := resolveRequestTemperature(req)
+	if err != nil {
+		return nil, fmt.Errorf("invalid model temperature profile: %w", err)
+	}
+	cfg := &openairesponses.Config{
+		Model:       req.ModelID,
+		APIKey:      channel.APIKey,
+		MaxTokens:   ptrIntPositive(req.MaxTokens),
+		Temperature: ptrFloat32(temperature),
+		Reasoning:   openAIResponsesReasoning(runtimeReqForAdapter(req, "openai")),
+	}
+	if channel.BaseURL != "" {
+		cfg.BaseURL = channel.BaseURL
+	}
+	am, err := openairesponses.NewAgenticModel(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create channel %q responses model: %w", channel.Key, err)
+	}
+	return a.wrapUsageAgenticModel(am, req), nil
+}
+
+func (a *EinoAgent) usesResponsesAdapter(ctx context.Context, req *ChatRequest) (bool, error) {
+	if req == nil {
+		return false, fmt.Errorf("chat request is required")
+	}
+	channel := req.RuntimeChannel
+	if channel == nil {
+		if a == nil || a.channelService == nil {
+			return false, fmt.Errorf("model channel configuration is not available")
+		}
+		var err error
+		channel, err = a.channelService.ResolveAIChannelContext(ctx, req.Provider)
+		if err != nil {
+			return false, err
+		}
+	}
+	return channel.Adapter == service.AdapterOpenAIResponses, nil
+}
+
 func resolveRequestTemperature(req *ChatRequest) (*float64, error) {
 	if req == nil {
 		return nil, nil
@@ -222,6 +280,16 @@ func (a *EinoAgent) wrapUsageModel(cm einoModel.ToolCallingChatModel, req *ChatR
 		})
 	}
 	return cm
+}
+
+func (a *EinoAgent) wrapUsageAgenticModel(am einoModel.AgenticModel, req *ChatRequest) einoModel.AgenticModel {
+	am = modelstream.ObserveAgenticModel(am)
+	if a != nil && req != nil && !req.SkipUsage && a.usageService != nil {
+		am = modelusage.WrapAgenticModel(am, a.usageService, modelusage.Meta{
+			UserID: req.UserID, SessionID: req.SessionID, Provider: req.Provider, ModelID: req.ModelID,
+		})
+	}
+	return am
 }
 
 func ptrFloat32(f *float64) *float32 {

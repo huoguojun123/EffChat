@@ -80,6 +80,34 @@ func transientModelRetryConfig(observer func(ModelRetryTrace)) *adk.ModelRetryCo
 	}
 }
 
+func transientAgenticModelRetryConfig(observer func(ModelRetryTrace)) *adk.TypedModelRetryConfig[*schema.AgenticMessage] {
+	return &adk.TypedModelRetryConfig[*schema.AgenticMessage]{
+		MaxRetries: maxModelRetries,
+		ShouldRetry: func(ctx context.Context, retryCtx *adk.TypedRetryContext[*schema.AgenticMessage]) *adk.TypedRetryDecision[*schema.AgenticMessage] {
+			if ctx.Err() != nil || retryCtx == nil || retryCtx.Err == nil || modelstream.HasMeaningfulAgenticOutput(retryCtx.OutputMessage) {
+				return &adk.TypedRetryDecision[*schema.AgenticMessage]{}
+			}
+			classification := classifyModelRuntimeError(retryCtx.Err)
+			if !shouldAutomaticallyRetryModelError(classification) || retryCtx.RetryAttempt > maxModelRetries {
+				return &adk.TypedRetryDecision[*schema.AgenticMessage]{}
+			}
+			delay := modelRetryDelay(classification, retryCtx.RetryAttempt)
+			trace := ModelRetryTrace{
+				Attempt: retryCtx.RetryAttempt, MaxAttempts: maxModelRetries + 1,
+				Delay: delay, Category: classification.Category,
+			}
+			if observer != nil {
+				observer(trace)
+			}
+			log.Printf("[model_retry] retrying zero-output agentic model failure attempt=%d category=%s delay=%s",
+				trace.Attempt, trace.Category, trace.Delay)
+			return &adk.TypedRetryDecision[*schema.AgenticMessage]{
+				Retry: true, Backoff: delay, RejectReason: classification.Category,
+			}
+		},
+	}
+}
+
 func shouldAutomaticallyRetryModelError(classification modelErrorClassification) bool {
 	return classification.Retryable &&
 		(classification.Category == RuntimeErrorTransient || classification.Category == RuntimeErrorConnection)

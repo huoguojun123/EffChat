@@ -3,7 +3,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
@@ -95,15 +94,8 @@ func validateModelInput(m *model.Model) error {
 	if !modelbank.IsValidThinkingFormat(m.ThinkingFormat) {
 		return fmt.Errorf("%w: invalid thinking_format", ErrModelInvalid)
 	}
-	switch model.NormalizeTemperaturePolicy(m.TemperaturePolicy) {
-	case model.TemperaturePolicyFixed:
-		if m.TemperatureValue == nil || math.IsNaN(*m.TemperatureValue) || math.IsInf(*m.TemperatureValue, 0) || *m.TemperatureValue < 0 || *m.TemperatureValue > 2 {
-			return fmt.Errorf("%w: fixed temperature must be between 0 and 2", ErrModelInvalid)
-		}
-	default:
-		if m.TemperatureValue != nil {
-			return fmt.Errorf("%w: temperature_value is only valid for a fixed temperature policy", ErrModelInvalid)
-		}
+	if err := model.ValidateTemperatureProfile(m.TemperaturePolicy, m.TemperatureValue); err != nil {
+		return fmt.Errorf("%w: %v", ErrModelInvalid, err)
 	}
 	if m.ContextWindow < 0 {
 		return fmt.Errorf("%w: context_window must be >= 0", ErrModelInvalid)

@@ -8,6 +8,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	einoModel "github.com/cloudwego/eino/components/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/openairesponses"
@@ -32,13 +33,17 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			return nil, err
 		}
 	}
+	temperature, err := resolveRequestTemperature(req)
+	if err != nil {
+		return nil, fmt.Errorf("invalid model temperature profile: %w", err)
+	}
 
 	switch channel.Adapter {
 	case service.AdapterOpenAICompatible:
 		cfg := &openai.ChatModelConfig{
 			Model:       req.ModelID,
 			APIKey:      channel.APIKey,
-			Temperature: ptrFloat32(req.Temperature),
+			Temperature: ptrFloat32(temperature),
 		}
 		applyOpenAITokenLimit(req, cfg)
 		if channel.BaseURL != "" {
@@ -56,7 +61,7 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			Model:       req.ModelID,
 			APIKey:      channel.APIKey,
 			MaxTokens:   ptrIntPositive(req.MaxTokens),
-			Temperature: ptrFloat32(req.Temperature),
+			Temperature: ptrFloat32(temperature),
 			Reasoning:   openAIResponsesReasoning(runtimeReqForAdapter(req, "openai")),
 		}
 		if channel.BaseURL != "" {
@@ -103,7 +108,7 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			Client:      client,
 			Model:       req.ModelID,
 			MaxTokens:   ptrIntPositive(req.MaxTokens),
-			Temperature: ptrFloat32(req.Temperature),
+			Temperature: ptrFloat32(temperature),
 		}
 		// params 型原生搜索：按统一决策挂载 google_search（grounding）。
 		if searchDecision.UseModelNativeSearch && searchDecision.SearchImpl == modelbank.SearchImplParams {
@@ -119,6 +124,21 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q for channel %q", channel.Adapter, channel.Key)
 	}
+}
+
+func resolveRequestTemperature(req *ChatRequest) (*float64, error) {
+	if req == nil {
+		return nil, nil
+	}
+	policy := req.TemperaturePolicy
+	fixed := req.TemperatureValue
+	if policy == "" {
+		if info := modelbank.Get(req.ModelID); info != nil {
+			policy = info.TemperaturePolicy
+			fixed = info.TemperatureValue
+		}
+	}
+	return model.ResolveTemperatureForRequest(policy, fixed, req.Temperature)
 }
 
 func applyOpenAITokenLimit(req *ChatRequest, cfg *openai.ChatModelConfig) {

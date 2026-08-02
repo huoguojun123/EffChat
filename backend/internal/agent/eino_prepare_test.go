@@ -84,6 +84,57 @@ func TestBuildChatModelUsesOpenAIResponsesProtocol(t *testing.T) {
 	}
 }
 
+func TestBuildChatModelAppliesTemperatureRequestProfile(t *testing.T) {
+	requestBodies := make(chan map[string]any, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-temperature\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	requested := 0.25
+	fixed := 1.0
+	cases := []struct {
+		name        string
+		policy      string
+		fixed       *float64
+		wantValue   float64
+		wantPresent bool
+	}{
+		{name: "configurable", policy: model.TemperaturePolicyConfigurable, wantValue: requested, wantPresent: true},
+		{name: "omit", policy: model.TemperaturePolicyOmit},
+		{name: "fixed", policy: model.TemperaturePolicyFixed, fixed: &fixed, wantValue: fixed, wantPresent: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+			chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+				ModelID: "fixture", Provider: "fixture-channel", Temperature: &requested,
+				TemperaturePolicy: tc.policy, TemperatureValue: tc.fixed,
+				RuntimeChannel: &model.AIChannel{Key: "fixture-channel", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+			}, modelbank.SearchDecision{})
+			if err != nil {
+				t.Fatalf("build model: %v", err)
+			}
+			if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+				t.Fatalf("collect stream: %v", err)
+			}
+			body := <-requestBodies
+			value, present := body["temperature"].(float64)
+			if present != tc.wantPresent || (present && value != tc.wantValue) {
+				t.Fatalf("temperature = %v (present=%t), want %v (present=%t); body=%#v", value, present, tc.wantValue, tc.wantPresent, body)
+			}
+		})
+	}
+}
+
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

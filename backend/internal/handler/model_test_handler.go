@@ -13,8 +13,10 @@ import (
 )
 
 type testModelRequest struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
+	ID                string   `json:"id"`
+	Provider          string   `json:"provider"`
+	TemperaturePolicy string   `json:"temperature_policy"`
+	TemperatureValue  *float64 `json:"temperature_value"`
 }
 
 const modelProbeSetupTimeout = 10 * time.Second
@@ -46,8 +48,10 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 
 		setupCtx, setupCancel := context.WithTimeout(c.Request.Context(), modelProbeSetupTimeout)
 		prepared, err := einoAgent.PrepareModelProbe(setupCtx, &agent.ChatRequest{
-			ModelID:  modelID,
-			Provider: provider,
+			ModelID:           modelID,
+			Provider:          provider,
+			TemperaturePolicy: req.TemperaturePolicy,
+			TemperatureValue:  req.TemperatureValue,
 		})
 		setupCancel()
 		if err != nil {

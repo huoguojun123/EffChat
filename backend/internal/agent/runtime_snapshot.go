@@ -64,6 +64,11 @@ type runtimeModelMaterial struct {
 	SearchImpl    modelbank.SearchImpl
 	ContextWindow int
 	MaxOutput     int
+	// Keep the backwards-compatible configurable default out of the checksum
+	// JSON so pre-047 accepted runs are not invalidated by a no-op schema field.
+	// Omit/fixed policies remain checksum-owned runtime dependencies.
+	TemperaturePolicy string   `json:"TemperaturePolicy,omitempty"`
+	TemperatureValue  *float64 `json:"TemperatureValue,omitempty"`
 }
 
 type runtimeChannelMaterial struct {
@@ -131,17 +136,32 @@ func runtimeModelInfoMaterial(info *modelbank.ModelInfo) runtimeModelMaterial {
 	if info == nil {
 		return runtimeModelMaterial{}
 	}
-	return runtimeModelMaterial{
-		ID:            info.ID,
-		Provider:      info.Provider,
-		Vision:        info.Capabilities.Vision,
-		ToolUse:       info.Capabilities.ToolUse,
-		Reasoning:     info.Capabilities.Reasoning,
-		Thinking:      info.ThinkingFormat,
-		SearchImpl:    info.Capabilities.SearchImpl,
-		ContextWindow: info.Capabilities.ContextWindow,
-		MaxOutput:     info.Capabilities.MaxOutput,
+	policy := model.NormalizeTemperaturePolicy(info.TemperaturePolicy)
+	materialPolicy := policy
+	if policy == model.TemperaturePolicyConfigurable {
+		materialPolicy = ""
 	}
+	return runtimeModelMaterial{
+		ID:                info.ID,
+		Provider:          info.Provider,
+		Vision:            info.Capabilities.Vision,
+		ToolUse:           info.Capabilities.ToolUse,
+		Reasoning:         info.Capabilities.Reasoning,
+		Thinking:          info.ThinkingFormat,
+		SearchImpl:        info.Capabilities.SearchImpl,
+		ContextWindow:     info.Capabilities.ContextWindow,
+		MaxOutput:         info.Capabilities.MaxOutput,
+		TemperaturePolicy: materialPolicy,
+		TemperatureValue:  cloneFloat64Value(info.TemperatureValue),
+	}
+}
+
+func cloneFloat64Value(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func runtimeAIChannelMaterial(channel *model.AIChannel) runtimeChannelMaterial {
@@ -270,6 +290,9 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	req.ThinkingFormat = expected.ThinkingFormat
 	req.ThinkingEffort = expected.ThinkingEffort
 	req.SearchImpl = currentReq.SearchImpl
+	req.TemperaturePolicy = currentReq.TemperaturePolicy
+	req.TemperatureValue = cloneFloat64Value(currentReq.TemperatureValue)
+	req.Temperature = cloneFloat64Value(currentReq.Temperature)
 	return nil
 }
 
@@ -320,6 +343,14 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	}
 	req.ThinkingEffort = thinkingEffort
 	modelMaterial := runtimeModelInfoMaterial(modelInfo)
+	acceptedTemperaturePolicy := model.NormalizeTemperaturePolicy(modelInfo.TemperaturePolicy)
+	effectiveTemperature, err := model.ResolveTemperatureForRequest(acceptedTemperaturePolicy, modelInfo.TemperatureValue, req.Temperature)
+	if err != nil {
+		return nil, fmt.Errorf("invalid accepted model temperature profile: %w", err)
+	}
+	req.TemperaturePolicy = acceptedTemperaturePolicy
+	req.TemperatureValue = cloneFloat64Value(modelInfo.TemperatureValue)
+	req.Temperature = effectiveTemperature
 	channelMaterial := runtimeAIChannelMaterial(channel)
 	requestMaterial := runtimeRequestMaterial{
 		SystemName: req.SystemName, SystemPrompt: req.SystemPrompt, Temperature: req.Temperature,

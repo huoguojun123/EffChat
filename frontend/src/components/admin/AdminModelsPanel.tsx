@@ -247,7 +247,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     }
   }
 
-  async function runModelTest(id: string, provider: string) {
+  async function runModelTest(id: string, provider: string, temperaturePolicy?: Model["temperature_policy"], temperatureValue?: number | null) {
     id = id.trim()
     provider = provider.trim()
     if (!id || !provider) {
@@ -263,6 +263,8 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
       const result = await adminApi.testModel({
         id,
         provider,
+        temperature_policy: temperaturePolicy,
+        temperature_value: temperaturePolicy === "fixed" ? temperatureValue : null,
       })
       if (isCurrentModelTest(seq)) {
         setTestResult(result)
@@ -284,11 +286,11 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   async function testCurrentModel() {
-    await runModelTest(currentDraft.id, currentDraft.provider)
+    await runModelTest(currentDraft.id, currentDraft.provider, currentDraft.temperature_policy, currentDraft.temperature_value)
   }
 
   async function testModel(model: Model) {
-    await runModelTest(model.id, model.provider)
+    await runModelTest(model.id, model.provider, model.temperature_policy, model.temperature_value)
   }
 
   function openModelManager(model?: Model) {

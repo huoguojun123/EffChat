@@ -297,6 +297,8 @@ export interface AdminSystemStatus {
 export interface ModelTestInput {
   id: string
   provider: string
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
 }
 
 export interface ModelTestResponse {

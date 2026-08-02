@@ -223,20 +223,22 @@ func memoryModelRequest(session *model.Session, userID int64, userPreferences []
 	}
 	modelInfo := modelbank.GetOrDefault(session.ModelID, session.Provider)
 	req := &agent.ChatRequest{
-		UserID:          userID,
-		SessionID:       session.ID,
-		ModelID:         session.ModelID,
-		Provider:        session.Provider,
-		MessageFormat:   session.MessageFormat,
-		MemoryEnabled:   session.MemoryEnabled,
-		UserPreferences: userPreferences,
-		ContextWindow:   modelInfo.Capabilities.ContextWindow,
-		ModelMaxOutput:  modelInfo.Capabilities.MaxOutput,
-		Vision:          modelInfo.Capabilities.Vision,
-		ToolUse:         modelInfo.Capabilities.ToolUse,
-		Reasoning:       modelInfo.Capabilities.Reasoning,
-		ThinkingFormat:  modelInfo.ThinkingFormat,
-		SearchImpl:      modelInfo.Capabilities.SearchImpl,
+		UserID:            userID,
+		SessionID:         session.ID,
+		ModelID:           session.ModelID,
+		Provider:          session.Provider,
+		MessageFormat:     session.MessageFormat,
+		MemoryEnabled:     session.MemoryEnabled,
+		UserPreferences:   userPreferences,
+		ContextWindow:     modelInfo.Capabilities.ContextWindow,
+		ModelMaxOutput:    modelInfo.Capabilities.MaxOutput,
+		Vision:            modelInfo.Capabilities.Vision,
+		ToolUse:           modelInfo.Capabilities.ToolUse,
+		Reasoning:         modelInfo.Capabilities.Reasoning,
+		ThinkingFormat:    modelInfo.ThinkingFormat,
+		SearchImpl:        modelInfo.Capabilities.SearchImpl,
+		TemperaturePolicy: modelInfo.TemperaturePolicy,
+		TemperatureValue:  cloneFloat64Pointer(modelInfo.TemperatureValue),
 	}
 	if session.SystemPrompt != nil {
 		req.SystemPrompt = *session.SystemPrompt

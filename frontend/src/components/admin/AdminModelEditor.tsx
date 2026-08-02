@@ -7,7 +7,7 @@ import { Database, Link2, PlugZap, Trash2 } from "lucide-react"
 import { AdminModelCatalogMatcher } from "./AdminModelCatalogMatcher"
 import { thinkingFormatOptions } from "./AdminModelsPanel.constants"
 import { Field, ModelTestStatus, Select, Toggle } from "./AdminModelsPanel.controls"
-import { groupLevelOptions, thinkingFormatLabel } from "./AdminModelsPanel.helpers"
+import { catalogSourceLabel, formatCatalogCheckedAt, groupLevelOptions, lifecycleStatusLabel, thinkingFormatLabel } from "./AdminModelsPanel.helpers"
 import type { ModelDraft } from "./AdminModelsPanel.types"
 
 interface AdminModelEditorProps {
@@ -114,6 +114,19 @@ export function AdminModelEditor({
                 <Field label="显示名称">
                   <Input name="effchat-model-display-name" autoComplete="off" value={currentDraft.display_name} onChange={(e) => updateCurrentDraft({ display_name: e.target.value })} />
                 </Field>
+                <div className="grid gap-3 border-y border-border/60 py-3 sm:grid-cols-2">
+                  <div className="min-w-0 text-xs text-muted-foreground">
+                    <div className="text-foreground/80">能力来源：{catalogSourceLabel(currentDraft.catalog_source || "manual")}</div>
+                    <div className="mt-1 truncate" title={currentDraft.catalog_checked_at || undefined}>核对时间：{formatCatalogCheckedAt(currentDraft.catalog_checked_at)}</div>
+                  </div>
+                  <Field label="生命周期">
+                    <Select value={currentDraft.lifecycle_status || "unknown"} onChange={(lifecycle_status) => updateCurrentDraft({ lifecycle_status: lifecycle_status as Model["lifecycle_status"] })}>
+                      {(["unknown", "active", "preview", "deprecated", "retired"] as const).map((status) => (
+                        <option key={status} value={status}>{lifecycleStatusLabel(status)}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="上下文">
                     <Input type="number" value={currentDraft.context_window} onChange={(e) => updateCurrentDraft({ context_window: Number(e.target.value) || 0 })} />

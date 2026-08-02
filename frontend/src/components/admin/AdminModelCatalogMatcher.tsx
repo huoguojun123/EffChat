@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { providerLabels } from "./AdminModelsPanel.constants"
 import { Select } from "./AdminModelsPanel.controls"
-import { catalogSelectionKey } from "./AdminModelsPanel.helpers"
+import { catalogSelectionKey, lifecycleStatusLabel } from "./AdminModelsPanel.helpers"
 
 interface AdminModelCatalogMatcherProps {
   catalogQuery: string
@@ -42,7 +42,7 @@ export function AdminModelCatalogMatcher({
           <option value="">不匹配</option>
           {filteredCatalogModels.map((model) => (
             <option key={`${model.provider}:${model.id}`} value={catalogSelectionKey(model)}>
-              {providerLabels[model.provider] || model.provider} · {model.display_name || model.id} · {model.id}
+              {providerLabels[model.provider] || model.provider} · {model.display_name || model.id} · {lifecycleStatusLabel(model.lifecycle_status)} · {model.id}
             </option>
           ))}
         </Select>

@@ -5,6 +5,7 @@ import {
   formatContext,
   groupLevelOptions,
   makeEmptyModel,
+  markManualCatalogOverride,
   nextSortOrder,
   sortModels,
   toModelDraft,
@@ -65,6 +66,23 @@ describe("AdminModelsPanel helpers", () => {
       reasoning: true,
       thinking_format: "auto",
       search_impl: "tool",
+      catalog_source: "manual",
+      catalog_checked_at: null,
+      lifecycle_status: "unknown",
+    })
+  })
+
+  it("marks hand-edited capability fields as administrator overrides", () => {
+    expect(markManualCatalogOverride({ max_output: 32000 }, { lifecycle_status: "preview" })).toEqual({
+      max_output: 32000,
+      catalog_source: "manual",
+      catalog_checked_at: null,
+      lifecycle_status: "preview",
+    })
+    expect(markManualCatalogOverride({ max_output: 32000, catalog_source: "models_dev", lifecycle_status: "preview" })).toEqual({
+      max_output: 32000,
+      catalog_source: "models_dev",
+      lifecycle_status: "preview",
     })
   })
 

@@ -4,7 +4,7 @@ import { MotionView } from "@/components/ui/motion"
 import { Cloud, Cpu, Plus } from "lucide-react"
 import { providerLabels } from "./AdminModelsPanel.constants"
 import { CapabilityDots, SwitchButton } from "./AdminModelsPanel.controls"
-import { formatContext } from "./AdminModelsPanel.helpers"
+import { formatContext, lifecycleStatusLabel } from "./AdminModelsPanel.helpers"
 
 interface AdminModelsListPaneProps {
   activeProvider: string
@@ -80,6 +80,7 @@ export function AdminModelsListPane({
               <button className="mt-1.5 flex w-full items-center gap-3 text-left text-xs text-muted-foreground" onClick={() => onStartEdit(model)}>
                 <span className="shrink-0">{formatContext(model.context_window)}</span>
                 <CapabilityDots model={model} />
+                <span className="ml-auto shrink-0">{lifecycleStatusLabel(model.lifecycle_status)}</span>
               </button>
             </div>
           ))}
@@ -100,6 +101,7 @@ export function AdminModelsListPane({
               <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
                 <span>{formatContext(model.context_window)}</span>
                 <CapabilityDots model={model} />
+                <span className="ml-auto">{lifecycleStatusLabel(model.lifecycle_status)}</span>
               </div>
             </div>
           ))}

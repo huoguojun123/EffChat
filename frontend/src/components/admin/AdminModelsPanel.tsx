@@ -13,6 +13,7 @@ import { useAdminModelCatalog } from "./useAdminModelCatalog"
 import { useAdminModelSelection } from "./useAdminModelSelection"
 import {
   makeEmptyModel,
+  markManualCatalogOverride,
   nextSortOrder,
   sortModels,
   toModelDraft,
@@ -192,6 +193,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function updateCurrentDraft(patch: Partial<ModelDraft>) {
+    patch = markManualCatalogOverride(patch, currentDraft)
     if (patch.id !== undefined || patch.provider !== undefined || patch.reasoning !== undefined || patch.thinking_format !== undefined) {
       invalidateModelTest()
     }

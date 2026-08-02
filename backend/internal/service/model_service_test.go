@@ -103,3 +103,32 @@ func TestValidateDefaultModelPreservesRepositoryFailure(t *testing.T) {
 		t.Fatalf("repository error = %v, want internal failure", err)
 	}
 }
+
+func TestModelServiceManualCatalogOverrideClearsDirectoryCheckTime(t *testing.T) {
+	db := setupMessageTestDB(t)
+	defer db.Close()
+
+	modelID := fmt.Sprintf("model-catalog-override-%d", time.Now().UnixNano())
+	checkedAt := time.Date(2026, time.August, 2, 10, 0, 0, 0, time.UTC)
+	repo := repository.NewModelRepository(db)
+	if err := repo.Upsert(&model.Model{
+		ID: modelID, DisplayName: "Catalog Override", Provider: "fixture-channel", ThinkingFormat: "auto",
+		CatalogSource: model.CatalogSourceModelsDev, CatalogCheckedAt: &checkedAt,
+		LifecycleStatus: model.ModelLifecyclePreview,
+	}); err != nil {
+		t.Fatalf("seed catalog model: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM models WHERE id = $1", modelID) })
+
+	source := model.CatalogSourceManual
+	lifecycle := model.ModelLifecycleUnknown
+	updated, err := NewModelService(repo).Update(modelID, &UpdateModelRequest{
+		CatalogSource: &source, LifecycleStatus: &lifecycle,
+	})
+	if err != nil {
+		t.Fatalf("apply manual catalog override: %v", err)
+	}
+	if updated.CatalogSource != model.CatalogSourceManual || updated.LifecycleStatus != model.ModelLifecycleUnknown || updated.CatalogCheckedAt != nil {
+		t.Fatalf("manual override metadata = %#v", updated)
+	}
+}

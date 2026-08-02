@@ -243,6 +243,12 @@ func (s *ModelService) Update(id string, req *UpdateModelRequest) (*model.Model,
 	}
 	if req.CatalogSource != nil {
 		m.CatalogSource = model.NormalizeCatalogSource(*req.CatalogSource)
+		// A manual capability override no longer represents a time-bounded
+		// directory check. Clear the old timestamp unless this request carries
+		// a replacement source check below.
+		if m.CatalogSource == model.CatalogSourceManual && req.CatalogCheckedAt == nil {
+			m.CatalogCheckedAt = nil
+		}
 	}
 	if req.CatalogCheckedAt != nil {
 		m.CatalogCheckedAt = req.CatalogCheckedAt

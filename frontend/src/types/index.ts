@@ -210,7 +210,7 @@ export interface Model {
   // Catalog metadata is persisted separately from runtime/channel status so
   // administrators can see where capability values came from.
   catalog_source: "manual" | "channel" | "models_dev" | "builtin" | "unknown"
-  catalog_checked_at?: string
+  catalog_checked_at?: string | null
   lifecycle_status: "active" | "preview" | "deprecated" | "retired" | "unknown"
   resolved_thinking_format?: string
   default_thinking_effort?: string

@@ -70,7 +70,7 @@ backend (Gin)
 7. terminal 决策形成后，RunHub 会冻结迟到输出和取消；瞬时数据库或连接故障使用独立的有界单次上下文重试同一原子提交，只有数据库返回 canonical terminal 后才向所有订阅者发布一次终态。进程在恢复期间退出时，启动 reconciliation 将遗留的 durable running run 转成可重试的 `server_restarted` 终态。
 8. 前端在重连、刷新或 run 完成后从 DB 同步真实消息，保留仍未落库的本地 pending 消息。
 
-模型渠道的 provider、模型家族与 wire protocol 分开解析。`openai_compatible` 继续走 Chat Completions 兼容协议；`openai_responses` 通过官方 Eino Responses 组件接入 `/v1/responses`，但仍桥接到同一个 Eino ReAct Agent、Tool interface、RunHub、usage 和 PostgreSQL 生命周期。Responses 请求固定 `store=false`，不使用 `previous_response_id`、Conversations API、hosted tools 或 MCP runtime；标题、probe、压缩、记忆维护和网页提炼继续复用统一模型构造链，不建立第二套运行时。
+模型渠道的 provider、模型家族与 wire protocol 分开解析。`openai_compatible` 继续走 Chat Completions 兼容协议；`openai_responses` 通过官方 Eino Responses 组件接入 `/v1/responses`。主对话保留 `schema.AgenticMessage` 到 Eino `NewTypedChatModelAgent`，由稳定版 Eino 的 typed ReAct graph 下发本地 Tool schema、执行 Tool 并回送 function result；仅在 Agent 事件出口转换为 EffChat 既有 SSE、RunHub、usage 和 PostgreSQL 消息契约。标题、probe、压缩、记忆维护和网页提炼等不执行本地 Tool 的 utility 调用仍可使用经典消息 adapter，不复制 ReAct、SSE parser 或第二套运行时。Responses 请求固定 `store=false`，不使用 `previous_response_id`、Conversations API、hosted tools 或 MCP runtime。
 
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
 

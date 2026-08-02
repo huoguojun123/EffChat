@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	einoModel "github.com/cloudwego/eino/components/model"
 	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/openairesponses"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	"github.com/huoguojun123/EffChat/internal/tool"
@@ -223,12 +225,56 @@ type Usage struct {
 // Fields remain private so only EinoAgent can execute or mutate the prepared
 // plan; handlers may carry the opaque value across the setup boundary.
 type PreparedChatRun struct {
-	agent     *adk.ChatModelAgent
-	messages  []*schema.Message
+	start     func(context.Context) preparedAgentIterator
 	writer    streaming.EventWriter
 	provider  string
 	modelID   string
 	startedAt time.Time
+}
+
+type preparedAgentIterator interface {
+	Next() (*adk.AgentEvent, bool)
+}
+
+type classicPreparedIterator struct {
+	inner *adk.AsyncIterator[*adk.AgentEvent]
+}
+
+func (i *classicPreparedIterator) Next() (*adk.AgentEvent, bool) {
+	return i.inner.Next()
+}
+
+type agenticPreparedIterator struct {
+	inner *adk.AsyncIterator[*adk.TypedAgentEvent[*schema.AgenticMessage]]
+}
+
+func (i *agenticPreparedIterator) Next() (*adk.AgentEvent, bool) {
+	event, ok := i.inner.Next()
+	if !ok || event == nil {
+		return nil, ok
+	}
+	if event.Err != nil {
+		return &adk.AgentEvent{Err: event.Err}, true
+	}
+	if event.Output == nil || event.Output.MessageOutput == nil {
+		return &adk.AgentEvent{}, true
+	}
+	mv := event.Output.MessageOutput
+	role := schema.Assistant
+	convert := openairesponses.NewMessageConverter().Convert
+	if mv.AgenticRole == schema.AgenticRoleTypeUser {
+		role = schema.Tool
+		convert = openairesponses.ToolResultMessage
+	}
+	if mv.IsStreaming {
+		stream := schema.StreamReaderWithConvert(mv.MessageStream, convert)
+		return adk.EventFromMessage(nil, stream, role, ""), true
+	}
+	message, err := convert(mv.Message)
+	if err != nil {
+		return &adk.AgentEvent{Err: err}, true
+	}
+	return adk.EventFromMessage(message, nil, role, message.ToolName), true
 }
 
 // StreamChat keeps the historical single-context API for utility callers.
@@ -261,8 +307,19 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 	searchDecision := plan.searchDecision
 	searchRuntime := plan.searchRuntime
 
-	// 2. 根据 provider 创建对应的 ChatModel（按搜索决策挂载原生搜索能力）
-	chatModel, err := a.buildChatModel(setupCtx, req, searchDecision)
+	// 2. Responses 主对话必须保留 AgenticMessage 直到 Eino typed Agent，
+	// 否则 function call 会在本地 Tool/ReAct 判断前被压回普通文本协议。
+	responsesMode, err := a.usesResponsesAdapter(setupCtx, req)
+	if err != nil {
+		return nil, err
+	}
+	var chatModel einoModel.ToolCallingChatModel
+	var agenticModel einoModel.AgenticModel
+	if responsesMode {
+		agenticModel, err = a.buildResponsesAgenticModel(setupCtx, req)
+	} else {
+		chatModel, err = a.buildChatModel(setupCtx, req, searchDecision)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -383,27 +440,23 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 		}
 	}
 
-	agentConfig := &adk.ChatModelAgentConfig{
-		Model:         chatModel,
-		Instruction:   instruction,
-		MaxIterations: defaultAgentMaxIterations,
-		ModelRetryConfig: transientModelRetryConfig(func(trace ModelRetryTrace) {
-			if writer == nil {
-				return
-			}
-			_ = writer.WriteEvent(streaming.EventModelRetry, streaming.ModelRetryEvent{
-				Attempt:     trace.Attempt,
-				MaxAttempts: trace.MaxAttempts,
-				DelayMs:     trace.Delay.Milliseconds(),
-				Category:    string(trace.Category),
-			})
-		}),
+	retryObserver := func(trace ModelRetryTrace) {
+		if writer == nil {
+			return
+		}
+		_ = writer.WriteEvent(streaming.EventModelRetry, streaming.ModelRetryEvent{
+			Attempt:     trace.Attempt,
+			MaxAttempts: trace.MaxAttempts,
+			DelayMs:     trace.Delay.Milliseconds(),
+			Category:    string(trace.Category),
+		})
 	}
+	toolsConfig := adk.ToolsConfig{}
 
 	var toolBudget *toolBudgetMiddleware
 	if len(tools) > 0 {
 		toolBudget = newToolBudgetMiddleware(req)
-		agentConfig.ToolsConfig = adk.ToolsConfig{
+		toolsConfig = adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: tools,
 				// 模型有时会调用未挂载的工具：跨轮切换搜索开关后历史里残留的
@@ -413,20 +466,11 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 				UnknownToolsHandler: unknownToolHandler,
 			},
 		}
-		agentConfig.ToolsConfig.ToolCallMiddlewares = []compose.ToolMiddleware{toolGovernanceMiddleware(toolRuntime, a.quotaService, a.usageService, toolBudget)}
+		toolsConfig.ToolCallMiddlewares = []compose.ToolMiddleware{toolGovernanceMiddleware(toolRuntime, a.quotaService, a.usageService, toolBudget)}
 	}
 	// 注：UseModelNativeSearch 的 params 型传参逻辑由各 provider adapter 处理
 	// （如 Gemini 的 google_search、Qwen 的 enable_search），internal 型无需处理。
 	// 应用工具是否被实际调用，交由模型根据系统指令自主决定：原生优先，不足再兜底。
-
-	if len(tools) > 0 {
-		agentConfig.Handlers = append(agentConfig.Handlers, toolBudget)
-	}
-
-	agent, err := adk.NewChatModelAgent(setupCtx, agentConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create agent: %w", err)
-	}
 
 	// 5. 转换历史消息为 Eino 格式
 	visionCapable := req.Vision
@@ -438,14 +482,51 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 		return nil, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
-	return &PreparedChatRun{
-		agent:     agent,
-		messages:  einoMessages,
+	prepared := &PreparedChatRun{
 		writer:    writer,
 		provider:  req.Provider,
 		modelID:   req.ModelID,
 		startedAt: startedAt,
-	}, nil
+	}
+	if responsesMode {
+		agenticMessages, convertErr := openairesponses.ToAgenticMessages(einoMessages)
+		if convertErr != nil {
+			return nil, fmt.Errorf("failed to convert Responses messages: %w", convertErr)
+		}
+		typedConfig := &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
+			Model: agenticModel, Instruction: instruction, MaxIterations: defaultAgentMaxIterations,
+			ToolsConfig: toolsConfig, ModelRetryConfig: transientAgenticModelRetryConfig(retryObserver),
+		}
+		if toolBudget != nil {
+			typedConfig.Handlers = append(typedConfig.Handlers, newAgenticToolBudgetMiddleware(toolBudget))
+		}
+		agent, createErr := adk.NewTypedChatModelAgent[*schema.AgenticMessage](setupCtx, typedConfig)
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create typed Responses agent: %w", createErr)
+		}
+		prepared.start = func(runCtx context.Context) preparedAgentIterator {
+			runner := adk.NewTypedRunner(adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent, EnableStreaming: true})
+			return &agenticPreparedIterator{inner: runner.Run(runCtx, agenticMessages)}
+		}
+		return prepared, nil
+	}
+
+	agentConfig := &adk.ChatModelAgentConfig{
+		Model: chatModel, Instruction: instruction, MaxIterations: defaultAgentMaxIterations,
+		ToolsConfig: toolsConfig, ModelRetryConfig: transientModelRetryConfig(retryObserver),
+	}
+	if toolBudget != nil {
+		agentConfig.Handlers = append(agentConfig.Handlers, toolBudget)
+	}
+	agent, err := adk.NewChatModelAgent(setupCtx, agentConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create agent: %w", err)
+	}
+	prepared.start = func(runCtx context.Context) preparedAgentIterator {
+		runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: agent, EnableStreaming: true})
+		return &classicPreparedIterator{inner: runner.Run(runCtx, einoMessages)}
+	}
+	return prepared, nil
 }
 
 // RunPreparedChat executes a successfully prepared chat with the durable run
@@ -455,18 +536,13 @@ func (a *EinoAgent) RunPreparedChat(runCtx context.Context, prepared *PreparedCh
 	if runCtx == nil {
 		return nil, errors.New("durable run context is required")
 	}
-	if prepared == nil || prepared.agent == nil {
+	if prepared == nil || prepared.start == nil {
 		return nil, errors.New("prepared chat run is required")
 	}
 
-	// 6. 创建 Runner 并执行
-	// 必须显式开启 EnableStreaming，否则 ADK 默认走非流式 Invoke/Generate，
-	// 上游 OpenAI 兼容网关会收到非流式请求，前端也只能在 message_complete 时整块拿到内容。
-	runner := adk.NewRunner(runCtx, adk.RunnerConfig{
-		Agent:           prepared.agent,
-		EnableStreaming: true,
-	})
-	iter := runner.Run(runCtx, prepared.messages)
+	// 6. 创建 Runner 并执行。start 封装 classic/typed Runner 差异；两条
+	// 路径都必须流式运行，并在这里统一进入 SSE/持久化契约。
+	iter := prepared.start(runCtx)
 
 	emit := func(event string, data interface{}) error {
 		_ = prepared.writer.WriteEvent(event, data)

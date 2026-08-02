@@ -95,26 +95,29 @@ func hasSearchProvider(cfg service.SearchRuntimeConfig) bool {
 
 // ChatRequest Agent 聊天请求
 type ChatRequest struct {
-	UserID          int64
-	SessionID       int64
-	Messages        []*model.Message
-	ModelID         string
-	Provider        string
-	SystemName      string
-	SystemPrompt    string
-	Temperature     *float64
-	MaxTokens       int
-	SchemaVersion   string
-	MessageFormat   string
-	SessionTitle    string
-	SessionMetadata []byte
-	UserName        string
-	UserNickname    string
-	UserDisplayName string
-	UserRole        string
-	UserPreferences []byte
-	EnabledSkills   []SkillInstruction
-	PromptTime      time.Time
+	UserID               int64
+	SessionID            int64
+	Messages             []*model.Message
+	ModelID              string
+	Provider             string
+	SystemName           string
+	SystemPrompt         string
+	Temperature          *float64
+	TemperaturePolicy    string
+	TemperatureValue     *float64
+	OpenAIRequestProfile model.OpenAIRequestProfile
+	MaxTokens            int
+	SchemaVersion        string
+	MessageFormat        string
+	SessionTitle         string
+	SessionMetadata      []byte
+	UserName             string
+	UserNickname         string
+	UserDisplayName      string
+	UserRole             string
+	UserPreferences      []byte
+	EnabledSkills        []SkillInstruction
+	PromptTime           time.Time
 
 	RuntimeResolved          bool
 	RuntimeChannel           *model.AIChannel

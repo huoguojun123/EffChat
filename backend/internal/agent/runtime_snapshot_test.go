@@ -27,6 +27,9 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 
 	channelService := service.NewChannelService(repository.NewChannelRepository(db))
 	enabled := true
+	fixedTemperature := 1.0
+	topP, presencePenalty, frequencyPenalty := 1.0, 0.0, 0.0
+	n := 1
 	if _, err := channelService.SaveAIChannel(&service.AIChannelInput{
 		Key: channelKey, DisplayName: "Runtime snapshot", Adapter: service.AdapterOpenAICompatible,
 		BaseURL: "https://gateway.example.test/v1", APIKey: "secret-key-one", Enabled: &enabled,
@@ -35,6 +38,10 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	}
 	modelbank.Register(&modelbank.ModelInfo{
 		ID: modelID, DisplayName: modelID, Provider: channelKey, Enabled: true, ThinkingFormat: "auto",
+		TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &fixedTemperature,
+		OpenAIRequestProfile: model.OpenAIRequestProfile{
+			TopP: &topP, N: &n, PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+		},
 		Capabilities: modelbank.ModelCapabilities{
 			Vision: true, ToolUse: true, Reasoning: true, SearchImpl: modelbank.SearchImplTool,
 			ContextWindow: 128000, MaxOutput: 8192,
@@ -59,6 +66,7 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 		nil,
 		nil,
 	)
+	requestedTemperature := 0.25
 	req := &ChatRequest{
 		UserID: 7, SessionID: 9, ModelID: modelID, Provider: channelKey,
 		SystemName: "EffChat", MessageFormat: "v2", SchemaVersion: "v2",
@@ -73,6 +81,7 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 		}},
 		ThinkingEffort: "high", SearchMode: modelbank.SearchModeAuto,
 		PreferModelNativeSearch: true, MemoryEnabled: false,
+		Temperature: &requestedTemperature,
 	}
 
 	raw, err := agent.CaptureAcceptedRuntimeSnapshot(context.Background(), req)
@@ -90,6 +99,12 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	}
 	if snapshot.ModelID != modelID || snapshot.ChannelKey != channelKey || snapshot.ContextWindow != 128000 || snapshot.ModelMaxOutput != 8192 {
 		t.Fatalf("runtime snapshot identity = %+v", snapshot)
+	}
+	if req.TemperaturePolicy != model.TemperaturePolicyFixed || req.Temperature == nil || *req.Temperature != fixedTemperature {
+		t.Fatalf("accepted temperature profile = %q/%v", req.TemperaturePolicy, req.Temperature)
+	}
+	if req.OpenAIRequestProfile.N == nil || *req.OpenAIRequestProfile.N != 1 || req.OpenAIRequestProfile.TopP == nil || *req.OpenAIRequestProfile.TopP != 1 {
+		t.Fatalf("accepted OpenAI request profile = %#v", req.OpenAIRequestProfile)
 	}
 	if snapshot.ToolConfigState.State == "" || snapshot.SearchConfigState.Search.State == "" || snapshot.MemoryState.State == "" {
 		t.Fatalf("runtime dependency states missing: %+v", snapshot)
@@ -119,6 +134,12 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	}
 	if !current.RuntimeResolved || current.RuntimeChannel == nil || current.RuntimeChannel.APIKey != "secret-key-one" {
 		t.Fatal("validated request did not receive its in-memory runtime dependencies")
+	}
+	if current.TemperaturePolicy != model.TemperaturePolicyFixed || current.Temperature == nil || *current.Temperature != fixedTemperature {
+		t.Fatalf("restored temperature profile = %q/%v", current.TemperaturePolicy, current.Temperature)
+	}
+	if current.OpenAIRequestProfile.N == nil || *current.OpenAIRequestProfile.N != 1 || current.OpenAIRequestProfile.TopP == nil || *current.OpenAIRequestProfile.TopP != 1 {
+		t.Fatalf("restored OpenAI request profile = %#v", current.OpenAIRequestProfile)
 	}
 	if current.RuntimeExtractSummaryEnabled || current.RuntimeExtractSummaryModel != "accepted-refiner" {
 		t.Fatalf("validated extract summary runtime = enabled:%t model:%q", current.RuntimeExtractSummaryEnabled, current.RuntimeExtractSummaryModel)
@@ -180,6 +201,37 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	}
 	if _, exists := stored["api_key"]; exists {
 		t.Fatalf("runtime snapshot contains an api_key field: %+v", stored)
+	}
+}
+
+func TestRuntimeModelChecksumKeepsConfigurableTemperatureBackwardCompatible(t *testing.T) {
+	info := &modelbank.ModelInfo{
+		ID: "fixture-model", Provider: "fixture-channel", ThinkingFormat: "auto",
+		TemperaturePolicy: model.TemperaturePolicyConfigurable,
+		Capabilities:      modelbank.ModelCapabilities{ToolUse: true, ContextWindow: 4096, MaxOutput: 512},
+	}
+	legacy := struct {
+		ID            string
+		Provider      string
+		Vision        bool
+		ToolUse       bool
+		Reasoning     bool
+		Thinking      string
+		SearchImpl    modelbank.SearchImpl
+		ContextWindow int
+		MaxOutput     int
+	}{
+		ID: info.ID, Provider: info.Provider, ToolUse: true, Thinking: "auto", ContextWindow: 4096, MaxOutput: 512,
+	}
+	if got, want := checksumValue("model", runtimeModelInfoMaterial(info)), checksumValue("model", legacy); got != want {
+		t.Fatalf("configurable default changed legacy checksum: got %s want %s", got, want)
+	}
+
+	fixed := 1.0
+	info.TemperaturePolicy = model.TemperaturePolicyFixed
+	info.TemperatureValue = &fixed
+	if got, legacyChecksum := checksumValue("model", runtimeModelInfoMaterial(info)), checksumValue("model", legacy); got == legacyChecksum {
+		t.Fatal("fixed temperature profile did not change the model checksum")
 	}
 }
 

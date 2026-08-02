@@ -32,17 +32,20 @@ func (a *EinoAgent) buildResolvedUtilityModel(ctx context.Context, info *modelba
 	}
 	channelCopy := *channel
 	modelReq := taskModelRequest(&ChatRequest{
-		ModelID:          info.ID,
-		Provider:         info.Provider,
-		RuntimeResolved:  true,
-		RuntimeChannel:   &channelCopy,
-		ModelMaxOutput:   info.Capabilities.MaxOutput,
-		Vision:           info.Capabilities.Vision,
-		ToolUse:          info.Capabilities.ToolUse,
-		Reasoning:        info.Capabilities.Reasoning,
-		ThinkingFormat:   info.ThinkingFormat,
-		SuppressThinking: true,
-		SearchImpl:       info.Capabilities.SearchImpl,
+		ModelID:              info.ID,
+		Provider:             info.Provider,
+		RuntimeResolved:      true,
+		RuntimeChannel:       &channelCopy,
+		ModelMaxOutput:       info.Capabilities.MaxOutput,
+		Vision:               info.Capabilities.Vision,
+		ToolUse:              info.Capabilities.ToolUse,
+		Reasoning:            info.Capabilities.Reasoning,
+		ThinkingFormat:       info.ThinkingFormat,
+		TemperaturePolicy:    info.TemperaturePolicy,
+		TemperatureValue:     cloneFloat64Value(info.TemperatureValue),
+		OpenAIRequestProfile: model.CloneOpenAIRequestProfile(info.OpenAIRequestProfile),
+		SuppressThinking:     true,
+		SearchImpl:           info.Capabilities.SearchImpl,
 	}, extractSummaryMaxTokens)
 	cm, err := a.buildChatModel(ctx, modelReq, modelbank.SearchDecision{})
 	if err != nil {

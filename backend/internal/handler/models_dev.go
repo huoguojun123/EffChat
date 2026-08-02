@@ -196,6 +196,16 @@ func storeCatalog(catalog map[string]modelsDevProvider) {
 	catalogCachedAt = time.Now()
 }
 
+func catalogCheckedAt() *time.Time {
+	catalogCacheMu.RLock()
+	defer catalogCacheMu.RUnlock()
+	if catalogCachedAt.IsZero() {
+		return nil
+	}
+	checkedAt := catalogCachedAt
+	return &checkedAt
+}
+
 // GetModelsDevCatalogModelHandler 按 ID 返回 models.dev 的【原始能力】（admin）。
 // 区别于列表接口：本接口不回显 DB 记录，专供编辑面板用 models.dev 的精确能力刷新字段，
 // 即使该模型已存在于库中，也返回目录里的能力值供管理员确认后覆盖。
@@ -260,18 +270,22 @@ func modelsDevToModel(provider, id string, meta modelsDevModel, index int) *mode
 		display = inferDisplayName(id)
 	}
 	m := &model.Model{
-		ID:             id,
-		DisplayName:    display,
-		Provider:       provider,
-		Enabled:        false,
-		SortOrder:      2000 + index,
-		ContextWindow:  meta.Limit.Context,
-		MaxOutput:      meta.Limit.Output,
-		Vision:         modalitiesHaveImage(meta.Modalities.Input),
-		ToolUse:        meta.ToolCall,
-		Reasoning:      meta.Reasoning,
-		ThinkingFormat: modelbank.NormalizeThinkingFormat(""),
-		SearchImpl:     searchImplForProvider(provider),
+		ID:                id,
+		DisplayName:       display,
+		Provider:          provider,
+		Enabled:           false,
+		SortOrder:         2000 + index,
+		ContextWindow:     meta.Limit.Context,
+		MaxOutput:         meta.Limit.Output,
+		Vision:            modalitiesHaveImage(meta.Modalities.Input),
+		ToolUse:           meta.ToolCall,
+		Reasoning:         meta.Reasoning,
+		ThinkingFormat:    modelbank.NormalizeThinkingFormat(""),
+		SearchImpl:        searchImplForProvider(provider),
+		CatalogSource:     model.CatalogSourceModelsDev,
+		CatalogCheckedAt:  catalogCheckedAt(),
+		LifecycleStatus:   model.InferModelLifecycleStatus(id),
+		TemperaturePolicy: model.TemperaturePolicyConfigurable,
 	}
 	return modelbank.ApplyThinkingRuntimeMetadata(m)
 }

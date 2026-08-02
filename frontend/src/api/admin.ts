@@ -297,6 +297,9 @@ export interface AdminSystemStatus {
 export interface ModelTestInput {
   id: string
   provider: string
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface ModelTestResponse {
@@ -411,6 +414,12 @@ export interface CreateModelInput {
   enabled: boolean
   min_group_level: number
   sort_order: number
+  catalog_source?: Model["catalog_source"]
+  catalog_checked_at?: string | null
+  lifecycle_status?: Model["lifecycle_status"]
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface UpdateModelInput {
@@ -426,6 +435,12 @@ export interface UpdateModelInput {
   enabled?: boolean
   min_group_level?: number
   sort_order?: number
+  catalog_source?: Model["catalog_source"]
+  catalog_checked_at?: string | null
+  lifecycle_status?: Model["lifecycle_status"]
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface CreateGroupInput {

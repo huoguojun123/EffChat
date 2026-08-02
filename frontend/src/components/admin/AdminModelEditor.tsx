@@ -7,7 +7,7 @@ import { Database, Link2, PlugZap, Trash2 } from "lucide-react"
 import { AdminModelCatalogMatcher } from "./AdminModelCatalogMatcher"
 import { thinkingFormatOptions } from "./AdminModelsPanel.constants"
 import { Field, ModelTestStatus, Select, Toggle } from "./AdminModelsPanel.controls"
-import { groupLevelOptions, thinkingFormatLabel } from "./AdminModelsPanel.helpers"
+import { catalogSourceLabel, formatCatalogCheckedAt, groupLevelOptions, lifecycleStatusLabel, thinkingFormatLabel } from "./AdminModelsPanel.helpers"
 import type { ModelDraft } from "./AdminModelsPanel.types"
 
 interface AdminModelEditorProps {
@@ -78,6 +78,7 @@ export function AdminModelEditor({
   const thinkingFallbackFormat = showThinkingFallback ? currentModel?.resolved_thinking_format || "" : ""
   const runtimeProfile = currentModel?.runtime_profile
   const runtimeThinkingOptions = runtimeProfile?.thinking_effort_options || currentModel?.thinking_effort_options || []
+  const showOpenAIRequestProfile = currentModel?.channel_adapter === "openai_compatible"
 
   return (
     <div className={`min-h-0 flex-col overflow-hidden lg:flex ${mobileDetailOpen ? "flex" : "hidden lg:flex"}`}>
@@ -114,6 +115,19 @@ export function AdminModelEditor({
                 <Field label="显示名称">
                   <Input name="effchat-model-display-name" autoComplete="off" value={currentDraft.display_name} onChange={(e) => updateCurrentDraft({ display_name: e.target.value })} />
                 </Field>
+                <div className="grid gap-3 border-y border-border/60 py-3 sm:grid-cols-2">
+                  <div className="min-w-0 text-xs text-muted-foreground">
+                    <div className="text-foreground/80">能力来源：{catalogSourceLabel(currentDraft.catalog_source || "manual")}</div>
+                    <div className="mt-1 truncate" title={currentDraft.catalog_checked_at || undefined}>核对时间：{formatCatalogCheckedAt(currentDraft.catalog_checked_at)}</div>
+                  </div>
+                  <Field label="生命周期">
+                    <Select value={currentDraft.lifecycle_status || "unknown"} onChange={(lifecycle_status) => updateCurrentDraft({ lifecycle_status: lifecycle_status as Model["lifecycle_status"] })}>
+                      {(["unknown", "active", "preview", "deprecated", "retired"] as const).map((status) => (
+                        <option key={status} value={status}>{lifecycleStatusLabel(status)}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="上下文">
                     <Input type="number" value={currentDraft.context_window} onChange={(e) => updateCurrentDraft({ context_window: Number(e.target.value) || 0 })} />
@@ -186,6 +200,88 @@ export function AdminModelEditor({
                   </div>
                 </div>
                 <div className="grid gap-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="温度策略">
+                      <Select value={currentDraft.temperature_policy || "configurable"} onChange={(temperature_policy) => updateCurrentDraft({
+                        temperature_policy: temperature_policy as Model["temperature_policy"],
+                        temperature_value: temperature_policy === "fixed" ? (currentDraft.temperature_value ?? 1) : null,
+                      })}>
+                        <option value="configurable">会话可配置</option>
+                        <option value="omit">不发送温度</option>
+                        <option value="fixed">固定温度</option>
+                      </Select>
+                    </Field>
+                    {currentDraft.temperature_policy === "fixed" ? (
+                      <Field label="固定温度">
+                        <Input type="number" min="0" max="2" step="0.1" value={currentDraft.temperature_value ?? 1} onChange={(e) => updateCurrentDraft({ temperature_value: Number(e.target.value) })} />
+                      </Field>
+                    ) : (
+                      <div className="self-end pb-2 text-xs leading-snug text-muted-foreground">
+                        {currentDraft.temperature_policy === "omit" ? "请求中完全省略 temperature。" : "沿用会话设置；未设置时由模型服务决定。"}
+                      </div>
+                    )}
+                  </div>
+                  {showOpenAIRequestProfile ? (
+                    <div className="border-t border-border/60 pt-3">
+                      <div className="mb-2 text-sm font-semibold">OpenAI-compatible 固定参数</div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="Top P">
+                          <Input
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={currentDraft.openai_request_profile?.top_p ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              top_p: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                        <Field label="候选数量 (n)">
+                          <Input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={currentDraft.openai_request_profile?.n ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              n: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                        <Field label="Presence penalty">
+                          <Input
+                            type="number"
+                            min="-2"
+                            max="2"
+                            step="0.1"
+                            value={currentDraft.openai_request_profile?.presence_penalty ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              presence_penalty: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                        <Field label="Frequency penalty">
+                          <Input
+                            type="number"
+                            min="-2"
+                            max="2"
+                            step="0.1"
+                            value={currentDraft.openai_request_profile?.frequency_penalty ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              frequency_penalty: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                      </div>
+                      <p className="mt-2 text-xs leading-snug text-muted-foreground">
+                        留空时不发送对应字段；仅用于需要显式固定采样参数的 OpenAI-compatible 模型。
+                      </p>
+                    </div>
+                  ) : null}
                   <Field label="思考方式">
                     <Select value={draftThinkingFormat} onChange={(thinking_format) => updateCurrentDraft({ thinking_format })}>
                       {thinkingFormatOptions.map((item) => (

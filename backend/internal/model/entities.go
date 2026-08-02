@@ -96,21 +96,27 @@ type ThinkingEffortOption struct {
 // Model 模型能力记录（models 表）
 // 字段与 modelbank.ModelInfo / ModelCapabilities 对齐，由 repository 层映射。
 type Model struct {
-	ID             string    `json:"id"`
-	DisplayName    string    `json:"display_name"`
-	Provider       string    `json:"provider"`
-	Vision         bool      `json:"vision"`
-	ToolUse        bool      `json:"tool_use"`
-	Reasoning      bool      `json:"reasoning"`
-	ThinkingFormat string    `json:"thinking_format"` // auto, none, deepseek_v4, openai_reasoning_effort...
-	SearchImpl     string    `json:"search_impl"`     // '', internal, params, tool
-	ContextWindow  int       `json:"context_window"`
-	MaxOutput      int       `json:"max_output"`
-	Enabled        bool      `json:"enabled"`
-	MinGroupLevel  int       `json:"min_group_level"` // 最低可见组等级，0=所有人可见
-	SortOrder      int       `json:"sort_order"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                   string               `json:"id"`
+	DisplayName          string               `json:"display_name"`
+	Provider             string               `json:"provider"`
+	Vision               bool                 `json:"vision"`
+	ToolUse              bool                 `json:"tool_use"`
+	Reasoning            bool                 `json:"reasoning"`
+	ThinkingFormat       string               `json:"thinking_format"` // auto, none, deepseek_v4, openai_reasoning_effort...
+	SearchImpl           string               `json:"search_impl"`     // '', internal, params, tool
+	ContextWindow        int                  `json:"context_window"`
+	MaxOutput            int                  `json:"max_output"`
+	Enabled              bool                 `json:"enabled"`
+	MinGroupLevel        int                  `json:"min_group_level"` // 最低可见组等级，0=所有人可见
+	SortOrder            int                  `json:"sort_order"`
+	CatalogSource        string               `json:"catalog_source"`
+	CatalogCheckedAt     *time.Time           `json:"catalog_checked_at,omitempty"`
+	LifecycleStatus      string               `json:"lifecycle_status"`
+	TemperaturePolicy    string               `json:"temperature_policy"`
+	TemperatureValue     *float64             `json:"temperature_value,omitempty"`
+	OpenAIRequestProfile OpenAIRequestProfile `json:"openai_request_profile"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
 
 	ResolvedThinkingFormat string                 `json:"resolved_thinking_format,omitempty"`
 	DefaultThinkingEffort  string                 `json:"default_thinking_effort,omitempty"`
@@ -120,6 +126,17 @@ type Model struct {
 	ChannelAdapter         string                 `json:"channel_adapter,omitempty"`
 	ChannelEnabled         bool                   `json:"channel_enabled"`
 	ChannelConfigured      bool                   `json:"channel_configured"`
+}
+
+// OpenAIRequestProfile contains only typed, protocol-owned fields that some
+// OpenAI-compatible gateways require to be fixed explicitly. Nil means the
+// field is omitted; this deliberately avoids an arbitrary provider-parameter
+// map crossing the persisted configuration and accepted-run boundary.
+type OpenAIRequestProfile struct {
+	TopP             *float64 `json:"top_p,omitempty"`
+	N                *int     `json:"n,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 }
 
 type AIChannel struct {
@@ -171,6 +188,9 @@ type ModelRuntimeProfile struct {
 	SupportsVision        bool                   `json:"supports_vision"`
 	SupportsTools         bool                   `json:"supports_tools"`
 	SearchImpl            string                 `json:"search_impl"`
+	TemperaturePolicy     string                 `json:"temperature_policy"`
+	TemperatureValue      *float64               `json:"temperature_value,omitempty"`
+	OpenAIRequestProfile  OpenAIRequestProfile   `json:"openai_request_profile"`
 }
 
 // Prompt 预设提示词

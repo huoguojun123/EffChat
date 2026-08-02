@@ -70,3 +70,29 @@ func TestBuiltinsIncludeGPT56Family(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
+	resetRegistryToBuiltins()
+	cases := []struct {
+		id       string
+		provider string
+		context  int
+		output   int
+	}{
+		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000},
+		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000},
+		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536},
+	}
+	for _, tc := range cases {
+		info := Get(tc.id)
+		if info == nil {
+			t.Fatalf("missing candidate-day builtin %s", tc.id)
+		}
+		if info.Provider != tc.provider || info.Capabilities.ContextWindow != tc.context || info.Capabilities.MaxOutput != tc.output {
+			t.Fatalf("%s profile = provider:%q limits:%d/%d", tc.id, info.Provider, info.Capabilities.ContextWindow, info.Capabilities.MaxOutput)
+		}
+		if !info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+			t.Fatalf("%s lost required capability evidence: %+v", tc.id, info.Capabilities)
+		}
+	}
+}

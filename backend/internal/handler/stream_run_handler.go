@@ -114,6 +114,9 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 		Reasoning:               modelInfo.Capabilities.Reasoning,
 		ThinkingFormat:          modelInfo.ThinkingFormat,
 		SearchImpl:              modelInfo.Capabilities.SearchImpl,
+		TemperaturePolicy:       modelInfo.TemperaturePolicy,
+		TemperatureValue:        cloneFloat64Pointer(modelInfo.TemperatureValue),
+		OpenAIRequestProfile:    model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile),
 		ThinkingEffort:          thinkingEffort,
 		SearchMode:              resolveSessionSearchMode(session.SearchMode),
 		PreferModelNativeSearch: true,
@@ -136,6 +139,14 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 		req.MaxTokens = *session.MaxTokens
 	}
 	return req
+}
+
+func cloneFloat64Pointer(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 const (

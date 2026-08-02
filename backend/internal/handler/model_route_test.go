@@ -344,6 +344,9 @@ func TestInferModelDefaultsThinkingFormatAuto(t *testing.T) {
 	if m.ThinkingFormat != "auto" {
 		t.Fatalf("thinking_format = %q, want auto", m.ThinkingFormat)
 	}
+	if m.CatalogSource != model.CatalogSourceChannel || m.CatalogCheckedAt == nil || m.LifecycleStatus != model.ModelLifecycleUnknown {
+		t.Fatalf("channel catalog metadata = source:%q checked:%v lifecycle:%q", m.CatalogSource, m.CatalogCheckedAt, m.LifecycleStatus)
+	}
 }
 
 func TestMatchExistingGatewayModelFuzzyIdentityFields(t *testing.T) {

@@ -128,6 +128,17 @@ func resetModelsDevCatalogCache(t *testing.T) {
 }
 
 func TestModelsDevToModel(t *testing.T) {
+	checkedAt := time.Date(2026, time.August, 2, 9, 0, 0, 0, time.UTC)
+	catalogCacheMu.Lock()
+	previousAt := catalogCachedAt
+	catalogCachedAt = checkedAt
+	catalogCacheMu.Unlock()
+	t.Cleanup(func() {
+		catalogCacheMu.Lock()
+		catalogCachedAt = previousAt
+		catalogCacheMu.Unlock()
+	})
+
 	meta := modelsDevModel{
 		ID:        "claude-opus-4-5",
 		Name:      "Claude Opus 4.5",
@@ -163,6 +174,12 @@ func TestModelsDevToModel(t *testing.T) {
 	}
 	if m.Enabled {
 		t.Error("imported catalog model should default to disabled")
+	}
+	if m.CatalogSource != model.CatalogSourceModelsDev || m.LifecycleStatus != model.ModelLifecycleUnknown {
+		t.Fatalf("catalog metadata = source:%q lifecycle:%q", m.CatalogSource, m.LifecycleStatus)
+	}
+	if m.CatalogCheckedAt == nil || !m.CatalogCheckedAt.Equal(checkedAt) {
+		t.Fatalf("catalog_checked_at = %v, want %v", m.CatalogCheckedAt, checkedAt)
 	}
 }
 

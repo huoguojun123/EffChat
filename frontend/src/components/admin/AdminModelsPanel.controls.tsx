@@ -32,16 +32,18 @@ export function ModelTestStatus({ result }: { result: ModelTestResponse }) {
   const tone = result.ok
     ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200"
     : "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200"
+  const unexpectedOutput = !result.ok && result.code === "model_probe_unexpected_output"
   const detail = result.ok ? result.output || "OK" : result.error || "检测失败"
   return (
     <div className={`flex flex-col gap-1 rounded-md border px-3 py-2 text-sm ${tone}`}>
       <div className="flex flex-wrap items-center gap-2 font-medium">
-        <span>{result.ok ? "最小对话连通" : "连通失败"}</span>
+        <span>{result.ok ? "最小对话连通" : unexpectedOutput ? "响应不符合探测要求" : "连通失败"}</span>
         <span className="rounded-full bg-background/70 px-2 py-0.5 text-xs text-foreground/70">{result.provider}</span>
         <span className="min-w-0 truncate text-xs font-normal text-foreground/65">{result.model_id}</span>
         {typeof result.duration_ms === "number" ? <span className="text-xs font-normal text-foreground/65">{formatDuration(result.duration_ms)}</span> : null}
       </div>
       <div className="line-clamp-2 text-sm text-foreground/80">{detail}</div>
+      {unexpectedOutput && result.output ? <div className="line-clamp-2 text-xs text-foreground/70">模型返回：{result.output}</div> : null}
     </div>
   )
 }

@@ -310,6 +310,8 @@ export interface ModelTestResponse {
 	duration_ms?: number
   output?: string
   error?: string
+  code?: string
+  retryable?: boolean
 }
 
 export type AIChannelAdapter = "openai_compatible" | "openai_responses" | "anthropic" | "google"

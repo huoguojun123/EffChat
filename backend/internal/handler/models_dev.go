@@ -270,21 +270,22 @@ func modelsDevToModel(provider, id string, meta modelsDevModel, index int) *mode
 		display = inferDisplayName(id)
 	}
 	m := &model.Model{
-		ID:               id,
-		DisplayName:      display,
-		Provider:         provider,
-		Enabled:          false,
-		SortOrder:        2000 + index,
-		ContextWindow:    meta.Limit.Context,
-		MaxOutput:        meta.Limit.Output,
-		Vision:           modalitiesHaveImage(meta.Modalities.Input),
-		ToolUse:          meta.ToolCall,
-		Reasoning:        meta.Reasoning,
-		ThinkingFormat:   modelbank.NormalizeThinkingFormat(""),
-		SearchImpl:       searchImplForProvider(provider),
-		CatalogSource:    model.CatalogSourceModelsDev,
-		CatalogCheckedAt: catalogCheckedAt(),
-		LifecycleStatus:  model.InferModelLifecycleStatus(id),
+		ID:                id,
+		DisplayName:       display,
+		Provider:          provider,
+		Enabled:           false,
+		SortOrder:         2000 + index,
+		ContextWindow:     meta.Limit.Context,
+		MaxOutput:         meta.Limit.Output,
+		Vision:            modalitiesHaveImage(meta.Modalities.Input),
+		ToolUse:           meta.ToolCall,
+		Reasoning:         meta.Reasoning,
+		ThinkingFormat:    modelbank.NormalizeThinkingFormat(""),
+		SearchImpl:        searchImplForProvider(provider),
+		CatalogSource:     model.CatalogSourceModelsDev,
+		CatalogCheckedAt:  catalogCheckedAt(),
+		LifecycleStatus:   model.InferModelLifecycleStatus(id),
+		TemperaturePolicy: model.TemperaturePolicyConfigurable,
 	}
 	return modelbank.ApplyThinkingRuntimeMetadata(m)
 }

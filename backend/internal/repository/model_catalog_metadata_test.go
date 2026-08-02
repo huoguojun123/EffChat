@@ -14,12 +14,14 @@ func TestModelRepositoryPersistsCatalogMetadata(t *testing.T) {
 
 	modelID := fmt.Sprintf("catalog-metadata-%d", time.Now().UnixNano())
 	checkedAt := time.Date(2026, time.August, 2, 8, 30, 0, 0, time.UTC)
+	fixedTemperature := 1.0
 	repo := NewModelRepository(db)
 	item := &model.Model{
 		ID: modelID, DisplayName: "Catalog Fixture", Provider: "fixture-channel",
 		ThinkingFormat: "auto", Enabled: false,
 		CatalogSource: model.CatalogSourceModelsDev, CatalogCheckedAt: &checkedAt,
-		LifecycleStatus: model.ModelLifecyclePreview,
+		LifecycleStatus:   model.ModelLifecyclePreview,
+		TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &fixedTemperature,
 	}
 	if err := repo.Upsert(item); err != nil {
 		t.Fatalf("upsert model metadata: %v", err)
@@ -35,6 +37,9 @@ func TestModelRepositoryPersistsCatalogMetadata(t *testing.T) {
 	}
 	if stored.CatalogCheckedAt == nil || !stored.CatalogCheckedAt.Equal(checkedAt) {
 		t.Fatalf("catalog_checked_at = %v, want %v", stored.CatalogCheckedAt, checkedAt)
+	}
+	if stored.TemperaturePolicy != model.TemperaturePolicyFixed || stored.TemperatureValue == nil || *stored.TemperatureValue != fixedTemperature {
+		t.Fatalf("temperature profile = %q/%v", stored.TemperaturePolicy, stored.TemperatureValue)
 	}
 }
 
@@ -55,5 +60,8 @@ func TestModelRepositoryDefaultsLegacyCatalogMetadata(t *testing.T) {
 	}
 	if stored.CatalogSource != model.CatalogSourceManual || stored.LifecycleStatus != model.ModelLifecycleUnknown || stored.CatalogCheckedAt != nil {
 		t.Fatalf("default catalog metadata = %#v", stored)
+	}
+	if stored.TemperaturePolicy != model.TemperaturePolicyConfigurable || stored.TemperatureValue != nil {
+		t.Fatalf("default temperature profile = %q/%v", stored.TemperaturePolicy, stored.TemperatureValue)
 	}
 }

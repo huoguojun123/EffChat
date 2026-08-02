@@ -212,6 +212,8 @@ export interface Model {
   catalog_source: "manual" | "channel" | "models_dev" | "builtin" | "unknown"
   catalog_checked_at?: string | null
   lifecycle_status: "active" | "preview" | "deprecated" | "retired" | "unknown"
+  temperature_policy: "configurable" | "omit" | "fixed"
+  temperature_value?: number | null
   resolved_thinking_format?: string
   default_thinking_effort?: string
   thinking_effort_options?: ThinkingEffortOption[]
@@ -237,6 +239,8 @@ export interface ModelRuntimeProfile {
   supports_vision: boolean
   supports_tools: boolean
   search_impl: string
+  temperature_policy: Model["temperature_policy"]
+  temperature_value?: number | null
 }
 
 // UserGroup 用户分级组，level 越大权限越高

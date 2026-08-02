@@ -414,6 +414,8 @@ export interface CreateModelInput {
   catalog_source?: Model["catalog_source"]
   catalog_checked_at?: string | null
   lifecycle_status?: Model["lifecycle_status"]
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
 }
 
 export interface UpdateModelInput {
@@ -432,6 +434,8 @@ export interface UpdateModelInput {
   catalog_source?: Model["catalog_source"]
   catalog_checked_at?: string | null
   lifecycle_status?: Model["lifecycle_status"]
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
 }
 
 export interface CreateGroupInput {

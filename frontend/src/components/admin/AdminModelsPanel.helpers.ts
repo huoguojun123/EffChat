@@ -26,6 +26,8 @@ export function makeEmptyModel(provider = "openai"): ModelDraft {
     catalog_source: "manual",
     catalog_checked_at: null,
     lifecycle_status: "unknown",
+    temperature_policy: "configurable",
+    temperature_value: null,
     ...providerDefaults[provider],
   }
 }
@@ -49,6 +51,8 @@ export function toModelDraft(model: Model): ModelDraft {
     catalog_source: model.catalog_source || "manual",
     catalog_checked_at: model.catalog_checked_at || null,
     lifecycle_status: model.lifecycle_status || "unknown",
+    temperature_policy: model.temperature_policy || "configurable",
+    temperature_value: model.temperature_value ?? null,
   }
 }
 
@@ -70,6 +74,8 @@ export function toModelPatch(draft: ModelDraft): UpdateModelInput {
     catalog_source: draft.catalog_source,
     catalog_checked_at: draft.catalog_checked_at,
     lifecycle_status: draft.lifecycle_status,
+    temperature_policy: draft.temperature_policy,
+    temperature_value: draft.temperature_policy === "fixed" ? draft.temperature_value : null,
   }
 }
 
@@ -91,7 +97,7 @@ export function catalogModelPatch(model: Model): Partial<ModelDraft> {
 
 const catalogOwnedFields: Array<keyof ModelDraft> = [
   "context_window", "max_output", "vision", "tool_use", "reasoning",
-  "thinking_format", "search_impl", "lifecycle_status",
+  "thinking_format", "search_impl", "lifecycle_status", "temperature_policy", "temperature_value",
 ]
 
 // Manual capability edits override imported directory evidence. Catalog

@@ -494,21 +494,22 @@ func inferModelForProvider(meta upstreamModelMeta, index int, fallbackProvider s
 		displaySource = meta.Name
 	}
 	m := &model.Model{
-		ID:               meta.ID,
-		DisplayName:      inferDisplayName(displaySource),
-		Provider:         provider,
-		Enabled:          false,
-		SortOrder:        1000 + index,
-		ContextWindow:    meta.ContextWindow,
-		MaxOutput:        meta.MaxOutput,
-		Vision:           meta.Vision,
-		ToolUse:          meta.ToolUse,
-		Reasoning:        meta.Reasoning,
-		ThinkingFormat:   modelbank.NormalizeThinkingFormat(""),
-		SearchImpl:       meta.SearchImpl,
-		CatalogSource:    model.CatalogSourceChannel,
-		CatalogCheckedAt: &checkedAt,
-		LifecycleStatus:  model.InferModelLifecycleStatus(meta.ID),
+		ID:                meta.ID,
+		DisplayName:       inferDisplayName(displaySource),
+		Provider:          provider,
+		Enabled:           false,
+		SortOrder:         1000 + index,
+		ContextWindow:     meta.ContextWindow,
+		MaxOutput:         meta.MaxOutput,
+		Vision:            meta.Vision,
+		ToolUse:           meta.ToolUse,
+		Reasoning:         meta.Reasoning,
+		ThinkingFormat:    modelbank.NormalizeThinkingFormat(""),
+		SearchImpl:        meta.SearchImpl,
+		CatalogSource:     model.CatalogSourceChannel,
+		CatalogCheckedAt:  &checkedAt,
+		LifecycleStatus:   model.InferModelLifecycleStatus(meta.ID),
+		TemperaturePolicy: model.TemperaturePolicyConfigurable,
 	}
 
 	switch provider {

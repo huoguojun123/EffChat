@@ -132,3 +132,28 @@ func TestModelServiceManualCatalogOverrideClearsDirectoryCheckTime(t *testing.T)
 		t.Fatalf("manual override metadata = %#v", updated)
 	}
 }
+
+func TestValidateModelInputRequiresConsistentTemperatureProfile(t *testing.T) {
+	fixed := 1.0
+	base := model.Model{ID: "fixture-model", DisplayName: "Fixture", Provider: "fixture", ThinkingFormat: "auto"}
+
+	validFixed := base
+	validFixed.TemperaturePolicy = model.TemperaturePolicyFixed
+	validFixed.TemperatureValue = &fixed
+	if err := validateModelInput(&validFixed); err != nil {
+		t.Fatalf("valid fixed profile: %v", err)
+	}
+
+	missingFixed := base
+	missingFixed.TemperaturePolicy = model.TemperaturePolicyFixed
+	if err := validateModelInput(&missingFixed); err == nil {
+		t.Fatal("fixed profile without a value was accepted")
+	}
+
+	omitWithValue := base
+	omitWithValue.TemperaturePolicy = model.TemperaturePolicyOmit
+	omitWithValue.TemperatureValue = &fixed
+	if err := validateModelInput(&omitWithValue); err == nil {
+		t.Fatal("omit profile with a fixed value was accepted")
+	}
+}

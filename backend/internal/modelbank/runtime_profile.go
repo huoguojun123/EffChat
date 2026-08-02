@@ -37,6 +37,8 @@ func RuntimeProfileForModelWithAdapter(m *model.Model, adapter string) model.Mod
 		SupportsVision:        m.Vision,
 		SupportsTools:         m.ToolUse,
 		SearchImpl:            m.SearchImpl,
+		TemperaturePolicy:     model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
+		TemperatureValue:      cloneFloat64Pointer(m.TemperatureValue),
 	}
 	if len(options) > 0 {
 		profile.DefaultThinkingEffort = string(ResolveThinkingEffortForModel(format, m.ID, ""))

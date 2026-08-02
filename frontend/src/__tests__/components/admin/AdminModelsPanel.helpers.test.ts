@@ -30,6 +30,8 @@ function model(overrides: Partial<Model> = {}): Model {
     sort_order: 10,
     catalog_source: "manual",
     lifecycle_status: "unknown",
+    temperature_policy: "configurable",
+    temperature_value: null,
     ...overrides,
   }
 }
@@ -83,6 +85,13 @@ describe("AdminModelsPanel helpers", () => {
       max_output: 32000,
       catalog_source: "models_dev",
       lifecycle_status: "preview",
+    })
+    expect(markManualCatalogOverride({ temperature_policy: "fixed", temperature_value: 1 }, { lifecycle_status: "active" })).toEqual({
+      temperature_policy: "fixed",
+      temperature_value: 1,
+      catalog_source: "manual",
+      catalog_checked_at: null,
+      lifecycle_status: "active",
     })
   })
 

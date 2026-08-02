@@ -199,6 +199,27 @@ export function AdminModelEditor({
                   </div>
                 </div>
                 <div className="grid gap-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="温度策略">
+                      <Select value={currentDraft.temperature_policy || "configurable"} onChange={(temperature_policy) => updateCurrentDraft({
+                        temperature_policy: temperature_policy as Model["temperature_policy"],
+                        temperature_value: temperature_policy === "fixed" ? (currentDraft.temperature_value ?? 1) : null,
+                      })}>
+                        <option value="configurable">会话可配置</option>
+                        <option value="omit">不发送温度</option>
+                        <option value="fixed">固定温度</option>
+                      </Select>
+                    </Field>
+                    {currentDraft.temperature_policy === "fixed" ? (
+                      <Field label="固定温度">
+                        <Input type="number" min="0" max="2" step="0.1" value={currentDraft.temperature_value ?? 1} onChange={(e) => updateCurrentDraft({ temperature_value: Number(e.target.value) })} />
+                      </Field>
+                    ) : (
+                      <div className="self-end pb-2 text-xs leading-snug text-muted-foreground">
+                        {currentDraft.temperature_policy === "omit" ? "请求中完全省略 temperature。" : "沿用会话设置；未设置时由模型服务决定。"}
+                      </div>
+                    )}
+                  </div>
                   <Field label="思考方式">
                     <Select value={draftThinkingFormat} onChange={(thinking_format) => updateCurrentDraft({ thinking_format })}>
                       {thinkingFormatOptions.map((item) => (

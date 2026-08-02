@@ -285,11 +285,13 @@ func LoadModels(models []*model.Model) {
 	registry = make(map[string]*ModelInfo, len(models))
 	for _, m := range models {
 		registry[m.ID] = &ModelInfo{
-			ID:             m.ID,
-			DisplayName:    m.DisplayName,
-			Provider:       m.Provider,
-			Enabled:        m.Enabled,
-			ThinkingFormat: m.ThinkingFormat,
+			ID:                m.ID,
+			DisplayName:       m.DisplayName,
+			Provider:          m.Provider,
+			Enabled:           m.Enabled,
+			ThinkingFormat:    m.ThinkingFormat,
+			TemperaturePolicy: model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
+			TemperatureValue:  cloneFloat64Pointer(m.TemperatureValue),
 			Capabilities: ModelCapabilities{
 				Vision:        m.Vision,
 				ToolUse:       m.ToolUse,
@@ -300,6 +302,14 @@ func LoadModels(models []*model.Model) {
 			},
 		}
 	}
+}
+
+func cloneFloat64Pointer(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 // resetRegistryToBuiltins 还原内存表为内置默认（测试用，避免 LoadModels 污染同包其它测试）。

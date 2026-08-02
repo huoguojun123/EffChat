@@ -34,6 +34,7 @@ function model(id: string, sortOrder = 0): Model {
     enabled: true,
     catalog_source: "manual",
     lifecycle_status: "unknown",
+    temperature_policy: "configurable",
   }
 }
 

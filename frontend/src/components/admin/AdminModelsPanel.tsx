@@ -20,11 +20,13 @@ import {
   toModelPatch,
 } from "./AdminModelsPanel.helpers"
 import type { AdminModelsPanelProps, ModelDraft } from "./AdminModelsPanel.types"
+import { useChatStore } from "@/stores/chat"
 
 const unconfiguredProviderKey = "__unconfigured__"
 const newChannelKey = "__new_channel__"
 
 export function AdminModelsPanel({ models, setModels, groups, channels = [], setChannels, setError }: AdminModelsPanelProps) {
+  const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
   const {
     query,
     setQuery,
@@ -216,6 +218,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     try {
       const updated = await adminApi.updateModel(id, patch)
       setModels((prev) => sortModels(prev.map((item) => (item.id === id ? updated : item))))
+      void loadSessionCreateReadiness(true)
       if (currentModel?.id === id) setDraft(toModelDraft(updated))
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型保存失败")
@@ -235,10 +238,12 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
         setEditingId(created.id)
         setActiveProvider(created.provider)
         setDraft(toModelDraft(created))
+        void loadSessionCreateReadiness(true)
       } else if (currentModel) {
         const updated = await adminApi.updateModel(currentModel.id, toModelPatch(currentDraft))
         setModels((prev) => sortModels(prev.map((item) => (item.id === currentModel.id ? updated : item))))
         setDraft(toModelDraft(updated))
+        void loadSessionCreateReadiness(true)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型保存失败")
@@ -329,6 +334,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
       setDraft(toModelDraft(created))
       setCreating(false)
       setMobileDetailOpen(true)
+      void loadSessionCreateReadiness(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型导入失败")
     } finally {
@@ -342,6 +348,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     try {
       await adminApi.deleteModel(model.id)
       setModels((prev) => prev.filter((item) => item.id !== model.id))
+      void loadSessionCreateReadiness(true)
       if (currentModel?.id === model.id) {
         setEditingId("")
         setCreating(false)

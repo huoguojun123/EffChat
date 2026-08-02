@@ -7,6 +7,7 @@ import { useModelStore } from "@/stores/models"
 import { Save, Trash2 } from "lucide-react"
 import { adapterOptions } from "./AdminChannelsPanel.constants"
 import { Field, Select, Toggle } from "./AdminModelsPanel.controls"
+import { useChatStore } from "@/stores/chat"
 
 interface Props {
   channel: AIChannel | null
@@ -80,6 +81,7 @@ function channelDraftFrom(item: AIChannel | null): AIChannelInput {
 }
 
 export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, setError, onSaved, onDeleted }: Props) {
+  const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
   const [fallbackKey] = useState(() => `custom-${Date.now().toString(36)}`)
   const [draft, setDraft] = useState<AIChannelInput>(() => channelDraftFrom(channel))
   const [saving, setSaving] = useState("")
@@ -128,6 +130,7 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
       })
       setDraft(channelDraftFrom(saved))
       await loadModels(true)
+      void loadSessionCreateReadiness(true)
       onSaved(saved.key)
     } catch (err) {
       setError(err instanceof Error ? err.message : "渠道保存失败")
@@ -149,6 +152,7 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
     try {
       await adminApi.deleteChannel(channel.key)
       setChannels((prev) => prev.filter((item) => item.key !== channel.key))
+      void loadSessionCreateReadiness(true)
       onDeleted()
     } catch (err) {
       setError(err instanceof Error ? err.message : "渠道删除失败")

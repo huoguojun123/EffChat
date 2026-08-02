@@ -4,6 +4,7 @@ import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Save } from "lucide-react"
+import { useChatStore } from "@/stores/chat"
 
 interface Props {
   configItems: ConfigItem[]
@@ -72,6 +73,7 @@ export function AdminConfigPanel({
   excludeKeys,
   onDirtyChange,
 }: Props) {
+  const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [cleanupSaving, setCleanupSaving] = useState(false)
@@ -123,6 +125,7 @@ export function AdminConfigPanel({
         nextValues.set(item.key, nextValue)
       }
       await adminApi.updateConfigs(Object.fromEntries(nextValues))
+      if (nextValues.has("default_model_id")) void loadSessionCreateReadiness(true)
       setConfigItems((prev) => prev.map((entry) => (
         nextValues.has(entry.key) ? { ...entry, value: nextValues.get(entry.key) } : entry
       )))

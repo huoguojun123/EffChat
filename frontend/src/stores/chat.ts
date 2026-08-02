@@ -2,6 +2,7 @@ import { create } from "zustand"
 import type { Session, SessionFolder, Message, MessageData, ToolCall, Model, StreamingSegment, StreamLifecycleState, LocalMessageState, ModelRetryTrace } from "@/types"
 import * as sessionsApi from "@/api/sessions"
 import type { SessionFolderScope } from "@/api/sessions"
+import { ApiError } from "@/api/client"
 import * as messagesApi from "@/api/messages"
 import { cloneToolCall, messageRunId, normalizeMessages } from "@/lib/chatMessages"
 import { createLocalMessageId } from "@/lib/localMessageId"
@@ -47,7 +48,13 @@ interface ChatState {
   firstLoadedTurnId: number | null
   lastLoadedTurnId: number | null
   compactionOwners: Record<number, CompactionOwner>
+  sessionCreateReadiness: sessionsApi.SessionCreateReadiness | null
+  isLoadingSessionCreateReadiness: boolean
+  sessionCreateReadinessError: string | null
+  isCreatingSession: boolean
+  sessionCreateError: string | null
 
+  loadSessionCreateReadiness: (force?: boolean) => Promise<void>
   loadSessionFolders: () => Promise<void>
   loadSessions: (options?: { folderId?: SessionFolderScope; reset?: boolean }) => Promise<void>
   loadMoreSessions: () => Promise<void>
@@ -106,6 +113,7 @@ let latestMessagesRequest = 0
 let latestOlderMessagesRequest = 0
 let latestSessionsRequest = 0
 let latestSessionFoldersRequest = 0
+let latestSessionCreateReadinessRequest = 0
 const SESSION_PAGE_SIZE = 100
 
 export const useChatStore = create<ChatState>()((set, get) => ({
@@ -131,6 +139,28 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   firstLoadedTurnId: null,
   lastLoadedTurnId: null,
   compactionOwners: {},
+  sessionCreateReadiness: null,
+  isLoadingSessionCreateReadiness: true,
+  sessionCreateReadinessError: null,
+  isCreatingSession: false,
+  sessionCreateError: null,
+
+  loadSessionCreateReadiness: async (force = false) => {
+    const current = get()
+    if (!force && (current.sessionCreateReadiness || current.isLoadingSessionCreateReadiness && latestSessionCreateReadinessRequest > 0)) return
+    const requestId = ++latestSessionCreateReadinessRequest
+    set({ isLoadingSessionCreateReadiness: true, sessionCreateReadinessError: null })
+    try {
+      const readiness = await sessionsApi.getSessionCreateReadiness()
+      if (requestId !== latestSessionCreateReadinessRequest) return
+      set({ sessionCreateReadiness: readiness, sessionCreateError: null })
+    } catch (err) {
+      if (requestId !== latestSessionCreateReadinessRequest) return
+      set({ sessionCreateReadiness: null, sessionCreateReadinessError: sessionCreationErrorMessage(err, "无法检查聊天配置，请重试") })
+    } finally {
+      if (requestId === latestSessionCreateReadinessRequest) set({ isLoadingSessionCreateReadiness: false })
+    }
+  },
 
   loadSessionFolders: async () => {
     const requestId = ++latestSessionFoldersRequest
@@ -264,9 +294,29 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   createSession: async (modelId?: string, provider?: Model["provider"], systemPrompt?: string) => {
+    if (get().isCreatingSession) throw new Error("正在创建对话，请稍候")
+    if (!modelId && !get().sessionCreateReadiness?.ready) {
+      const message = get().sessionCreateReadinessError || readinessMessage(get().sessionCreateReadiness)
+      set({ sessionCreateError: message })
+      throw new Error(message)
+    }
     const activeFolderId = get().activeFolderId
     const folderId = typeof activeFolderId === "number" ? activeFolderId : undefined
-    const session = await sessionsApi.createSession({ model_id: modelId, provider, system_prompt: systemPrompt, folder_id: folderId })
+    set({ isCreatingSession: true, sessionCreateError: null })
+    let session: Session
+    try {
+      session = await sessionsApi.createSession({ model_id: modelId, provider, system_prompt: systemPrompt, folder_id: folderId })
+    } catch (err) {
+      const message = sessionCreationErrorMessage(err, "创建对话失败，请重试")
+      const patch: Partial<ChatState> = { sessionCreateError: message }
+      if (err instanceof ApiError && isDefaultReadinessCode(err.code)) {
+        patch.sessionCreateReadiness = { ready: false, code: err.code, message, retryable: Boolean(err.retryable) }
+      }
+      set(patch)
+      throw err
+    } finally {
+      set({ isCreatingSession: false })
+    }
     latestMessagesRequest += 1
     latestOlderMessagesRequest += 1
     localStorage.setItem("active_session_id", String(session.id))
@@ -715,6 +765,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     latestOlderMessagesRequest += 1
     latestSessionsRequest += 1
     latestSessionFoldersRequest += 1
+    latestSessionCreateReadinessRequest += 1
     localStorage.removeItem("active_session_id")
     set({
       sessions: [],
@@ -739,9 +790,32 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       firstLoadedTurnId: null,
       lastLoadedTurnId: null,
       compactionOwners: {},
+      sessionCreateReadiness: null,
+      isLoadingSessionCreateReadiness: true,
+      sessionCreateReadinessError: null,
+      isCreatingSession: false,
+      sessionCreateError: null,
     })
   },
 }))
+
+function readinessMessage(readiness: sessionsApi.SessionCreateReadiness | null) {
+  if (!readiness) return "正在检查聊天配置，请稍候"
+  if (readiness.code === "default_model_not_configured") return "尚未配置默认模型"
+  return readiness.message || "默认模型暂不可用"
+}
+
+function sessionCreationErrorMessage(err: unknown, fallback: string) {
+  if (err instanceof ApiError) {
+    if (err.code === "default_model_not_configured") return "尚未配置默认模型"
+    return err.message || fallback
+  }
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+function isDefaultReadinessCode(code?: string) {
+  return code === "default_model_not_configured" || code === "model_runtime_unavailable" || code?.startsWith("session_model_") || code?.startsWith("channel_")
+}
 
 async function loadConversationTurnIndex(
   sessionId: number,

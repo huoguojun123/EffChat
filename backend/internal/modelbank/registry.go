@@ -95,6 +95,20 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 128000,
 			},
 		},
+		"claude-opus-5": {
+			ID: "claude-opus-5", DisplayName: "Claude Opus 5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-sonnet-5": {
+			ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-opus-4-8": {
 			ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -125,6 +139,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Google Gemini ============
+		"gemini-3.6-flash": {
+			ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
 		"gemini-3.5-flash": {
 			ID: "gemini-3.5-flash", DisplayName: "Gemini 3.5 Flash", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{

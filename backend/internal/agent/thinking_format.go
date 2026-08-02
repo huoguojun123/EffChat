@@ -7,6 +7,8 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 	"google.golang.org/genai"
 )
 
@@ -70,6 +72,33 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		}
 	}
 	logThinkingFormat(req, format, effort)
+}
+
+// openAIResponsesReasoning maps only the effort values accepted by the typed
+// Responses SDK. Vendor-specific thinking formats and EffChat's forward-looking
+// "max" value must not leak into this wire protocol as unvalidated strings.
+func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
+	if req == nil || req.SuppressThinking {
+		return nil
+	}
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if format != modelbank.ThinkingFormatOpenAIReasoningEffort && format != modelbank.ThinkingFormatOpenAIGPT56 {
+		return nil
+	}
+	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
+	switch effort {
+	case modelbank.ThinkingEffortNone,
+		modelbank.ThinkingEffortLow,
+		modelbank.ThinkingEffortMedium,
+		modelbank.ThinkingEffortHigh,
+		modelbank.ThinkingEffortXHigh:
+		return &responses.ReasoningParam{
+			Effort:  shared.ReasoningEffort(effort),
+			Summary: shared.ReasoningSummaryAuto,
+		}
+	default:
+		return nil
+	}
 }
 
 func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {

@@ -140,6 +140,7 @@ func TestModelListConfigForChannelSupportsNativeAdapters(t *testing.T) {
 		adapter string
 	}{
 		{name: "openai compatible", adapter: service.AdapterOpenAICompatible},
+		{name: "openai responses", adapter: service.AdapterOpenAIResponses},
 		{name: "anthropic", adapter: service.AdapterAnthropic},
 		{name: "google", adapter: service.AdapterGoogle},
 	} {

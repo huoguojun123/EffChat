@@ -376,6 +376,57 @@ func TestGenerateTitleWithModelStreamsAfterBoundedSetup(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesTitleModelUsesResponsesEndpoint(t *testing.T) {
+	db := setupTitleTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_title\",\"status\":\"in_progress\",\"model\":\"gpt-5.1\",\"output\":[]}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Responses title\",\"logprobs\":[]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_title\",\"status\":\"completed\",\"model\":\"gpt-5.1\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n")
+	}))
+	defer server.Close()
+
+	channelKey := fmt.Sprintf("title-responses-%d", time.Now().UnixNano())
+	channels := NewChannelService(repository.NewChannelRepository(db))
+	enabled := true
+	if _, err := channels.SaveAIChannel(&AIChannelInput{
+		Key: channelKey, DisplayName: "Responses title", Adapter: AdapterOpenAIResponses,
+		BaseURL: server.URL + "/v1/responses", APIKey: "test-key", Enabled: &enabled,
+	}); err != nil {
+		t.Fatalf("save Responses title channel: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM ai_channels WHERE channel_key = $1", channelKey) })
+
+	svc := NewTitleService(nil, nil, nil, channels)
+	chatModel, err := svc.buildTitleChatModel(t.Context(), channelKey, "gpt-5.1")
+	if err != nil {
+		t.Fatalf("build Responses title model: %v", err)
+	}
+	result, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("title")}, time.Second)
+	if err != nil {
+		t.Fatalf("collect Responses title: %v", err)
+	}
+	if result.Content != "Responses title" {
+		t.Fatalf("title content = %q", result.Content)
+	}
+	body := <-requestBodies
+	if body["max_output_tokens"] != float64(titleMaxOutputTokens) || body["store"] != false {
+		t.Fatalf("title request = %#v", body)
+	}
+}
+
 func TestAnthropicTitleModelDoesNotHideSDKRetry(t *testing.T) {
 	db := setupTitleTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })

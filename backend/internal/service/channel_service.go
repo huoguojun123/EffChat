@@ -19,6 +19,7 @@ var (
 
 const (
 	AdapterOpenAICompatible = "openai_compatible"
+	AdapterOpenAIResponses  = "openai_responses"
 	AdapterAnthropic        = "anthropic"
 	AdapterGoogle           = "google"
 
@@ -448,7 +449,7 @@ func externalServiceFromInput(input *ExternalServiceInput) (*model.ExternalServi
 
 func validAdapter(adapter string) bool {
 	switch adapter {
-	case AdapterOpenAICompatible, AdapterAnthropic, AdapterGoogle:
+	case AdapterOpenAICompatible, AdapterOpenAIResponses, AdapterAnthropic, AdapterGoogle:
 		return true
 	default:
 		return false
@@ -502,13 +503,14 @@ func effectiveExternalServiceBaseURL(key, value string) string {
 	}
 }
 
-// NormalizeOpenAICompatibleBaseURL keeps AI channel base URLs at the API root.
+// NormalizeOpenAICompatibleBaseURL keeps OpenAI-family channel base URLs at the API root.
 // Admins sometimes paste concrete OpenAI endpoints such as /responses,
-// /chat/completions, or /models. Eino's OpenAI-compatible adapter expects the
-// root ending at /v1, and the model-list probe appends /models itself.
+// /chat/completions, or /models. Both Eino OpenAI adapters expect the root
+// ending at /v1, and the model-list probe appends /models itself.
 func NormalizeOpenAICompatibleBaseURL(adapter string, raw string) string {
 	base := strings.TrimRight(strings.TrimSpace(raw), "/")
-	if normalizeKey(adapter) != AdapterOpenAICompatible {
+	adapter = normalizeKey(adapter)
+	if adapter != AdapterOpenAICompatible && adapter != AdapterOpenAIResponses {
 		return base
 	}
 	for {

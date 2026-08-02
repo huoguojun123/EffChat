@@ -208,6 +208,21 @@ func TestChannelFromInputRejectsInvalidAdapter(t *testing.T) {
 	}
 }
 
+func TestChannelFromInputAcceptsOpenAIResponsesAdapter(t *testing.T) {
+	item, _, err := channelFromInput(&AIChannelInput{
+		Key:         "responses",
+		DisplayName: "OpenAI Responses",
+		Adapter:     AdapterOpenAIResponses,
+		BaseURL:     "https://api.openai.com/v1/responses",
+	})
+	if err != nil {
+		t.Fatalf("channelFromInput() error = %v", err)
+	}
+	if item.Adapter != AdapterOpenAIResponses || item.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("responses channel = %#v", item)
+	}
+}
+
 func TestNormalizeOpenAICompatibleBaseURLTrimsConcreteEndpoints(t *testing.T) {
 	tests := map[string]string{
 		"https://api.openai.com/v1/responses":        "https://api.openai.com/v1",
@@ -216,8 +231,10 @@ func TestNormalizeOpenAICompatibleBaseURLTrimsConcreteEndpoints(t *testing.T) {
 		"https://gateway.example.com":                "https://gateway.example.com",
 	}
 	for input, want := range tests {
-		if got := NormalizeOpenAICompatibleBaseURL(AdapterOpenAICompatible, input); got != want {
-			t.Fatalf("NormalizeOpenAICompatibleBaseURL(%q) = %q, want %q", input, got, want)
+		for _, adapter := range []string{AdapterOpenAICompatible, AdapterOpenAIResponses} {
+			if got := NormalizeOpenAICompatibleBaseURL(adapter, input); got != want {
+				t.Fatalf("NormalizeOpenAICompatibleBaseURL(%q, %q) = %q, want %q", adapter, input, got, want)
+			}
 		}
 	}
 }

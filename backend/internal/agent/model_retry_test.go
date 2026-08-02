@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/providerhttp"
+	openaisdk "github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 )
 
@@ -123,6 +124,21 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 		status     int
 		retryAfter time.Duration
 	}{
+		{
+			name: "openai responses rate limit",
+			err: &openaisdk.Error{
+				StatusCode: http.StatusTooManyRequests,
+				Message:    "rate limited",
+				Response: &http.Response{Header: http.Header{
+					"Retry-After": []string{"12"},
+				}},
+			},
+			code:       "model_rate_limited",
+			category:   RuntimeErrorTransient,
+			retryable:  true,
+			status:     http.StatusTooManyRequests,
+			retryAfter: 12 * time.Second,
+		},
 		{
 			name:      "openai rate limit",
 			err:       &einoopenai.APIError{HTTPStatusCode: http.StatusTooManyRequests},

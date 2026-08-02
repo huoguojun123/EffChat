@@ -309,7 +309,7 @@ export interface ModelTestResponse {
   error?: string
 }
 
-export type AIChannelAdapter = "openai_compatible" | "anthropic" | "google"
+export type AIChannelAdapter = "openai_compatible" | "openai_responses" | "anthropic" | "google"
 
 export interface AIChannel {
   id: number

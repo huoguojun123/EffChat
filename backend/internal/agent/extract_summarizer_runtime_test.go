@@ -95,6 +95,62 @@ func TestBuildExtractSummarizerUsesAcceptedRuntimeWithoutLiveConfigRead(t *testi
 	}
 }
 
+func TestBuildExtractSummarizerUsesOpenAIResponsesAdapter(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_refiner\",\"status\":\"in_progress\",\"model\":\"gpt-5.1\",\"output\":[]}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"accepted responses summary\",\"logprobs\":[]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_refiner\",\"status\":\"completed\",\"model\":\"gpt-5.1\",\"output\":[],\"usage\":{\"input_tokens\":8,\"output_tokens\":4,\"total_tokens\":12}}}\n\n")
+	}))
+	defer server.Close()
+
+	modelID := "responses-refiner-model"
+	acceptedInfo := &modelbank.ModelInfo{
+		ID: modelID, DisplayName: modelID, Provider: "responses-refiner", Enabled: true,
+		ThinkingFormat: string(modelbank.ThinkingFormatOpenAIReasoningEffort),
+		Capabilities: modelbank.ModelCapabilities{
+			ContextWindow: 32000, MaxOutput: 2048, Reasoning: true,
+		},
+	}
+	acceptedChannel := &model.AIChannel{
+		Key: "responses-refiner", DisplayName: "Responses refiner", Adapter: service.AdapterOpenAIResponses,
+		BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true,
+	}
+	agent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, repository.NewConfigRepository(nil), nil, nil, nil, nil, nil)
+	built, enabled, err := agent.buildExtractSummarizer(t.Context(), &ChatRequest{
+		RuntimeResolved:                true,
+		RuntimeExtractSummaryEnabled:   true,
+		RuntimeExtractSummaryModel:     modelID,
+		RuntimeExtractSummaryModelInfo: acceptedInfo,
+		RuntimeExtractSummaryChannel:   acceptedChannel,
+	})
+	if err != nil || !enabled {
+		t.Fatalf("buildExtractSummarizer() enabled=%t err=%v", enabled, err)
+	}
+	got, err := built.Summarize(t.Context(), "goal", "title", "content", "summary")
+	if err != nil || got != "accepted responses summary" {
+		t.Fatalf("Summarize() = %q, err=%v", got, err)
+	}
+	body := <-requestBodies
+	if body["max_output_tokens"] != float64(acceptedInfo.Capabilities.MaxOutput) || body["store"] != false {
+		t.Fatalf("refinement request = %#v", body)
+	}
+	if _, exists := body["reasoning"]; exists {
+		t.Fatalf("utility refinement must suppress reasoning: %#v", body)
+	}
+}
+
 func TestBuildExtractSummarizerKeepsAcceptedUnavailableRuntimeDegraded(t *testing.T) {
 	db := testutil.OpenPostgresTestDB(t)
 	defer db.Close()

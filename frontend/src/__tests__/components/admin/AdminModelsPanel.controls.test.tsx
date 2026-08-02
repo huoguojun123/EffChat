@@ -23,4 +23,21 @@ describe("ModelTestStatus", () => {
     expect(html).toContain("NOT OK")
     expect(html).not.toContain(">连通失败<")
   })
+
+  it("makes an empty completed probe response explicit", () => {
+    const html = renderToStaticMarkup(
+      <ModelTestStatus
+        result={{
+          ok: false,
+          model_id: "fixture-model",
+          provider: "fixture-provider",
+          code: "model_probe_unexpected_output",
+          error: "model probe returned an unexpected response",
+        }}
+      />,
+    )
+
+    expect(html).toContain("响应不符合探测要求")
+    expect(html).toContain("模型返回：空文本")
+  })
 })

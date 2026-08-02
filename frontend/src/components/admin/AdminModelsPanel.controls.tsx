@@ -43,7 +43,7 @@ export function ModelTestStatus({ result }: { result: ModelTestResponse }) {
         {typeof result.duration_ms === "number" ? <span className="text-xs font-normal text-foreground/65">{formatDuration(result.duration_ms)}</span> : null}
       </div>
       <div className="line-clamp-2 text-sm text-foreground/80">{detail}</div>
-      {unexpectedOutput && result.output ? <div className="line-clamp-2 text-xs text-foreground/70">模型返回：{result.output}</div> : null}
+      {unexpectedOutput ? <div className="line-clamp-2 text-xs text-foreground/70">模型返回：{result.output || "空文本"}</div> : null}
     </div>
   )
 }

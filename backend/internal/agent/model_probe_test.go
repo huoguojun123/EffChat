@@ -81,6 +81,54 @@ func TestPrepareModelProbeDoesNotRetainCanceledSetupContext(t *testing.T) {
 	}
 }
 
+func TestPrepareModelProbeUsesOpenAIResponsesAdapter(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_probe\",\"status\":\"in_progress\",\"model\":\"gpt-5.1\",\"output\":[]}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"sequence_number\":1,\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OK\",\"logprobs\":[]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"sequence_number\":2,\"response\":{\"id\":\"resp_probe\",\"status\":\"completed\",\"model\":\"gpt-5.1\",\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4}}}\n\n")
+	}))
+	defer server.Close()
+
+	einoAgent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	result, err := einoAgent.TestModel(t.Context(), &ChatRequest{
+		ModelID:         "gpt-5.1",
+		Provider:        "responses-probe",
+		RuntimeResolved: true,
+		RuntimeChannel: &model.AIChannel{
+			Key:     "responses-probe",
+			Adapter: service.AdapterOpenAIResponses,
+			BaseURL: server.URL + "/v1",
+			APIKey:  "test-key",
+			Enabled: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("TestModel() error = %v", err)
+	}
+	if result.Output != "OK" {
+		t.Fatalf("probe result = %#v", result)
+	}
+	body := <-requestBodies
+	if body["max_output_tokens"] != float64(modelProbeMaxOutputTokens) || body["store"] != false {
+		t.Fatalf("probe request = %#v", body)
+	}
+	if _, exists := body["reasoning"]; exists {
+		t.Fatalf("minimal probe must suppress reasoning: %#v", body)
+	}
+}
+
 func TestPreparedModelProbeRejectsMissingLifecycleInputs(t *testing.T) {
 	einoAgent := &EinoAgent{}
 	if _, err := einoAgent.PrepareModelProbe(nil, &ChatRequest{}); err == nil {

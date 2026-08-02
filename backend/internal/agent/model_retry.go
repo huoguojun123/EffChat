@@ -20,6 +20,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/providerhttp"
+	openaisdk "github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 )
 
@@ -258,6 +259,17 @@ func structuredModelHTTPError(err error) (int, http.Header, string) {
 	var openAIErr *einoopenai.APIError
 	if errors.As(err, &openAIErr) {
 		return openAIErr.HTTPStatusCode, nil, openAIErr.Message
+	}
+	// The typed Responses component uses openai-go/v3 directly rather than
+	// Eino's legacy Chat Completions APIError. Preserve status and Retry-After
+	// so both OpenAI wire protocols remain under the same EffChat retry owner.
+	var responsesErr *openaisdk.Error
+	if errors.As(err, &responsesErr) {
+		var headers http.Header
+		if responsesErr.Response != nil {
+			headers = responsesErr.Response.Header
+		}
+		return responsesErr.StatusCode, headers, responsesErr.Message
 	}
 	var anthropicErr *anthropic.Error
 	if errors.As(err, &anthropicErr) {

@@ -61,3 +61,50 @@ func ResolveTemperatureForRequest(policy string, fixed, requested *float64) (*fl
 		return &value, nil
 	}
 }
+
+// ValidateOpenAIRequestProfile keeps compatibility overrides typed and
+// bounded before they reach either PostgreSQL or an upstream request.
+func ValidateOpenAIRequestProfile(profile OpenAIRequestProfile) error {
+	if profile.TopP != nil && (math.IsNaN(*profile.TopP) || math.IsInf(*profile.TopP, 0) || *profile.TopP < 0 || *profile.TopP > 1) {
+		return fmt.Errorf("openai top_p must be between 0 and 1")
+	}
+	if profile.N != nil && *profile.N < 1 {
+		return fmt.Errorf("openai n must be at least 1")
+	}
+	if profile.PresencePenalty != nil && (math.IsNaN(*profile.PresencePenalty) || math.IsInf(*profile.PresencePenalty, 0) || *profile.PresencePenalty < -2 || *profile.PresencePenalty > 2) {
+		return fmt.Errorf("openai presence_penalty must be between -2 and 2")
+	}
+	if profile.FrequencyPenalty != nil && (math.IsNaN(*profile.FrequencyPenalty) || math.IsInf(*profile.FrequencyPenalty, 0) || *profile.FrequencyPenalty < -2 || *profile.FrequencyPenalty > 2) {
+		return fmt.Errorf("openai frequency_penalty must be between -2 and 2")
+	}
+	return nil
+}
+
+func CloneOpenAIRequestProfile(profile OpenAIRequestProfile) OpenAIRequestProfile {
+	return OpenAIRequestProfile{
+		TopP:             cloneOptionalFloat64(profile.TopP),
+		N:                cloneOptionalInt(profile.N),
+		PresencePenalty:  cloneOptionalFloat64(profile.PresencePenalty),
+		FrequencyPenalty: cloneOptionalFloat64(profile.FrequencyPenalty),
+	}
+}
+
+func OpenAIRequestProfileEmpty(profile OpenAIRequestProfile) bool {
+	return profile.TopP == nil && profile.N == nil && profile.PresencePenalty == nil && profile.FrequencyPenalty == nil
+}
+
+func cloneOptionalFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}

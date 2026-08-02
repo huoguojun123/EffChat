@@ -67,8 +67,9 @@ type runtimeModelMaterial struct {
 	// Keep the backwards-compatible configurable default out of the checksum
 	// JSON so pre-047 accepted runs are not invalidated by a no-op schema field.
 	// Omit/fixed policies remain checksum-owned runtime dependencies.
-	TemperaturePolicy string   `json:"TemperaturePolicy,omitempty"`
-	TemperatureValue  *float64 `json:"TemperatureValue,omitempty"`
+	TemperaturePolicy    string                      `json:"TemperaturePolicy,omitempty"`
+	TemperatureValue     *float64                    `json:"TemperatureValue,omitempty"`
+	OpenAIRequestProfile *model.OpenAIRequestProfile `json:"OpenAIRequestProfile,omitempty"`
 }
 
 type runtimeChannelMaterial struct {
@@ -142,18 +143,27 @@ func runtimeModelInfoMaterial(info *modelbank.ModelInfo) runtimeModelMaterial {
 		materialPolicy = ""
 	}
 	return runtimeModelMaterial{
-		ID:                info.ID,
-		Provider:          info.Provider,
-		Vision:            info.Capabilities.Vision,
-		ToolUse:           info.Capabilities.ToolUse,
-		Reasoning:         info.Capabilities.Reasoning,
-		Thinking:          info.ThinkingFormat,
-		SearchImpl:        info.Capabilities.SearchImpl,
-		ContextWindow:     info.Capabilities.ContextWindow,
-		MaxOutput:         info.Capabilities.MaxOutput,
-		TemperaturePolicy: materialPolicy,
-		TemperatureValue:  cloneFloat64Value(info.TemperatureValue),
+		ID:                   info.ID,
+		Provider:             info.Provider,
+		Vision:               info.Capabilities.Vision,
+		ToolUse:              info.Capabilities.ToolUse,
+		Reasoning:            info.Capabilities.Reasoning,
+		Thinking:             info.ThinkingFormat,
+		SearchImpl:           info.Capabilities.SearchImpl,
+		ContextWindow:        info.Capabilities.ContextWindow,
+		MaxOutput:            info.Capabilities.MaxOutput,
+		TemperaturePolicy:    materialPolicy,
+		TemperatureValue:     cloneFloat64Value(info.TemperatureValue),
+		OpenAIRequestProfile: cloneOpenAIRequestProfilePointer(info.OpenAIRequestProfile),
 	}
+}
+
+func cloneOpenAIRequestProfilePointer(profile model.OpenAIRequestProfile) *model.OpenAIRequestProfile {
+	if model.OpenAIRequestProfileEmpty(profile) {
+		return nil
+	}
+	clone := model.CloneOpenAIRequestProfile(profile)
+	return &clone
 }
 
 func cloneFloat64Value(value *float64) *float64 {
@@ -293,6 +303,7 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	req.TemperaturePolicy = currentReq.TemperaturePolicy
 	req.TemperatureValue = cloneFloat64Value(currentReq.TemperatureValue)
 	req.Temperature = cloneFloat64Value(currentReq.Temperature)
+	req.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(currentReq.OpenAIRequestProfile)
 	return nil
 }
 
@@ -351,6 +362,7 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	req.TemperaturePolicy = acceptedTemperaturePolicy
 	req.TemperatureValue = cloneFloat64Value(modelInfo.TemperatureValue)
 	req.Temperature = effectiveTemperature
+	req.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile)
 	channelMaterial := runtimeAIChannelMaterial(channel)
 	requestMaterial := runtimeRequestMaterial{
 		SystemName: req.SystemName, SystemPrompt: req.SystemPrompt, Temperature: req.Temperature,

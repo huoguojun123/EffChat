@@ -40,10 +40,31 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 
 	switch channel.Adapter {
 	case service.AdapterOpenAICompatible:
+		openAIProfile := model.CloneOpenAIRequestProfile(req.OpenAIRequestProfile)
+		if err := model.ValidateOpenAIRequestProfile(openAIProfile); err != nil {
+			return nil, fmt.Errorf("invalid OpenAI-compatible request profile: %w", err)
+		}
 		cfg := &openai.ChatModelConfig{
-			Model:       req.ModelID,
-			APIKey:      channel.APIKey,
-			Temperature: ptrFloat32(temperature),
+			Model:            req.ModelID,
+			APIKey:           channel.APIKey,
+			Temperature:      ptrFloat32(temperature),
+			TopP:             ptrFloat32(openAIProfile.TopP),
+			PresencePenalty:  ptrFloat32(openAIProfile.PresencePenalty),
+			FrequencyPenalty: ptrFloat32(openAIProfile.FrequencyPenalty),
+		}
+		// Eino exposes top_p and both penalties as typed config fields, but its
+		// current component config does not expose n and the OpenAI SDK omits
+		// numeric zero penalties after dereferencing them. Bridge only those
+		// already-validated typed values through ExtraFields at this adapter
+		// boundary; administrators still cannot provide arbitrary JSON.
+		if openAIProfile.N != nil {
+			setOpenAIExtraField(cfg, "n", *openAIProfile.N)
+		}
+		if openAIProfile.PresencePenalty != nil && *openAIProfile.PresencePenalty == 0 {
+			setOpenAIExtraField(cfg, "presence_penalty", 0)
+		}
+		if openAIProfile.FrequencyPenalty != nil && *openAIProfile.FrequencyPenalty == 0 {
+			setOpenAIExtraField(cfg, "frequency_penalty", 0)
 		}
 		applyOpenAITokenLimit(req, cfg)
 		if channel.BaseURL != "" {

@@ -9,14 +9,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 type testModelRequest struct {
-	ID                string   `json:"id"`
-	Provider          string   `json:"provider"`
-	TemperaturePolicy string   `json:"temperature_policy"`
-	TemperatureValue  *float64 `json:"temperature_value"`
+	ID                   string                     `json:"id"`
+	Provider             string                     `json:"provider"`
+	TemperaturePolicy    string                     `json:"temperature_policy"`
+	TemperatureValue     *float64                   `json:"temperature_value"`
+	OpenAIRequestProfile model.OpenAIRequestProfile `json:"openai_request_profile"`
 }
 
 const modelProbeSetupTimeout = 10 * time.Second
@@ -48,10 +50,11 @@ func TestModelHandler(einoAgent *agent.EinoAgent) gin.HandlerFunc {
 
 		setupCtx, setupCancel := context.WithTimeout(c.Request.Context(), modelProbeSetupTimeout)
 		prepared, err := einoAgent.PrepareModelProbe(setupCtx, &agent.ChatRequest{
-			ModelID:           modelID,
-			Provider:          provider,
-			TemperaturePolicy: req.TemperaturePolicy,
-			TemperatureValue:  req.TemperatureValue,
+			ModelID:              modelID,
+			Provider:             provider,
+			TemperaturePolicy:    req.TemperaturePolicy,
+			TemperatureValue:     req.TemperatureValue,
+			OpenAIRequestProfile: model.CloneOpenAIRequestProfile(req.OpenAIRequestProfile),
 		})
 		setupCancel()
 		if err != nil {

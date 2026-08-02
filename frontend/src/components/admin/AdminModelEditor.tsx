@@ -78,6 +78,7 @@ export function AdminModelEditor({
   const thinkingFallbackFormat = showThinkingFallback ? currentModel?.resolved_thinking_format || "" : ""
   const runtimeProfile = currentModel?.runtime_profile
   const runtimeThinkingOptions = runtimeProfile?.thinking_effort_options || currentModel?.thinking_effort_options || []
+  const showOpenAIRequestProfile = currentModel?.channel_adapter === "openai_compatible"
 
   return (
     <div className={`min-h-0 flex-col overflow-hidden lg:flex ${mobileDetailOpen ? "flex" : "hidden lg:flex"}`}>
@@ -220,6 +221,67 @@ export function AdminModelEditor({
                       </div>
                     )}
                   </div>
+                  {showOpenAIRequestProfile ? (
+                    <div className="border-t border-border/60 pt-3">
+                      <div className="mb-2 text-sm font-semibold">OpenAI-compatible 固定参数</div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <Field label="Top P">
+                          <Input
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={currentDraft.openai_request_profile?.top_p ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              top_p: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                        <Field label="候选数量 (n)">
+                          <Input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={currentDraft.openai_request_profile?.n ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              n: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                        <Field label="Presence penalty">
+                          <Input
+                            type="number"
+                            min="-2"
+                            max="2"
+                            step="0.1"
+                            value={currentDraft.openai_request_profile?.presence_penalty ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              presence_penalty: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                        <Field label="Frequency penalty">
+                          <Input
+                            type="number"
+                            min="-2"
+                            max="2"
+                            step="0.1"
+                            value={currentDraft.openai_request_profile?.frequency_penalty ?? ""}
+                            onChange={(e) => updateCurrentDraft({ openai_request_profile: {
+                              ...currentDraft.openai_request_profile,
+                              frequency_penalty: e.target.value === "" ? null : Number(e.target.value),
+                            } })}
+                          />
+                        </Field>
+                      </div>
+                      <p className="mt-2 text-xs leading-snug text-muted-foreground">
+                        留空时不发送对应字段；仅用于需要显式固定采样参数的 OpenAI-compatible 模型。
+                      </p>
+                    </div>
+                  ) : null}
                   <Field label="思考方式">
                     <Select value={draftThinkingFormat} onChange={(thinking_format) => updateCurrentDraft({ thinking_format })}>
                       {thinkingFormatOptions.map((item) => (

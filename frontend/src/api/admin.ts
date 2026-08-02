@@ -299,6 +299,7 @@ export interface ModelTestInput {
   provider: string
   temperature_policy?: Model["temperature_policy"]
   temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface ModelTestResponse {
@@ -418,6 +419,7 @@ export interface CreateModelInput {
   lifecycle_status?: Model["lifecycle_status"]
   temperature_policy?: Model["temperature_policy"]
   temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface UpdateModelInput {
@@ -438,6 +440,7 @@ export interface UpdateModelInput {
   lifecycle_status?: Model["lifecycle_status"]
   temperature_policy?: Model["temperature_policy"]
   temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface CreateGroupInput {

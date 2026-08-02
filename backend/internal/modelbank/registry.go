@@ -306,13 +306,14 @@ func LoadModels(models []*model.Model) {
 	registry = make(map[string]*ModelInfo, len(models))
 	for _, m := range models {
 		registry[m.ID] = &ModelInfo{
-			ID:                m.ID,
-			DisplayName:       m.DisplayName,
-			Provider:          m.Provider,
-			Enabled:           m.Enabled,
-			ThinkingFormat:    m.ThinkingFormat,
-			TemperaturePolicy: model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
-			TemperatureValue:  cloneFloat64Pointer(m.TemperatureValue),
+			ID:                   m.ID,
+			DisplayName:          m.DisplayName,
+			Provider:             m.Provider,
+			Enabled:              m.Enabled,
+			ThinkingFormat:       m.ThinkingFormat,
+			TemperaturePolicy:    model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
+			TemperatureValue:     cloneFloat64Pointer(m.TemperatureValue),
+			OpenAIRequestProfile: model.CloneOpenAIRequestProfile(m.OpenAIRequestProfile),
 			Capabilities: ModelCapabilities{
 				Vision:        m.Vision,
 				ToolUse:       m.ToolUse,

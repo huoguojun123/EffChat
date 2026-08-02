@@ -32,6 +32,7 @@ function model(overrides: Partial<Model> = {}): Model {
     lifecycle_status: "unknown",
     temperature_policy: "configurable",
     temperature_value: null,
+    openai_request_profile: {},
     ...overrides,
   }
 }
@@ -48,13 +49,18 @@ describe("AdminModelsPanel helpers", () => {
   })
 
   it("maps persisted models to editable drafts and update patches", () => {
-    const draft = toModelDraft(model({ thinking_format: "", min_group_level: 2 }))
+    const draft = toModelDraft(model({
+      thinking_format: "",
+      min_group_level: 2,
+      openai_request_profile: { top_p: 1, n: 1, presence_penalty: 0, frequency_penalty: 0 },
+    }))
     const patch = toModelPatch(draft)
 
     expect(draft.thinking_format).toBe("auto")
     expect(draft.min_group_level).toBe(2)
     expect(patch).not.toHaveProperty("id")
     expect(patch.provider).toBe("openai")
+    expect(patch.openai_request_profile).toEqual({ top_p: 1, n: 1, presence_penalty: 0, frequency_penalty: 0 })
   })
 
   it("extracts only catalog capability fields", () => {

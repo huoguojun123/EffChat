@@ -116,6 +116,7 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 		SearchImpl:              modelInfo.Capabilities.SearchImpl,
 		TemperaturePolicy:       modelInfo.TemperaturePolicy,
 		TemperatureValue:        cloneFloat64Pointer(modelInfo.TemperatureValue),
+		OpenAIRequestProfile:    model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile),
 		ThinkingEffort:          thinkingEffort,
 		SearchMode:              resolveSessionSearchMode(session.SearchMode),
 		PreferModelNativeSearch: true,

@@ -31,45 +31,47 @@ func NewModelService(modelRepo *repository.ModelRepository, channelServices ...*
 
 // CreateModelRequest 新建模型请求
 type CreateModelRequest struct {
-	ID                string     `json:"id" binding:"required"`
-	DisplayName       string     `json:"display_name" binding:"required"`
-	Provider          string     `json:"provider" binding:"required"`
-	Vision            bool       `json:"vision"`
-	ToolUse           bool       `json:"tool_use"`
-	Reasoning         bool       `json:"reasoning"`
-	ThinkingFormat    string     `json:"thinking_format"`
-	SearchImpl        string     `json:"search_impl"`
-	ContextWindow     int        `json:"context_window"`
-	MaxOutput         int        `json:"max_output"`
-	Enabled           *bool      `json:"enabled"` // 指针：缺省时默认 true
-	MinGroupLevel     int        `json:"min_group_level"`
-	SortOrder         int        `json:"sort_order"`
-	CatalogSource     string     `json:"catalog_source"`
-	CatalogCheckedAt  *time.Time `json:"catalog_checked_at"`
-	LifecycleStatus   string     `json:"lifecycle_status"`
-	TemperaturePolicy string     `json:"temperature_policy"`
-	TemperatureValue  *float64   `json:"temperature_value"`
+	ID                   string                     `json:"id" binding:"required"`
+	DisplayName          string                     `json:"display_name" binding:"required"`
+	Provider             string                     `json:"provider" binding:"required"`
+	Vision               bool                       `json:"vision"`
+	ToolUse              bool                       `json:"tool_use"`
+	Reasoning            bool                       `json:"reasoning"`
+	ThinkingFormat       string                     `json:"thinking_format"`
+	SearchImpl           string                     `json:"search_impl"`
+	ContextWindow        int                        `json:"context_window"`
+	MaxOutput            int                        `json:"max_output"`
+	Enabled              *bool                      `json:"enabled"` // 指针：缺省时默认 true
+	MinGroupLevel        int                        `json:"min_group_level"`
+	SortOrder            int                        `json:"sort_order"`
+	CatalogSource        string                     `json:"catalog_source"`
+	CatalogCheckedAt     *time.Time                 `json:"catalog_checked_at"`
+	LifecycleStatus      string                     `json:"lifecycle_status"`
+	TemperaturePolicy    string                     `json:"temperature_policy"`
+	TemperatureValue     *float64                   `json:"temperature_value"`
+	OpenAIRequestProfile model.OpenAIRequestProfile `json:"openai_request_profile"`
 }
 
 // UpdateModelRequest 更新模型请求（指针字段，仅更新提供的项）
 type UpdateModelRequest struct {
-	DisplayName       *string    `json:"display_name"`
-	Provider          *string    `json:"provider"`
-	Vision            *bool      `json:"vision"`
-	ToolUse           *bool      `json:"tool_use"`
-	Reasoning         *bool      `json:"reasoning"`
-	ThinkingFormat    *string    `json:"thinking_format"`
-	SearchImpl        *string    `json:"search_impl"`
-	ContextWindow     *int       `json:"context_window"`
-	MaxOutput         *int       `json:"max_output"`
-	Enabled           *bool      `json:"enabled"`
-	MinGroupLevel     *int       `json:"min_group_level"`
-	SortOrder         *int       `json:"sort_order"`
-	CatalogSource     *string    `json:"catalog_source"`
-	CatalogCheckedAt  *time.Time `json:"catalog_checked_at"`
-	LifecycleStatus   *string    `json:"lifecycle_status"`
-	TemperaturePolicy *string    `json:"temperature_policy"`
-	TemperatureValue  *float64   `json:"temperature_value"`
+	DisplayName          *string                     `json:"display_name"`
+	Provider             *string                     `json:"provider"`
+	Vision               *bool                       `json:"vision"`
+	ToolUse              *bool                       `json:"tool_use"`
+	Reasoning            *bool                       `json:"reasoning"`
+	ThinkingFormat       *string                     `json:"thinking_format"`
+	SearchImpl           *string                     `json:"search_impl"`
+	ContextWindow        *int                        `json:"context_window"`
+	MaxOutput            *int                        `json:"max_output"`
+	Enabled              *bool                       `json:"enabled"`
+	MinGroupLevel        *int                        `json:"min_group_level"`
+	SortOrder            *int                        `json:"sort_order"`
+	CatalogSource        *string                     `json:"catalog_source"`
+	CatalogCheckedAt     *time.Time                  `json:"catalog_checked_at"`
+	LifecycleStatus      *string                     `json:"lifecycle_status"`
+	TemperaturePolicy    *string                     `json:"temperature_policy"`
+	TemperatureValue     *float64                    `json:"temperature_value"`
+	OpenAIRequestProfile *model.OpenAIRequestProfile `json:"openai_request_profile"`
 }
 
 // validModelFields 模型字段校验值
@@ -95,6 +97,9 @@ func validateModelInput(m *model.Model) error {
 		return fmt.Errorf("%w: invalid thinking_format", ErrModelInvalid)
 	}
 	if err := model.ValidateTemperatureProfile(m.TemperaturePolicy, m.TemperatureValue); err != nil {
+		return fmt.Errorf("%w: %v", ErrModelInvalid, err)
+	}
+	if err := model.ValidateOpenAIRequestProfile(m.OpenAIRequestProfile); err != nil {
 		return fmt.Errorf("%w: %v", ErrModelInvalid, err)
 	}
 	if m.ContextWindow < 0 {
@@ -172,24 +177,25 @@ func (s *ModelService) Create(req *CreateModelRequest) (*model.Model, error) {
 	}
 
 	m := &model.Model{
-		ID:                req.ID,
-		DisplayName:       req.DisplayName,
-		Provider:          req.Provider,
-		Vision:            req.Vision,
-		ToolUse:           req.ToolUse,
-		Reasoning:         req.Reasoning,
-		ThinkingFormat:    modelbank.NormalizeThinkingFormat(req.ThinkingFormat),
-		SearchImpl:        req.SearchImpl,
-		ContextWindow:     req.ContextWindow,
-		MaxOutput:         req.MaxOutput,
-		Enabled:           enabled,
-		MinGroupLevel:     req.MinGroupLevel,
-		SortOrder:         req.SortOrder,
-		CatalogSource:     model.NormalizeCatalogSource(req.CatalogSource),
-		CatalogCheckedAt:  req.CatalogCheckedAt,
-		LifecycleStatus:   model.NormalizeModelLifecycleStatus(req.LifecycleStatus),
-		TemperaturePolicy: model.NormalizeTemperaturePolicy(req.TemperaturePolicy),
-		TemperatureValue:  req.TemperatureValue,
+		ID:                   req.ID,
+		DisplayName:          req.DisplayName,
+		Provider:             req.Provider,
+		Vision:               req.Vision,
+		ToolUse:              req.ToolUse,
+		Reasoning:            req.Reasoning,
+		ThinkingFormat:       modelbank.NormalizeThinkingFormat(req.ThinkingFormat),
+		SearchImpl:           req.SearchImpl,
+		ContextWindow:        req.ContextWindow,
+		MaxOutput:            req.MaxOutput,
+		Enabled:              enabled,
+		MinGroupLevel:        req.MinGroupLevel,
+		SortOrder:            req.SortOrder,
+		CatalogSource:        model.NormalizeCatalogSource(req.CatalogSource),
+		CatalogCheckedAt:     req.CatalogCheckedAt,
+		LifecycleStatus:      model.NormalizeModelLifecycleStatus(req.LifecycleStatus),
+		TemperaturePolicy:    model.NormalizeTemperaturePolicy(req.TemperaturePolicy),
+		TemperatureValue:     req.TemperatureValue,
+		OpenAIRequestProfile: model.CloneOpenAIRequestProfile(req.OpenAIRequestProfile),
 	}
 
 	if err := validateModelInput(m); err != nil {
@@ -273,6 +279,9 @@ func (s *ModelService) Update(id string, req *UpdateModelRequest) (*model.Model,
 	}
 	if req.TemperatureValue != nil {
 		m.TemperatureValue = req.TemperatureValue
+	}
+	if req.OpenAIRequestProfile != nil {
+		m.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(*req.OpenAIRequestProfile)
 	}
 
 	if err := validateModelInput(m); err != nil {

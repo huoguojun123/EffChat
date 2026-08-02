@@ -15,6 +15,8 @@ func TestModelRepositoryPersistsCatalogMetadata(t *testing.T) {
 	modelID := fmt.Sprintf("catalog-metadata-%d", time.Now().UnixNano())
 	checkedAt := time.Date(2026, time.August, 2, 8, 30, 0, 0, time.UTC)
 	fixedTemperature := 1.0
+	topP, presencePenalty, frequencyPenalty := 1.0, 0.0, 0.0
+	n := 1
 	repo := NewModelRepository(db)
 	item := &model.Model{
 		ID: modelID, DisplayName: "Catalog Fixture", Provider: "fixture-channel",
@@ -22,6 +24,9 @@ func TestModelRepositoryPersistsCatalogMetadata(t *testing.T) {
 		CatalogSource: model.CatalogSourceModelsDev, CatalogCheckedAt: &checkedAt,
 		LifecycleStatus:   model.ModelLifecyclePreview,
 		TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &fixedTemperature,
+		OpenAIRequestProfile: model.OpenAIRequestProfile{
+			TopP: &topP, N: &n, PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+		},
 	}
 	if err := repo.Upsert(item); err != nil {
 		t.Fatalf("upsert model metadata: %v", err)
@@ -40,6 +45,11 @@ func TestModelRepositoryPersistsCatalogMetadata(t *testing.T) {
 	}
 	if stored.TemperaturePolicy != model.TemperaturePolicyFixed || stored.TemperatureValue == nil || *stored.TemperatureValue != fixedTemperature {
 		t.Fatalf("temperature profile = %q/%v", stored.TemperaturePolicy, stored.TemperatureValue)
+	}
+	profile := stored.OpenAIRequestProfile
+	if profile.TopP == nil || *profile.TopP != 1 || profile.N == nil || *profile.N != 1 ||
+		profile.PresencePenalty == nil || *profile.PresencePenalty != 0 || profile.FrequencyPenalty == nil || *profile.FrequencyPenalty != 0 {
+		t.Fatalf("OpenAI request profile = %#v", profile)
 	}
 }
 

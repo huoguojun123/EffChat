@@ -214,6 +214,7 @@ export interface Model {
   lifecycle_status: "active" | "preview" | "deprecated" | "retired" | "unknown"
   temperature_policy: "configurable" | "omit" | "fixed"
   temperature_value?: number | null
+  openai_request_profile: OpenAIRequestProfile
   resolved_thinking_format?: string
   default_thinking_effort?: string
   thinking_effort_options?: ThinkingEffortOption[]
@@ -222,6 +223,13 @@ export interface Model {
   channel_adapter?: string
   channel_enabled?: boolean
   channel_configured?: boolean
+}
+
+export interface OpenAIRequestProfile {
+  top_p?: number | null
+  n?: number | null
+  presence_penalty?: number | null
+  frequency_penalty?: number | null
 }
 
 export interface ThinkingEffortOption {
@@ -241,6 +249,7 @@ export interface ModelRuntimeProfile {
   search_impl: string
   temperature_policy: Model["temperature_policy"]
   temperature_value?: number | null
+  openai_request_profile: OpenAIRequestProfile
 }
 
 // UserGroup 用户分级组，level 越大权限越高

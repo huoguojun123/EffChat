@@ -28,6 +28,8 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	channelService := service.NewChannelService(repository.NewChannelRepository(db))
 	enabled := true
 	fixedTemperature := 1.0
+	topP, presencePenalty, frequencyPenalty := 1.0, 0.0, 0.0
+	n := 1
 	if _, err := channelService.SaveAIChannel(&service.AIChannelInput{
 		Key: channelKey, DisplayName: "Runtime snapshot", Adapter: service.AdapterOpenAICompatible,
 		BaseURL: "https://gateway.example.test/v1", APIKey: "secret-key-one", Enabled: &enabled,
@@ -37,6 +39,9 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	modelbank.Register(&modelbank.ModelInfo{
 		ID: modelID, DisplayName: modelID, Provider: channelKey, Enabled: true, ThinkingFormat: "auto",
 		TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &fixedTemperature,
+		OpenAIRequestProfile: model.OpenAIRequestProfile{
+			TopP: &topP, N: &n, PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+		},
 		Capabilities: modelbank.ModelCapabilities{
 			Vision: true, ToolUse: true, Reasoning: true, SearchImpl: modelbank.SearchImplTool,
 			ContextWindow: 128000, MaxOutput: 8192,
@@ -98,6 +103,9 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	if req.TemperaturePolicy != model.TemperaturePolicyFixed || req.Temperature == nil || *req.Temperature != fixedTemperature {
 		t.Fatalf("accepted temperature profile = %q/%v", req.TemperaturePolicy, req.Temperature)
 	}
+	if req.OpenAIRequestProfile.N == nil || *req.OpenAIRequestProfile.N != 1 || req.OpenAIRequestProfile.TopP == nil || *req.OpenAIRequestProfile.TopP != 1 {
+		t.Fatalf("accepted OpenAI request profile = %#v", req.OpenAIRequestProfile)
+	}
 	if snapshot.ToolConfigState.State == "" || snapshot.SearchConfigState.Search.State == "" || snapshot.MemoryState.State == "" {
 		t.Fatalf("runtime dependency states missing: %+v", snapshot)
 	}
@@ -129,6 +137,9 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	}
 	if current.TemperaturePolicy != model.TemperaturePolicyFixed || current.Temperature == nil || *current.Temperature != fixedTemperature {
 		t.Fatalf("restored temperature profile = %q/%v", current.TemperaturePolicy, current.Temperature)
+	}
+	if current.OpenAIRequestProfile.N == nil || *current.OpenAIRequestProfile.N != 1 || current.OpenAIRequestProfile.TopP == nil || *current.OpenAIRequestProfile.TopP != 1 {
+		t.Fatalf("restored OpenAI request profile = %#v", current.OpenAIRequestProfile)
 	}
 	if current.RuntimeExtractSummaryEnabled || current.RuntimeExtractSummaryModel != "accepted-refiner" {
 		t.Fatalf("validated extract summary runtime = enabled:%t model:%q", current.RuntimeExtractSummaryEnabled, current.RuntimeExtractSummaryModel)

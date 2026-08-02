@@ -22,3 +22,21 @@ func TestResolveTemperatureForRequest(t *testing.T) {
 		t.Fatal("fixed policy without a value was accepted")
 	}
 }
+
+func TestValidateOpenAIRequestProfile(t *testing.T) {
+	topP, presence, frequency := 1.0, 0.0, 0.0
+	n := 1
+	valid := OpenAIRequestProfile{TopP: &topP, N: &n, PresencePenalty: &presence, FrequencyPenalty: &frequency}
+	if err := ValidateOpenAIRequestProfile(valid); err != nil {
+		t.Fatalf("valid profile: %v", err)
+	}
+
+	invalidTopP := 1.1
+	if err := ValidateOpenAIRequestProfile(OpenAIRequestProfile{TopP: &invalidTopP}); err == nil {
+		t.Fatal("out-of-range top_p was accepted")
+	}
+	invalidN := 0
+	if err := ValidateOpenAIRequestProfile(OpenAIRequestProfile{N: &invalidN}); err == nil {
+		t.Fatal("non-positive n was accepted")
+	}
+}

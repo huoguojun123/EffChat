@@ -1,5 +1,7 @@
 package modelbank
 
+import "github.com/huoguojun123/EffChat/internal/model"
+
 // SearchImpl 模型搜索实现类型（对齐 LobeHub ModelSearchImplement）
 type SearchImpl string
 
@@ -40,9 +42,10 @@ type ModelInfo struct {
 	Capabilities ModelCapabilities `json:"capabilities"` // 能力
 	Enabled      bool              `json:"enabled"`      // 是否启用
 	// ThinkingFormat 是管理员配置的思考参数格式覆盖项。auto 表示按 model_id 推断。
-	ThinkingFormat    string   `json:"thinking_format"`
-	TemperaturePolicy string   `json:"temperature_policy"`
-	TemperatureValue  *float64 `json:"temperature_value,omitempty"`
+	ThinkingFormat       string                     `json:"thinking_format"`
+	TemperaturePolicy    string                     `json:"temperature_policy"`
+	TemperatureValue     *float64                   `json:"temperature_value,omitempty"`
+	OpenAIRequestProfile model.OpenAIRequestProfile `json:"openai_request_profile"`
 }
 
 // HasBuiltinSearch 模型是否有原生搜索能力

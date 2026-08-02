@@ -135,6 +135,48 @@ func TestBuildChatModelAppliesTemperatureRequestProfile(t *testing.T) {
 	}
 }
 
+func TestBuildChatModelAppliesTypedOpenAIRequestProfile(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-profile\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"fixture\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	temperature, topP, presence, frequency := 1.0, 1.0, 0.0, 0.0
+	n := 1
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "fixture", Provider: "fixture-channel",
+		TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &temperature,
+		OpenAIRequestProfile: model.OpenAIRequestProfile{
+			TopP: &topP, N: &n, PresencePenalty: &presence, FrequencyPenalty: &frequency,
+		},
+		RuntimeChannel: &model.AIChannel{Key: "fixture-channel", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{})
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	body := <-requestBodies
+	for key, want := range map[string]float64{
+		"temperature": 1, "top_p": 1, "n": 1, "presence_penalty": 0, "frequency_penalty": 0,
+	} {
+		if got, ok := body[key].(float64); !ok || got != want {
+			t.Fatalf("%s = %#v, want %v; body=%#v", key, body[key], want, body)
+		}
+	}
+}
+
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

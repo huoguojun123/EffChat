@@ -18,6 +18,13 @@ func toAgenticMessages(messages []*schema.Message) ([]*schema.AgenticMessage, er
 	return result, nil
 }
 
+// ToAgenticMessages converts EffChat's persisted Eino messages at the Agent
+// boundary. It is intentionally separate from the wire model: the typed Agent
+// and official Responses component remain responsible for Tool/ReAct behavior.
+func ToAgenticMessages(messages []*schema.Message) ([]*schema.AgenticMessage, error) {
+	return toAgenticMessages(messages)
+}
+
 func toAgenticMessage(message *schema.Message) (*schema.AgenticMessage, error) {
 	if message == nil {
 		return nil, fmt.Errorf("message is nil")

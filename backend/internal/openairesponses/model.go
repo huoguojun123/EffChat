@@ -1,8 +1,8 @@
-// Package openairesponses adapts Eino's typed OpenAI Responses model to the
-// classic ToolCallingChatModel contract used by EffChat's single ReAct Agent.
-// The upstream component remains responsible for the wire protocol and SSE
-// parsing; this package owns only the message/tool boundary needed to preserve
-// EffChat's RunHub, usage, retry, and terminal lifecycle.
+// Package openairesponses owns EffChat's configuration and product-boundary
+// normalization for Eino's official OpenAI Responses model. Main conversations
+// keep the native AgenticModel through Eino's typed ReAct Agent; tool-free
+// utility calls may use the classic adapter. The upstream component remains
+// responsible for the wire protocol and SSE parsing.
 package openairesponses
 
 import (
@@ -35,11 +35,22 @@ type Config struct {
 	Reasoning   *responses.ReasoningParam
 }
 
-// NewChatModel creates a stateless, single-attempt Responses model and exposes
-// it through the classic Eino contract used by the rest of EffChat. No total
-// request timeout is set here: the shared first-output and cancellation
-// lifecycle must remain the only stream deadline owner.
+// NewChatModel exposes a stateless Responses model through the classic Eino
+// contract for tool-free utility calls. No total request timeout is set here:
+// the shared first-output and cancellation lifecycle remains the only stream
+// deadline owner.
 func NewChatModel(ctx context.Context, cfg *Config) (einoModel.ToolCallingChatModel, error) {
+	model, err := NewAgenticModel(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newChatModel(model), nil
+}
+
+// NewAgenticModel returns the official Eino Responses model without adapting
+// it to the classic message contract. The main conversation uses this path so
+// Eino's typed Agentic ReAct graph owns local Tool execution end to end.
+func NewAgenticModel(ctx context.Context, cfg *Config) (einoModel.AgenticModel, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("openai responses config is required")
 	}
@@ -61,7 +72,7 @@ func NewChatModel(ctx context.Context, cfg *Config) (einoModel.ToolCallingChatMo
 	if err != nil {
 		return nil, err
 	}
-	return newChatModel(model), nil
+	return model, nil
 }
 
 type chatModel struct {

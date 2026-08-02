@@ -13,6 +13,23 @@ type responseState struct {
 	sawToolCall bool
 }
 
+// MessageConverter retains per-stream finish/tool state while translating
+// typed Agentic chunks into EffChat's stable schema.Message boundary.
+type MessageConverter struct {
+	state responseState
+}
+
+func NewMessageConverter() *MessageConverter {
+	return &MessageConverter{}
+}
+
+func (c *MessageConverter) Convert(message *schema.AgenticMessage) (*schema.Message, error) {
+	if c == nil {
+		c = NewMessageConverter()
+	}
+	return fromAgenticMessage(message, &c.state)
+}
+
 func fromAgenticMessage(message *schema.AgenticMessage, state *responseState) (*schema.Message, error) {
 	if message == nil {
 		return nil, fmt.Errorf("openai responses returned a nil message")
@@ -81,6 +98,48 @@ func fromAgenticMessage(message *schema.AgenticMessage, state *responseState) (*
 		return nil, terminalErr
 	}
 	return out, terminalErr
+}
+
+// FromAgenticMessage normalizes one typed Agent assistant message into the
+// stable product message contract used by SSE, persistence, and RunHub.
+func FromAgenticMessage(message *schema.AgenticMessage) (*schema.Message, error) {
+	return NewMessageConverter().Convert(message)
+}
+
+// ToolResultMessage converts Eino's typed local Tool event to the classic Tool
+// message expected by EffChat's SSE and persistence layers. Product Tools
+// currently return text; rejecting other blocks avoids silently flattening a
+// future multimodal result without an explicit public contract.
+func ToolResultMessage(message *schema.AgenticMessage) (*schema.Message, error) {
+	if message == nil {
+		return nil, fmt.Errorf("tool result message is nil")
+	}
+	out := &schema.Message{Role: schema.Tool}
+	for _, block := range message.ContentBlocks {
+		if block == nil || block.FunctionToolResult == nil {
+			continue
+		}
+		result := block.FunctionToolResult
+		if out.ToolCallID == "" {
+			out.ToolCallID = result.CallID
+			out.ToolName = result.Name
+		} else if out.ToolCallID != result.CallID || out.ToolName != result.Name {
+			return nil, fmt.Errorf("tool event contains multiple function results")
+		}
+		for _, content := range result.Content {
+			if content == nil {
+				continue
+			}
+			if content.Type != schema.FunctionToolResultContentBlockTypeText || content.Text == nil {
+				return nil, fmt.Errorf("unsupported local tool result block %q", content.Type)
+			}
+			out.Content += content.Text.Text
+		}
+	}
+	if out.ToolCallID == "" || out.ToolName == "" {
+		return nil, fmt.Errorf("typed tool event has no function result")
+	}
+	return out, nil
 }
 
 func classicRole(role schema.AgenticRoleType) schema.RoleType {

@@ -5,6 +5,7 @@ import {
   getSessionMemory,
   memoryMaintenanceUrl,
   saveSessionMemory,
+  updateSession,
   undoSessionMemoryChange,
   type ModelTaskRun,
   type SessionMemoryChange,
@@ -181,6 +182,26 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
     }
   }
 
+  async function toggleEnabled(enabled: boolean) {
+    if (!sessionId || !data || enabled === data.enabled) return
+    setSaving(true)
+    setError(null)
+    try {
+      // Enabling memory is a session-setting mutation, not a memory-document
+      // commit. Preserve both the editor draft and its server baseline so a
+      // concurrent background memory update still trips the existing CAS when
+      // the user explicitly saves the draft later.
+      await updateSession(sessionId, { memory_enabled: enabled })
+      setData((current) => current ? { ...current, enabled } : current)
+      onEnabledChange(enabled)
+      setSuccess(enabled ? "会话记忆已启用" : "会话记忆已停用")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "记忆启停失败")
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function runMaintenance(operation: "compact" | "retry") {
     if (!sessionId || (operation === "retry" && changed)) return
     setSaving(true)
@@ -325,7 +346,7 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
                   type="checkbox"
                   checked={enabled}
                   disabled={!data || saving}
-                  onChange={(event) => void save(event.currentTarget.checked)}
+                  onChange={(event) => void toggleEnabled(event.currentTarget.checked)}
                   className="h-4 w-4 rounded border-input"
                 />
                 启用

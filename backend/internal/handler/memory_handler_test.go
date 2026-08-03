@@ -232,3 +232,65 @@ func TestSaveSessionMemoryRejectsSecretWithoutDurableTrace(t *testing.T) {
 		t.Fatalf("rejected secret left durable state: memory=%d changes=%d", memoryCount, changeCount)
 	}
 }
+
+func TestSessionMemoryToggleDoesNotCommitDocumentOrChangeHistory(t *testing.T) {
+	env := setupTestEnv(t)
+	created := env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
+		"model_id": "gpt-4o-mini",
+		"provider": env.channelKey,
+		"title":    "Memory toggle boundary",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create session: status=%d body=%s", created.Code, created.Body.String())
+	}
+	var session model.Session
+	if err := json.Unmarshal(created.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	baseline := "## Project Context\n- Stable synthetic baseline."
+	saved := env.doRequest(http.MethodPut, fmt.Sprintf("/api/v1/sessions/%d/memory", session.ID), map[string]interface{}{
+		"content": baseline,
+	})
+	if saved.Code != http.StatusOK {
+		t.Fatalf("seed memory: status=%d body=%s", saved.Code, saved.Body.String())
+	}
+
+	var beforeContent string
+	var beforeChanges int
+	if err := env.db.QueryRow(`SELECT content FROM session_memories WHERE session_id = $1`, session.ID).Scan(&beforeContent); err != nil {
+		t.Fatalf("load baseline memory: %v", err)
+	}
+	if err := env.db.QueryRow(`SELECT COUNT(*) FROM session_memory_changes WHERE session_id = $1`, session.ID).Scan(&beforeChanges); err != nil {
+		t.Fatalf("count baseline changes: %v", err)
+	}
+
+	toggled := env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/sessions/%d", session.ID), map[string]interface{}{
+		"memory_enabled": false,
+	})
+	if toggled.Code != http.StatusOK {
+		t.Fatalf("toggle memory: status=%d body=%s", toggled.Code, toggled.Body.String())
+	}
+
+	var enabled bool
+	var afterContent string
+	var afterChanges int
+	if err := env.db.QueryRow(`SELECT memory_enabled FROM sessions WHERE id = $1`, session.ID).Scan(&enabled); err != nil {
+		t.Fatalf("load memory setting: %v", err)
+	}
+	if err := env.db.QueryRow(`SELECT content FROM session_memories WHERE session_id = $1`, session.ID).Scan(&afterContent); err != nil {
+		t.Fatalf("load memory after toggle: %v", err)
+	}
+	if err := env.db.QueryRow(`SELECT COUNT(*) FROM session_memory_changes WHERE session_id = $1`, session.ID).Scan(&afterChanges); err != nil {
+		t.Fatalf("count changes after toggle: %v", err)
+	}
+	if enabled {
+		t.Fatal("memory_enabled remained true after toggle")
+	}
+	if afterContent != beforeContent {
+		t.Fatalf("memory toggle changed document: before=%q after=%q", beforeContent, afterContent)
+	}
+	if afterChanges != beforeChanges {
+		t.Fatalf("memory toggle created change history: before=%d after=%d", beforeChanges, afterChanges)
+	}
+}

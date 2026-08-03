@@ -67,6 +67,8 @@ beforeEach(() => {
     sessionFolders: [],
     activeFolderId: "all",
     activeSessionId: null,
+    activeSessionGeneration: 0,
+    messageWindowGeneration: 0,
     messages: [],
     conversationTurns: [],
     totalConversationTurns: 0,
@@ -1043,6 +1045,131 @@ describe("chat message loading guards", () => {
     expect(useChatStore.getState().messages[0].session_id).toBe(21)
     expect(useChatStore.getState().messages[0].message_data.content).toBe("current session")
     expect(useChatStore.getState().isLoadingOlder).toBe(false)
+  })
+
+  it("向上分页在途时串行拒绝向下分页并在下一次调用恢复", async () => {
+    const older = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock
+      .mockImplementationOnce(() => older.promise)
+      .mockResolvedValueOnce({
+        messages: [user(110, "newer")],
+        first_turn_id: 110,
+        last_turn_id: 110,
+        has_older: true,
+        has_newer: false,
+      })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "middle")],
+      hasMoreMessages: true,
+      hasNewerMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingOlder = useChatStore.getState().loadOlderMessages()
+    await expect(useChatStore.getState().loadNewerMessages()).resolves.toBe(0)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(1)
+
+    older.resolve({ messages: [user(90, "older")], first_turn_id: 90, last_turn_id: 90, has_older: false, has_newer: true })
+    await expect(loadingOlder).resolves.toBe(1)
+    expect(useChatStore.getState()).toMatchObject({ isLoadingOlder: false, isLoadingNewer: false })
+
+    await expect(useChatStore.getState().loadNewerMessages()).resolves.toBe(1)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("向下分页在途时串行拒绝向上分页并在下一次调用恢复", async () => {
+    const newer = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock
+      .mockImplementationOnce(() => newer.promise)
+      .mockResolvedValueOnce({
+        messages: [user(90, "older")],
+        first_turn_id: 90,
+        last_turn_id: 90,
+        has_older: false,
+        has_newer: true,
+      })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "middle")],
+      hasMoreMessages: true,
+      hasNewerMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingNewer = useChatStore.getState().loadNewerMessages()
+    await expect(useChatStore.getState().loadOlderMessages()).resolves.toBe(0)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(1)
+
+    newer.resolve({ messages: [user(110, "newer")], first_turn_id: 110, last_turn_id: 110, has_older: true, has_newer: false })
+    await expect(loadingNewer).resolves.toBe(1)
+    expect(useChatStore.getState()).toMatchObject({ isLoadingOlder: false, isLoadingNewer: false })
+
+    await expect(useChatStore.getState().loadOlderMessages()).resolves.toBe(1)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("around 替换窗口后丢弃旧向上分页响应并主动释放 loading", async () => {
+    const older = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock.mockImplementation((_sessionId, options) => {
+      if (options.beforeTurnId) return older.promise
+      if (options.aroundTurnId === 500) return Promise.resolve({
+        messages: [user(500, "target")],
+        first_turn_id: 500,
+        last_turn_id: 500,
+        has_older: true,
+        has_newer: true,
+      })
+      throw new Error(`unexpected options ${JSON.stringify(options)}`)
+    })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "old window")],
+      hasMoreMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingOlder = useChatStore.getState().loadOlderMessages()
+    await expect(useChatStore.getState().loadMessageWindowAround(500)).resolves.toBe(true)
+    expect(useChatStore.getState().isLoadingOlder).toBe(false)
+
+    older.resolve({ messages: [user(90, "stale older")], first_turn_id: 90, last_turn_id: 90, has_older: false, has_newer: true })
+    await expect(loadingOlder).resolves.toBe(0)
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual([500])
+    expect(useChatStore.getState()).toMatchObject({ firstLoadedTurnId: 500, lastLoadedTurnId: 500 })
+  })
+
+  it("full reload 替换窗口后丢弃旧向下分页响应", async () => {
+    const newer = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock.mockImplementation((_sessionId, options) => {
+      if (options.afterTurnId) return newer.promise
+      if (options.latest) return Promise.resolve({
+        messages: [user(500, "latest")],
+        first_turn_id: 500,
+        last_turn_id: 500,
+        has_older: true,
+        has_newer: false,
+      })
+      throw new Error(`unexpected options ${JSON.stringify(options)}`)
+    })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "old window")],
+      hasNewerMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingNewer = useChatStore.getState().loadNewerMessages()
+    await expect(useChatStore.getState().loadMessages(1)).resolves.toBe(true)
+
+    newer.resolve({ messages: [user(110, "stale newer")], first_turn_id: 110, last_turn_id: 110, has_older: true, has_newer: true })
+    await expect(loadingNewer).resolves.toBe(0)
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual([500])
+    expect(useChatStore.getState()).toMatchObject({ firstLoadedTurnId: 500, lastLoadedTurnId: 500, isLoadingNewer: false })
   })
 
   it("向上合并后不会把接口页的新端边界误当成本地窗口缺口", async () => {

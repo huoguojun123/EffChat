@@ -153,6 +153,11 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     setMemoryUnseen(false)
   }, [activeSessionId])
 
+  const handleMemoryEnabledChange = useCallback((enabled: boolean) => {
+    if (!activeSessionId) return
+    updateSessionLocal(activeSessionId, { memory_enabled: enabled })
+  }, [activeSessionId, updateSessionLocal])
+
   useEffect(() => {
     if (!activeSessionId || !memoryEnabled || streamingStatus !== "idle") {
       if (!memoryEnabled) setMemoryUnseen(false)
@@ -390,7 +395,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
         open={memoryDialogOpen}
         sessionId={activeSessionId}
         onOpenChange={setMemoryDialogOpen}
-        onEnabledChange={(enabled) => activeSessionId && updateSessionLocal(activeSessionId, { memory_enabled: enabled })}
+        onEnabledChange={handleMemoryEnabledChange}
         onSeenChange={markMemorySeen}
       />
       <StagedAttachmentsDrawer

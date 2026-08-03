@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const { get } = vi.hoisted(() => ({ get: vi.fn() }))
+const { get, patch } = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }))
 
-vi.mock("@/api/client", () => ({ api: { get } }))
+vi.mock("@/api/client", () => ({ api: { get, patch } }))
 
-import { downloadFilename, searchConversations } from "@/api/sessions"
+import { downloadFilename, searchConversations, updateSession } from "@/api/sessions"
 
 describe("searchConversations", () => {
   beforeEach(() => get.mockReset())
@@ -38,5 +38,18 @@ describe("downloadFilename", () => {
 
   it("rejects malformed encoded filenames", () => {
     expect(downloadFilename("attachment; filename*=UTF-8''%ZZ")).toBe("")
+  })
+})
+
+describe("updateSession", () => {
+  beforeEach(() => patch.mockReset())
+
+  it("sends a memory toggle without a memory document", async () => {
+    patch.mockResolvedValue({ message: "session updated" })
+
+    await updateSession(42, { memory_enabled: false })
+
+    expect(patch).toHaveBeenCalledOnce()
+    expect(patch).toHaveBeenCalledWith("/sessions/42", { memory_enabled: false })
   })
 })

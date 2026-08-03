@@ -224,6 +224,18 @@ func TestMemoryTool_ReadEmpty(t *testing.T) {
 	}
 }
 
+func TestMemoryToolViewRedactsLegacySecret(t *testing.T) {
+	secret := "fixture-password-42"
+	store := &fakeMemoryStore{data: map[int64]string{1: "## Decisions\n- password=" + secret + "\n- Keep ticket EC-2026-041."}}
+	out := runMemory(t, NewMemoryTool(store, 1, 1), MemoryInput{Action: "view"})
+	if !out.OK || out.Error != "" {
+		t.Fatalf("view failed: %+v", out)
+	}
+	if strings.Contains(out.MemoryText, secret) || !strings.Contains(out.MemoryText, "EC-2026-041") {
+		t.Fatalf("legacy Tool view leaked secret or lost ordinary context: %+v", out)
+	}
+}
+
 func TestMemoryTool_SessionIsolation(t *testing.T) {
 	store := &fakeMemoryStore{data: map[int64]string{}}
 	runMemory(t, NewMemoryTool(store, 1, 1), MemoryInput{Action: "write", Content: "s1"})
@@ -241,6 +253,34 @@ func TestMemoryTool_RejectsOversize(t *testing.T) {
 	out := runMemory(t, tool, MemoryInput{Action: "write", Content: big})
 	if out.Error == "" {
 		t.Error("expected oversize rejection")
+	}
+}
+
+func TestMemoryToolRejectsSecretWithoutPersistingOrEchoingIt(t *testing.T) {
+	store := &fakeMemoryStore{data: map[int64]string{}}
+	tool := NewMemoryTool(store, 1, 1)
+	secret := "fixture-password-42"
+	out := runMemory(t, tool, MemoryInput{Action: "add", Section: "decisions", Content: "password=" + secret})
+	if out.Error == "" {
+		t.Fatal("expected secret rejection")
+	}
+	if strings.Contains(out.Error, secret) || strings.Contains(store.data[1], secret) {
+		t.Fatalf("secret leaked through Tool result or store: output=%+v stored=%q", out, store.data[1])
+	}
+}
+
+func TestMemoryToolDoNotRememberReturnsOnlyCategory(t *testing.T) {
+	store := &fakeMemoryStore{data: map[int64]string{}}
+	tool := NewMemoryTool(store, 1, 1)
+	secret := "sk-test-secret-value"
+	out := runMemory(t, tool, MemoryInput{Action: "add", Section: "do_not_remember", Content: "Do not store token " + secret})
+	if !out.OK || out.Error != "" {
+		t.Fatalf("do_not_remember add failed: %+v", out)
+	}
+	for _, value := range []string{out.ChangedItem, store.data[1]} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("do_not_remember leaked exact secret: %q", value)
+		}
 	}
 }
 
@@ -296,7 +336,7 @@ func TestMemoryToolInfo_GuidesExplicitRememberRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Info() error: %v", err)
 	}
-	for _, want := range []string{`action="add"`, `action="replace"`, `action="remove"`, "specific section", "请更新这个决策", "以后如果我问你", "fictional", "project_context", "exact codes", "compact", "Do not quote the JSON", "cannot remember, update, or forget", "you are lying"} {
+	for _, want := range []string{`action="add"`, `action="replace"`, `action="remove"`, "specific section", "请更新这个决策", "以后如果我问你", "fictional", "project_context", "any section", "category to avoid", "compact", "Do not quote the JSON", "cannot remember, update, or forget", "you are lying"} {
 		if !strings.Contains(info.Desc, want) {
 			t.Fatalf("memory tool description missing %q:\n%s", want, info.Desc)
 		}

@@ -87,7 +87,7 @@ Rules:
 - If the user frames a scenario as fictional, simulated, roleplay, or imaginary, store persona, setting, and all inferred traits in Project Context, not User Background. Do not infer real user attributes from fictional character traits.
 - Prefer merging and replacing existing bullets over adding new bullets.
 - Do not store raw file contents, search results, web extraction text, code structure, git history, temporary bugs, or one-turn task details.
-- Do not infer private traits or sensitive facts. Store sensitive information only if the user explicitly asks to remember it.
+- Do not infer private traits or sensitive facts. Non-secret sensitive information requires an explicit user request and clear future value. Never store exact passwords, tokens, API keys, authorization credentials, private keys, or other secret values, even when the user asks.
 - Never store memory that discourages honest feedback, critical thinking, or constructive criticism.
 - Never store memory that would encourage unsafe, unhealthy, or harmful behavior, even if it appears relevant.
 - Avoid saving sensitive or upsetting content unless the user explicitly asks and the fact is necessary for safe, appropriate future help.
@@ -262,7 +262,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return err
 	}
-	current := sessionmemory.Serialize(mustParseMemory(rawCurrent))
+	current := sessionmemory.RedactSensitiveValues(sessionmemory.Serialize(mustParseMemory(rawCurrent)))
 	if strings.TrimSpace(current) == "" && source == "compact" {
 		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:    repository.ModelTaskMemoryMaintenance,
@@ -831,6 +831,9 @@ func countMemoryItems(doc sessionmemory.Document) int {
 }
 
 func buildMemoryMaintenancePrompt(current string, req MemoryMaintenanceRequest, source string, calendar memoryMaintenanceCalendar) string {
+	// current may come from a row created before the write guard. Maintenance is a model boundary,
+	// so sanitize defensively even when the caller already prepared a safe representation.
+	current = sessionmemory.RedactSensitiveValues(current)
 	var b strings.Builder
 	b.WriteString("Current date: ")
 	b.WriteString(calendar.CurrentDate)

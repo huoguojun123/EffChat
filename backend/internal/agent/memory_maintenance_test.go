@@ -146,6 +146,7 @@ func TestMemoryMaintenanceInstructionCarriesMatureMemoryRules(t *testing.T) {
 		"discourages honest feedback",
 		"unsafe, unhealthy, or harmful behavior",
 		"Do not write bullets that say",
+		"Never store exact passwords",
 		"recent conversation window as the source of new facts",
 		"most recent user correction or clarification has highest priority",
 	} {
@@ -328,6 +329,19 @@ func TestBuildMemoryMaintenancePromptIncludesCurrentDate(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("maintenance prompt should include %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestBuildMemoryMaintenancePromptRedactsLegacySecret(t *testing.T) {
+	secret := "fixture-password-42"
+	prompt := buildMemoryMaintenancePrompt(
+		"## Decisions\n- password="+secret+"\n- Keep ticket EC-2026-041.",
+		MemoryMaintenanceRequest{UserText: "请整理当前记忆。"},
+		"manual",
+		memoryMaintenanceCalendar{CurrentDate: "2026-08-03", CurrentWeek: "2026-W32", CurrentMonth: "2026-08", Timezone: "Asia/Shanghai"},
+	)
+	if strings.Contains(prompt, secret) || !strings.Contains(prompt, "EC-2026-041") || !strings.Contains(prompt, sessionmemory.SensitiveValuePlaceholder) {
+		t.Fatalf("maintenance prompt leaked secret or lost ordinary context: %s", prompt)
 	}
 }
 

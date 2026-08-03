@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
@@ -68,7 +69,7 @@ func appendWorkspaceOutputInstruction(instruction string) string {
 // 工具契约由 memory ToolInfo 和默认模板的 Memory 段负责；这里仅注入动态正文，
 // 避免同一套 add/replace/remove 规则在三处重复维护。
 func appendMemoryInstruction(instruction, memory string) string {
-	memory = strings.TrimSpace(memory)
+	memory = strings.TrimSpace(sessionmemory.RedactSensitiveValues(memory))
 	var b strings.Builder
 	b.WriteString(instruction)
 	b.WriteString("\n\n## Conversation Memory\n")

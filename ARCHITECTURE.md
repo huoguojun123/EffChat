@@ -139,6 +139,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 - 运行时只维护每个会话一张固定 section 的结构化记忆卡；字符硬上限由 `memory_max_chars` 和存储层共同校验，不扩展为跨会话画像、RAG 或独立 timeline。
 - 所有记忆写入共用后端高置信 credential guard：明确的 password/token/API key/Authorization 赋值、已知 token 前缀、带密码的数据库 URL 和 private-key block 在事务前被拒绝，错误不回显原值；普通 UUID、commit SHA、项目编号和数字标识不按 secret 处理。`do_not_remember` 只保存类别。旧版本已落库内容在 Agent、压缩/整理模型、memory Tool view、change history 与 undo 边界统一脱敏，避免继续上送或复制精确值。
+- 记忆正文与启停设置是两个独立 mutation：正文保存继续通过 memory PUT 原子提交 sections、enabled 与 `expected_updated_at`，并写入可撤销的 change history；checkbox 只通过 session PATCH 更新 `memory_enabled`，不得携带当前编辑草稿、创建 memory change 或推进正文 CAS baseline。前端在成功后只接受 enabled，保留 dirty sections 和原 `updated_at`，因此后台并发更新仍会在之后显式保存时触发现有 409 冲突；启停失败则保留旧开关和草稿。
 - 自动维护、手动重试和整理复用当前会话的 provider、model 与渠道，但拥有独立的结构化输出预算，并关闭可选 thinking。这样不会让 reasoning token 抢占记忆正文容量，也不会让 Anthropic manual thinking 把任务上限扩到契约之外。
 - 输出预算是跨 provider 的保守容量契约，不是 tokenizer 精确换算。它按“字符上限 + 4,096 JSON/结构余量”向上取整到 4,096 token：4K/8K/12K/16K 字符分别需要 8,192/12,288/16,384/20,480 输出 token。
 - 已知 `ModelMaxOutput` 小于所需预算时，后端在调用 provider 前失败并保留原记忆；能力元数据为 `0` 时表示未知，后端仍申请完整任务预算，不凭空猜测模型上限。

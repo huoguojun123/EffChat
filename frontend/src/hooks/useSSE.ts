@@ -107,31 +107,30 @@ export function useSSE() {
   const syncSessionMessages = useCallback(async (
     sessionId: number,
     expectedRequestId?: string,
-    options: { replaceHistory?: boolean } = {}
   ) => {
     const generation = nextReconciliationGeneration(sessionId)
-    const activeSessionGeneration = useChatStore.getState().activeSessionGeneration
+    const initialState = useChatStore.getState()
+    const activeSessionGeneration = initialState.activeSessionGeneration
+    const messageWindowGeneration = initialState.messageWindowGeneration
     const res = await listMessages(sessionId)
     const state = useChatStore.getState()
     if (
       state.activeSessionId !== sessionId
       || state.activeSessionGeneration !== activeSessionGeneration
+      || state.messageWindowGeneration !== messageWindowGeneration
       || reconciliationGenerations.get(sessionId) !== generation
       || (expectedRequestId !== undefined && state.streaming.requestId !== expectedRequestId)
     ) return false
     const incoming = res.messages || []
-    if (state.hasNewerMessages && !options.replaceHistory) return true
+    if (state.hasNewerMessages) return true
     const oldestIncomingID = incoming.reduce<number | null>((oldest, message) => (
       oldest === null || message.id < oldest ? message.id : oldest
     ), null)
-    const hasLoadedOlderPage = !options.replaceHistory
-      && oldestIncomingID !== null
+    const hasLoadedOlderPage = oldestIncomingID !== null
       && state.messages.some((message) => !message.is_local && message.id < oldestIncomingID)
-    if (options.replaceHistory) {
-      useChatStore.getState().setMessages(incoming)
-    } else {
-      syncMessages(incoming)
-    }
+    if (!syncMessages(incoming, messageWindowGeneration)) return false
+    const current = useChatStore.getState()
+    if (current.messageWindowGeneration !== messageWindowGeneration) return false
     useChatStore.setState({
       hasMoreMessages: hasLoadedOlderPage ? state.hasMoreMessages : !!res.has_more,
       isLoadingOlder: false,
@@ -603,8 +602,11 @@ export function useSSE() {
     }
     ensureCurrentSession()
     if (useChatStore.getState().hasNewerMessages) {
-      await useChatStore.getState().loadMessages(sessionId)
+      const loaded = await useChatStore.getState().loadMessages(sessionId)
       ensureCurrentSession()
+      if (!loaded || useChatStore.getState().hasNewerMessages) {
+        throw new Error("当前消息窗口已变化，请重试发送")
+      }
     }
     const attachmentIds = attachments && attachments.length > 0 ? attachments.map((a) => a.file_id) : undefined
     const preflight = await preflightSessionMessage(sessionId, {
@@ -688,12 +690,20 @@ export function useSSE() {
 
   const retryMessage = useCallback(async (sessionId: number, messageId: number) => {
     const requestId = safeUUID()
+    const sessionGeneration = useChatStore.getState().activeSessionGeneration
+    let synchronized: boolean
     if (useChatStore.getState().hasNewerMessages) {
-      await useChatStore.getState().loadMessages(sessionId)
+      synchronized = await useChatStore.getState().loadMessages(sessionId)
     } else {
-      await syncSessionMessages(sessionId)
+      synchronized = await syncSessionMessages(sessionId)
     }
-    if (!isCurrentSession(sessionId)) throw new Error("会话已切换，消息未发送")
+    const synchronizedState = useChatStore.getState()
+    if (
+      !synchronized
+      || synchronizedState.activeSessionId !== sessionId
+      || synchronizedState.activeSessionGeneration !== sessionGeneration
+      || synchronizedState.hasNewerMessages
+    ) throw new Error("会话或消息窗口已变化，请重试")
     const currentMessages = useChatStore.getState().messages
     // 重试目标为最后一条可见消息，无论 user 还是 assistant：助手回复落库失败时，
     // 最后一条恰好是 user 消息，仍需可重试。后端 PrepareRetry 已支持两种 role。
@@ -739,12 +749,20 @@ export function useSSE() {
 
   const editRetryMessage = useCallback(async (sessionId: number, messageId: number, content: string) => {
     const requestId = safeUUID()
+    const sessionGeneration = useChatStore.getState().activeSessionGeneration
+    let synchronized: boolean
     if (useChatStore.getState().hasNewerMessages) {
-      await useChatStore.getState().loadMessages(sessionId)
+      synchronized = await useChatStore.getState().loadMessages(sessionId)
     } else {
-      await syncSessionMessages(sessionId)
+      synchronized = await syncSessionMessages(sessionId)
     }
-    if (!isCurrentSession(sessionId)) throw new Error("会话已切换，消息未发送")
+    const synchronizedState = useChatStore.getState()
+    if (
+      !synchronized
+      || synchronizedState.activeSessionId !== sessionId
+      || synchronizedState.activeSessionGeneration !== sessionGeneration
+      || synchronizedState.hasNewerMessages
+    ) throw new Error("会话或消息窗口已变化，请重试")
     if (editableTailUserMessageId(useChatStore.getState().messages) !== messageId) {
       throw new Error("这条消息已不能修改，请刷新后重试")
     }

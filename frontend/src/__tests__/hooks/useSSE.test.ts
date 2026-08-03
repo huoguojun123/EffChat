@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     store = {
       activeSessionId: 1,
       activeSessionGeneration: 0,
+      messageWindowGeneration: 0,
       messages: [],
       hasNewerMessages: false,
       hasMoreMessages: false,
@@ -29,8 +30,9 @@ const mocks = vi.hoisted(() => {
       }),
       syncMessages: vi.fn((messages) => {
         store.messages = messages
+        return true
       }),
-      loadMessages: vi.fn(),
+      loadMessages: vi.fn(async () => true),
       beginEditRetry: vi.fn(() => true),
       confirmUserMessageForRequest: vi.fn(),
       updateMessagesByRequest: vi.fn(),
@@ -239,7 +241,7 @@ describe("useSSE", () => {
     expect(mocks.store.beginCompaction).toHaveBeenCalledWith(1, "compact-resume", "正在整理会话上下文")
     expect(mocks.listMessages).toHaveBeenCalledWith(1)
     expect(mocks.store.setMessages).not.toHaveBeenCalled()
-    expect(mocks.store.syncMessages).toHaveBeenCalledWith([])
+    expect(mocks.store.syncMessages).toHaveBeenCalledWith([], 0)
   })
 
   it("leaves memory maintenance recovery to the memory dialog", async () => {
@@ -415,7 +417,7 @@ describe("useSSE", () => {
     const updateStreaming = mocks.store.updateStreaming as ReturnType<typeof vi.fn>
     const streamingCall = updateStreaming.mock.calls.findIndex(([partial]) => partial.status === "streaming")
 
-    expect(syncMessages).toHaveBeenCalledWith([acceptedUserMessage])
+    expect(syncMessages).toHaveBeenCalledWith([acceptedUserMessage], 0)
     expect(streamingCall).toBeGreaterThanOrEqual(0)
     expect(syncMessages.mock.invocationCallOrder[0]).toBeLessThan(updateStreaming.mock.invocationCallOrder[streamingCall])
   })
@@ -935,6 +937,7 @@ describe("useSSE", () => {
         { id: 19, session_id: 1, role: "user", message_data: { role: "user", content: "latest user" } },
         { id: 20, session_id: 1, role: "assistant", message_data: { role: "assistant", content: "latest failed answer" } },
       ]
+      return true
     })
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       'event: message_complete\ndata: {"finish_reason":"stop"}\n\n',
@@ -1155,7 +1158,7 @@ describe("useSSE", () => {
     await Promise.all([first, current])
 
     expect(mocks.listMessages).toHaveBeenCalledTimes(1)
-    expect(mocks.store.syncMessages).toHaveBeenCalledWith([])
+    expect(mocks.store.syncMessages).toHaveBeenCalledWith([], 0)
   })
 
   it("does not abort a newer session stream while cleaning up the previous session", async () => {
@@ -1219,6 +1222,25 @@ describe("useSSE", () => {
     mocks.store.activeSessionGeneration = 1
     mocks.store.activeSessionId = 1
     mocks.store.activeSessionGeneration = 2
+    reconciliation.resolve({ messages: [], has_more: false })
+    await pending
+
+    expect(mocks.store.syncMessages).not.toHaveBeenCalled()
+  })
+
+  it("does not apply terminal reconciliation after the message window changes", async () => {
+    const reconciliation = deferred<{ messages: never[]; has_more: boolean }>()
+    mocks.listMessages.mockReturnValue(reconciliation.promise)
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
+      'event: message_complete\ndata: {"finish_reason":"stop"}\n\n',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } }
+    ))
+
+    const { sendMessage } = useSSE()
+    const pending = sendMessage(1, "reconcile current window")
+    await vi.waitFor(() => expect(mocks.listMessages).toHaveBeenCalledWith(1))
+
+    mocks.store.messageWindowGeneration = 1
     reconciliation.resolve({ messages: [], has_more: false })
     await pending
 
@@ -1349,7 +1371,7 @@ describe("useSSE", () => {
     const { sendMessage } = useSSE()
     await sendMessage(1, "question")
 
-    expect(mocks.store.syncMessages).toHaveBeenCalledWith([])
+    expect(mocks.store.syncMessages).toHaveBeenCalledWith([], 0)
     expect((mocks.store.streaming as { status: string }).status).toBe("idle")
   })
 

@@ -1114,8 +1114,8 @@ describe("chat message loading guards", () => {
   it("around 替换窗口后丢弃旧向上分页响应并主动释放 loading", async () => {
     const older = deferred<messagesApi.MessageWindowResponse>()
     listMessageWindowMock.mockImplementation((_sessionId, options) => {
-      if (options.beforeTurnId) return older.promise
-      if (options.aroundTurnId === 500) return Promise.resolve({
+      if (options?.beforeTurnId) return older.promise
+      if (options?.aroundTurnId === 500) return Promise.resolve({
         messages: [user(500, "target")],
         first_turn_id: 500,
         last_turn_id: 500,
@@ -1145,8 +1145,8 @@ describe("chat message loading guards", () => {
   it("full reload 替换窗口后丢弃旧向下分页响应", async () => {
     const newer = deferred<messagesApi.MessageWindowResponse>()
     listMessageWindowMock.mockImplementation((_sessionId, options) => {
-      if (options.afterTurnId) return newer.promise
-      if (options.latest) return Promise.resolve({
+      if (options?.afterTurnId) return newer.promise
+      if (options?.latest) return Promise.resolve({
         messages: [user(500, "latest")],
         first_turn_id: 500,
         last_turn_id: 500,

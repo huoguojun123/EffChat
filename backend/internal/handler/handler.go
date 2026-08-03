@@ -152,6 +152,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 			// 会话路由
 			sessions := authenticated.Group("/sessions")
 			{
+				sessions.GET("/readiness", SessionCreateReadinessHandler(sessionService))
 				sessions.POST("", CreateSessionHandler(sessionService))
 				sessions.GET("", ListSessionsHandler(sessionService))
 				sessions.GET("/:id", GetSessionHandler(sessionService))
@@ -415,6 +416,17 @@ func CreateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 		}
 
 		c.JSON(http.StatusCreated, session)
+	}
+}
+
+func SessionCreateReadinessHandler(sessionService *service.SessionService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		readiness, err := sessionService.CreateReadiness(middleware.GetUserID(c))
+		if err != nil {
+			writeServerError(c, http.StatusInternalServerError, "session_readiness_failed", "failed to load session readiness", err)
+			return
+		}
+		c.JSON(http.StatusOK, readiness)
 	}
 }
 

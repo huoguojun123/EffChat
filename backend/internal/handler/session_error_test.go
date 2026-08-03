@@ -62,6 +62,7 @@ func TestSessionMutationErrorClassificationHidesInternalDetails(t *testing.T) {
 		wantRequestID bool
 	}{
 		{name: "invalid input", err: fmt.Errorf("%w: max_tokens must be positive", service.ErrSessionInvalid), wantStatus: http.StatusBadRequest, wantCode: "session_invalid", wantError: "max_tokens must be positive"},
+		{name: "default model missing", err: service.ErrDefaultModelNotConfigured, wantStatus: http.StatusBadRequest, wantCode: "default_model_not_configured", wantError: "default model is not configured"},
 		{name: "missing session", err: service.ErrSessionNotFound, wantStatus: http.StatusNotFound, wantCode: "session_not_found", wantError: "session not found"},
 		{name: "runtime model", err: &service.RuntimeModelError{Code: "session_model_disabled", Message: "model unavailable", Provider: "test-provider", ModelID: "test-model"}, wantStatus: http.StatusBadRequest, wantCode: "session_model_disabled", wantError: "model unavailable"},
 		{name: "runtime unavailable", err: &service.RuntimeModelError{Code: "model_runtime_unavailable", Message: "model runtime unavailable", Retryable: true}, wantStatus: http.StatusServiceUnavailable, wantCode: "model_runtime_unavailable", wantError: "model runtime unavailable"},

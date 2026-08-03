@@ -94,6 +94,8 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。
 
+空请求创建会话只使用管理员配置的全局默认模型，不按目录排序猜测模型。`GET /sessions/readiness` 复用与真实创建相同的默认模型、用户权限和渠道可运行校验：配置缺失或安全的模型状态返回 `200 + ready=false` 与稳定 code，repository 故障仍是可追踪 5xx。前端在 readiness 未知或 blocked 时不发送空创建请求；侧栏与空会话入口共享一个 busy/error owner，重复点击不会产生并发创建。系统尚无 runnable public 模型时允许空默认作为 bootstrap 状态；一旦存在可运行的公共模型，Admin 清空 `default_model_id` 会在写事务前被拒绝并保留旧值。
+
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功；该公共错误契约不改变复合 PATCH 字段的更新语义。
 
 send/preflight/retry/manual compaction 在 run accepted 前沿用相同公共错误契约：会话缺失为 404，账号失效为 401，消息输入为 400/413，retry 尾部竞态、已产生回答和附件失效为稳定 409；用户、Skill、历史、压缩任务状态、run reservation 和 SSE writer 的内部故障只返回带 request ID 的 retryable 5xx。manual compaction 一旦被 RunHub 接受，setup 阶段的会话/账号消失和 preserve target 竞态会写入同一 durable terminal 公共码，刷新和 replay 不会退化成内部错误原文。撤销压缩把缺失 checkpoint 归为 404，把非 manual 或已有新消息归为 409，repository/事务故障归为可追踪 5xx。

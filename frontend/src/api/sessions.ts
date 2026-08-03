@@ -28,6 +28,13 @@ export interface ListSessionsResponse {
   next_offset: number
 }
 
+export interface SessionCreateReadiness {
+  ready: boolean
+  code?: string
+  message?: string
+  retryable: boolean
+}
+
 export function listSessions(options: ListSessionsOptions = {}) {
   const limit = options.limit ?? 100
   const offset = options.offset ?? 0
@@ -42,6 +49,10 @@ export function listSessions(options: ListSessionsOptions = {}) {
 
 export function getSession(id: number) {
   return api.get<Session>(`/sessions/${id}`)
+}
+
+export function getSessionCreateReadiness() {
+  return api.get<SessionCreateReadiness>("/sessions/readiness")
 }
 
 export function searchConversations(query: string, folderId: SessionFolderScope, searchAll = false, limit = 30) {

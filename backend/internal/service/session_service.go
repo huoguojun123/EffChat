@@ -15,9 +15,17 @@ import (
 )
 
 var (
-	ErrSessionNotFound = errors.New("session not found")
-	ErrSessionInvalid  = errors.New("invalid session input")
+	ErrSessionNotFound           = errors.New("session not found")
+	ErrSessionInvalid            = errors.New("invalid session input")
+	ErrDefaultModelNotConfigured = errors.New("default model not configured")
 )
+
+type SessionCreateReadiness struct {
+	Ready     bool   `json:"ready"`
+	Code      string `json:"code,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Retryable bool   `json:"retryable"`
+}
 
 // sessionLookupError preserves the privacy invariant that missing and
 // unauthorized sessions are indistinguishable, while retaining repository
@@ -193,17 +201,16 @@ func (s *SessionService) Create(userID int64, req *CreateSessionRequest) (*model
 
 	modelID := strings.TrimSpace(req.ModelID)
 	if modelID == "" {
+		var provider string
 		var err error
-		modelID, err = s.defaultModelID()
+		modelID, provider, err = s.resolveDefaultModel()
 		if err != nil {
 			return nil, err
 		}
-	}
-	if modelID == "" {
-		return nil, fmt.Errorf("%w: model_id is required", ErrSessionInvalid)
+		req.Provider = provider
 	}
 
-	provider := req.Provider
+	provider := strings.TrimSpace(req.Provider)
 	if provider == "" {
 		provider = modelbank.GetOrDefault(modelID, "").Provider
 	}
@@ -272,13 +279,53 @@ func (s *SessionService) defaultModelID() (string, error) {
 			return "", fmt.Errorf("load default session model: %w", err)
 		}
 		modelID := strings.TrimSpace(value)
-		if modelID != "" {
-			if info := modelbank.Get(modelID); info != nil {
-				return modelID, nil
-			}
-		}
+		return modelID, nil
 	}
 	return "", nil
+}
+
+// resolveDefaultModel owns the empty-create contract shared by readiness and
+// session creation. It never guesses from catalog order: the administrator's
+// configured default remains the only implicit model selection.
+func (s *SessionService) resolveDefaultModel() (string, string, error) {
+	modelID, err := s.defaultModelID()
+	if err != nil {
+		return "", "", err
+	}
+	if modelID == "" {
+		return "", "", ErrDefaultModelNotConfigured
+	}
+	provider := strings.TrimSpace(modelbank.GetOrDefault(modelID, "").Provider)
+	if provider == "" {
+		return "", "", &RuntimeModelError{Code: "session_model_missing", Message: "默认模型不可用，请联系管理员", ModelID: modelID}
+	}
+	return modelID, provider, nil
+}
+
+// CreateReadiness reports whether this user can create the same empty session
+// used by the product UI. Safe configuration failures are state, while
+// repository failures remain errors so callers do not misreport infrastructure
+// outages as an administrator setup decision.
+func (s *SessionService) CreateReadiness(userID int64) (*SessionCreateReadiness, error) {
+	modelID, provider, err := s.resolveDefaultModel()
+	if errors.Is(err, ErrDefaultModelNotConfigured) {
+		return &SessionCreateReadiness{Ready: false, Code: "default_model_not_configured", Message: "尚未配置默认模型", Retryable: false}, nil
+	}
+	if err != nil {
+		var modelErr *RuntimeModelError
+		if errors.As(err, &modelErr) {
+			return &SessionCreateReadiness{Ready: false, Code: modelErr.Code, Message: modelErr.Message, Retryable: modelErr.Retryable}, nil
+		}
+		return nil, err
+	}
+	if err := s.ValidateModelForUser(userID, modelID, provider); err != nil {
+		var modelErr *RuntimeModelError
+		if errors.As(err, &modelErr) {
+			return &SessionCreateReadiness{Ready: false, Code: modelErr.Code, Message: modelErr.Message, Retryable: modelErr.Retryable}, nil
+		}
+		return nil, err
+	}
+	return &SessionCreateReadiness{Ready: true, Retryable: false}, nil
 }
 
 // GetByID 获取会话（含权限检查）

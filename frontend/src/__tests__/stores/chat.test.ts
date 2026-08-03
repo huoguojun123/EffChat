@@ -17,6 +17,7 @@ vi.mock("@/api/sessions", () => ({
   createSessionFolder: vi.fn(),
   updateSessionFolder: vi.fn(),
   deleteSessionFolder: vi.fn(),
+  getSessionCreateReadiness: vi.fn(),
   createSession: vi.fn(),
   updateSession: vi.fn(),
   deleteSession: vi.fn(),
@@ -41,6 +42,7 @@ const listConversationTurnsMock = vi.mocked(messagesApi.listConversationTurns)
 const listMessageWindowMock = vi.mocked(messagesApi.listMessageWindow)
 const listSessionsMock = vi.mocked(sessionsApi.listSessions)
 const listSessionFoldersMock = vi.mocked(sessionsApi.listSessionFolders)
+const getSessionCreateReadinessMock = vi.mocked(sessionsApi.getSessionCreateReadiness)
 const createSessionMock = vi.mocked(sessionsApi.createSession)
 const updateSessionMock = vi.mocked(sessionsApi.updateSession)
 const deleteSessionMock = vi.mocked(sessionsApi.deleteSession)
@@ -59,6 +61,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
   listConversationTurnsMock.mockResolvedValue({ turns: [], total: 0, has_more: false, next_before_turn_id: null })
+  getSessionCreateReadinessMock.mockResolvedValue({ ready: true, retryable: false })
   useChatStore.setState({
     sessions: [],
     sessionFolders: [],
@@ -89,6 +92,11 @@ beforeEach(() => {
     firstLoadedTurnId: null,
     lastLoadedTurnId: null,
     compactionOwners: {},
+    sessionCreateReadiness: { ready: true, retryable: false },
+    isLoadingSessionCreateReadiness: false,
+    sessionCreateReadinessError: null,
+    isCreatingSession: false,
+    sessionCreateError: null,
   })
 })
 
@@ -135,6 +143,18 @@ describe("account-scoped requests", () => {
 
     expect(useChatStore.getState().sessionFolders).toEqual([])
   })
+
+  it("ignores session readiness returned after account reset", async () => {
+    const stale = deferred<sessionsApi.SessionCreateReadiness>()
+    getSessionCreateReadinessMock.mockReturnValue(stale.promise)
+
+    const pending = useChatStore.getState().loadSessionCreateReadiness(true)
+    useChatStore.getState().resetAccountState()
+    stale.resolve({ ready: true, retryable: false })
+    await pending
+
+    expect(useChatStore.getState().sessionCreateReadiness).toBeNull()
+  })
 })
 
 describe("session view transitions", () => {
@@ -170,6 +190,30 @@ describe("session view transitions", () => {
       hasMoreMessages: false,
       isLoadingOlder: false,
     })
+  })
+
+  it("does not send an empty create request while the default model is not ready", async () => {
+    useChatStore.setState({
+      sessionCreateReadiness: { ready: false, retryable: false, code: "default_model_not_configured" },
+    })
+
+    await expect(useChatStore.getState().createSession()).rejects.toThrow("尚未配置默认模型")
+
+    expect(createSessionMock).not.toHaveBeenCalled()
+    expect(useChatStore.getState()).toMatchObject({ isCreatingSession: false, sessionCreateError: "尚未配置默认模型" })
+  })
+
+  it("shares one busy owner across duplicate create attempts", async () => {
+    const pending = deferred<Session>()
+    createSessionMock.mockReturnValue(pending.promise)
+
+    const first = useChatStore.getState().createSession()
+    await expect(useChatStore.getState().createSession()).rejects.toThrow("正在创建对话")
+    expect(createSessionMock).toHaveBeenCalledTimes(1)
+
+    pending.resolve(session(2, "new session"))
+    await first
+    expect(useChatStore.getState().isCreatingSession).toBe(false)
   })
 })
 

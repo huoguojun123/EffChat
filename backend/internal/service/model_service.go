@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
@@ -314,6 +315,24 @@ func (s *ModelService) Delete(id string) error {
 }
 
 func (s *ModelService) ValidateDefaultModel(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		models, err := s.modelRepo.List(true)
+		if err != nil {
+			return fmt.Errorf("list runnable public models: %w", err)
+		}
+		for _, candidate := range models {
+			if candidate == nil || candidate.MinGroupLevel > 0 || s.channelService == nil {
+				continue
+			}
+			if _, err := s.channelService.ResolveAIChannel(candidate.Provider); err == nil {
+				return fmt.Errorf("%w: default_model_id is required while a runnable public model exists", ErrModelInvalid)
+			} else if !errors.Is(err, ErrChannelInvalid) && !errors.Is(err, ErrChannelNotFound) && !errors.Is(err, ErrChannelUnavailable) {
+				return fmt.Errorf("validate public model channel: %w", err)
+			}
+		}
+		return nil
+	}
 	m, err := s.modelRepo.Get(id)
 	if err != nil {
 		return fmt.Errorf("load default model: %w", err)

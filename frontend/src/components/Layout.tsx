@@ -14,6 +14,7 @@ export function Layout() {
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
   const loadSessions = useChatStore((s) => s.loadSessions)
   const loadSessionFolders = useChatStore((s) => s.loadSessionFolders)
+  const loadSessionCreateReadiness = useChatStore((s) => s.loadSessionCreateReadiness)
   const setActiveSession = useChatStore((s) => s.setActiveSession)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const sessions = useChatStore((s) => s.sessions)
@@ -39,6 +40,10 @@ export function Layout() {
   useEffect(() => {
     loadModels().catch(() => undefined)
   }, [loadModels])
+
+  useEffect(() => {
+    loadSessionCreateReadiness().catch(() => undefined)
+  }, [loadSessionCreateReadiness])
 
   useEffect(() => {
     const routedId = sessionId ? Number(sessionId) : null

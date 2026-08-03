@@ -194,3 +194,41 @@ func TestSaveSessionMemoryRejectsStaleEditorContent(t *testing.T) {
 		t.Fatalf("legacy memory save status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestSaveSessionMemoryRejectsSecretWithoutDurableTrace(t *testing.T) {
+	env := setupTestEnv(t)
+	created := env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
+		"model_id": "gpt-4o-mini",
+		"provider": env.channelKey,
+		"title":    "Memory secret guard",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create session: status=%d body=%s", created.Code, created.Body.String())
+	}
+	var session model.Session
+	if err := json.Unmarshal(created.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	secret := "fixture-password-42"
+	saved := env.doRequest(http.MethodPut, fmt.Sprintf("/api/v1/sessions/%d/memory", session.ID), map[string]interface{}{
+		"content": "## Decisions\n- password=" + secret,
+	})
+	if saved.Code != http.StatusBadRequest || !strings.Contains(saved.Body.String(), "invalid_memory_content") {
+		t.Fatalf("secret save status=%d body=%s", saved.Code, saved.Body.String())
+	}
+	if strings.Contains(saved.Body.String(), secret) {
+		t.Fatalf("secret save response leaked rejected value: %s", saved.Body.String())
+	}
+
+	var memoryCount, changeCount int
+	if err := env.db.QueryRow(`SELECT COUNT(*) FROM session_memories WHERE session_id = $1 AND content <> ''`, session.ID).Scan(&memoryCount); err != nil {
+		t.Fatalf("count session memory: %v", err)
+	}
+	if err := env.db.QueryRow(`SELECT COUNT(*) FROM session_memory_changes WHERE session_id = $1`, session.ID).Scan(&changeCount); err != nil {
+		t.Fatalf("count session memory changes: %v", err)
+	}
+	if memoryCount != 0 || changeCount != 0 {
+		t.Fatalf("rejected secret left durable state: memory=%d changes=%d", memoryCount, changeCount)
+	}
+}

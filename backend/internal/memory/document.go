@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -76,6 +77,41 @@ var sectionHeaderRE = regexp.MustCompile(`^#{1,3}\s+(.+?)\s*$`)
 var doNotRememberSensitiveValueRE = regexp.MustCompile(`(?i)(sk-[a-z0-9_-]{8,}|[a-z0-9][a-z0-9_-]{19,}|[0-9]{4,})`)
 
 const doNotRememberSecretPlaceholder = "不要保存临时验证码、密码、API key、token 或其他秘密值。"
+
+const SensitiveValuePlaceholder = "[REDACTED SECRET]"
+
+var ErrSensitiveValue = errors.New("memory contains a secret value; remove passwords, tokens, API keys, authorization credentials, or private keys before saving")
+
+type sensitiveValuePattern struct {
+	replacement string
+	re          *regexp.Regexp
+}
+
+// sensitiveValuePatterns intentionally recognizes only credential-shaped values. Memory is
+// durable and repeatedly sent upstream, so known tokens and explicit credential assignments are
+// blocked, while UUIDs, commit hashes, project numbers, and other opaque identifiers remain valid.
+var sensitiveValuePatterns = []sensitiveValuePattern{
+	{
+		re:          regexp.MustCompile(`(?s)-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----.*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----`),
+		replacement: SensitiveValuePlaceholder,
+	},
+	{
+		re:          regexp.MustCompile(`(?i)\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^/\s:@]+:)([^@\s/]+)(@)`),
+		replacement: `${1}` + SensitiveValuePlaceholder + `${3}`,
+	},
+	{
+		re:          regexp.MustCompile(`(?i)(\bauthorization\s*:\s*bearer\s+)([^\s,;]+)`),
+		replacement: `${1}` + SensitiveValuePlaceholder,
+	},
+	{
+		re:          regexp.MustCompile(`(?im)(^|[\s([{,;])(password|passwd|pwd|api[\s_-]*key|client[\s_-]*secret|access[\s_-]*token|refresh[\s_-]*token|auth[\s_-]*token|private[\s_-]*key|密码|口令|令牌|api\s*密钥)(\s*[:=：]\s*)(["']?)([^\s"'\x60,;]+)(["']?)`),
+		replacement: `${1}${2}${3}` + SensitiveValuePlaceholder,
+	},
+	{
+		re:          regexp.MustCompile(`(?i)\b(?:sk-[a-z0-9][a-z0-9_-]{11,}|github_pat_[a-z0-9_]{20,}|gh[opusr]_[a-z0-9]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[a-z0-9-]{10,}|(?:sk|rk)_live_[a-z0-9]{12,}|eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,})\b`),
+		replacement: SensitiveValuePlaceholder,
+	},
+}
 
 func EmptyDocument() Document {
 	sections := make([]Section, 0, len(SectionDefs))
@@ -158,6 +194,9 @@ func NormalizeWithLimits(content string, limits Limits) (string, Document, error
 	if err != nil {
 		return "", Document{}, err
 	}
+	if err := rejectSensitiveValues(doc); err != nil {
+		return "", Document{}, err
+	}
 	normalized := Serialize(doc)
 	if err := ValidateContentWithLimits(normalized, limits); err != nil {
 		return "", Document{}, err
@@ -189,6 +228,9 @@ func Serialize(doc Document) string {
 			continue
 		}
 		cleaned := make([]string, 0, len(section.Items))
+		if key == "do_not_remember" && containsSensitiveValue(strings.Join(section.Items, "\n")) {
+			section.Items = []string{doNotRememberSecretPlaceholder}
+		}
 		for _, item := range section.Items {
 			if item = cleanItem(item); item != "" {
 				if key == "do_not_remember" {
@@ -220,6 +262,37 @@ func Serialize(doc Document) string {
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func rejectSensitiveValues(doc Document) error {
+	for _, section := range doc.Sections {
+		if NormalizeSectionKey(firstNonEmpty(section.Key, section.Title)) == "do_not_remember" {
+			continue
+		}
+		if containsSensitiveValue(strings.Join(section.Items, "\n")) {
+			return ErrSensitiveValue
+		}
+	}
+	return nil
+}
+
+func containsSensitiveValue(content string) bool {
+	for _, pattern := range sensitiveValuePatterns {
+		if pattern.re.MatchString(content) {
+			return true
+		}
+	}
+	return false
+}
+
+// RedactSensitiveValues is the fail-safe boundary for legacy memory already stored before the
+// write guard existed. It preserves ordinary context but never sends recognized credential values
+// to model prompts or copies them into durable change history.
+func RedactSensitiveValues(content string) string {
+	for _, pattern := range sensitiveValuePatterns {
+		content = pattern.re.ReplaceAllString(content, pattern.replacement)
+	}
+	return content
 }
 
 func StatsFor(content string) Stats {

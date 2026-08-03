@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
@@ -134,6 +135,17 @@ func TestAppendMemoryInstruction(t *testing.T) {
 	empty := appendMemoryInstruction(base, "   ")
 	if !strings.Contains(empty, "Current saved memory is empty") {
 		t.Errorf("empty memory should show placeholder, got: %s", empty)
+	}
+}
+
+func TestAppendMemoryInstructionRedactsLegacySecrets(t *testing.T) {
+	secret := "fixture-password-42"
+	got := appendMemoryInstruction("BASE", "## Decisions\n- password="+secret+"\n- Keep ticket EC-2026-041.")
+	if strings.Contains(got, secret) {
+		t.Fatalf("legacy memory secret reached model instruction: %s", got)
+	}
+	if !strings.Contains(got, "EC-2026-041") || !strings.Contains(got, sessionmemory.SensitiveValuePlaceholder) {
+		t.Fatalf("prompt redaction lost ordinary memory context: %s", got)
 	}
 }
 

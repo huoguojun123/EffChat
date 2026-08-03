@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -403,6 +404,87 @@ func TestAutomaticMemoryContentConflictIsSkippedWithoutCooldown(t *testing.T) {
 	}
 	if metadata["reason"] != "memory_changed" {
 		t.Fatalf("conflict reason = %q, want memory_changed", metadata["reason"])
+	}
+}
+
+func TestMemoryMaintenanceRejectsSecretWithoutTaskOrHistoryLeak(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	userID, sessionID := createMemoryMaintenanceTestSession(t, db)
+	memoryRepo := repository.NewSessionMemoryRepository(db)
+	taskRuns := repository.NewModelTaskRunRepository(db)
+	clean := "## Decisions\n- 使用虚构项目编号 EC-2026-041。"
+	if _, err := memoryRepo.SaveWithChange(t.Context(), repository.SaveSessionMemoryInput{
+		SessionID: sessionID,
+		UserID:    userID,
+		Content:   clean,
+		Source:    "manual",
+		Action:    "update",
+		Summary:   "初始化虚构测试记忆",
+		MaxChars:  4000,
+	}); err != nil {
+		t.Fatalf("seed session memory: %v", err)
+	}
+
+	secret := "fixture-password-42"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-memory-secret\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"memory-secret-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"{\\\"action\\\":\\\"update\\\",\\\"content\\\":\\\"## Decisions\\\\n- password=%s\\\",\\\"summary\\\":\\\"更新会话记忆\\\"}\"},\"finish_reason\":\"stop\"}]}\n\n", secret)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	agent := NewEinoAgent(service.NewChannelService(nil), nil, 4096, repository.NewConfigRepository(db), memoryRepo, taskRuns, nil, nil, nil)
+	err := agent.MaintainSessionMemory(t.Context(), MemoryMaintenanceRequest{
+		SessionID:      sessionID,
+		UserID:         userID,
+		RunID:          "memory-secret-rejection",
+		UserText:       "请更新这个虚构项目的记忆。",
+		MemoryEnabled:  true,
+		Force:          true,
+		IgnoreCooldown: true,
+		ModelRequest: &ChatRequest{
+			UserID:          userID,
+			SessionID:       sessionID,
+			ModelID:         "memory-secret-test",
+			Provider:        "memory-secret-provider",
+			RuntimeResolved: true,
+			RuntimeChannel: &model.AIChannel{
+				Key:     "memory-secret-provider",
+				Adapter: service.AdapterOpenAICompatible,
+				BaseURL: server.URL + "/v1",
+				APIKey:  "test-key",
+				Enabled: true,
+			},
+		},
+	})
+	if !errors.Is(err, sessionmemory.ErrSensitiveValue) {
+		t.Fatalf("maintenance error = %v, want ErrSensitiveValue", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("maintenance error leaked rejected secret: %v", err)
+	}
+
+	stored, readErr := memoryRepo.Get(sessionID)
+	if readErr != nil || stored != clean {
+		t.Fatalf("rejected maintenance changed memory: content=%q err=%v", stored, readErr)
+	}
+	latest, readErr := taskRuns.LatestForSession(t.Context(), sessionID, userID, repository.ModelTaskMemoryMaintenance)
+	if readErr != nil {
+		t.Fatalf("read task run: %v", readErr)
+	}
+	if latest == nil || latest.Status != repository.ModelTaskStatusFailed || strings.Contains(latest.ErrorMessage, secret) {
+		t.Fatalf("secret rejection task run leaked or lost failure state: %+v", latest)
+	}
+	var leakedChanges int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM session_memory_changes
+		WHERE session_id = $1 AND (before_content LIKE '%' || $2 || '%' OR after_content LIKE '%' || $2 || '%' OR summary LIKE '%' || $2 || '%')
+	`, sessionID, secret).Scan(&leakedChanges); err != nil {
+		t.Fatalf("scan change history: %v", err)
+	}
+	if leakedChanges != 0 {
+		t.Fatalf("rejected secret appeared in %d change-history rows", leakedChanges)
 	}
 }
 

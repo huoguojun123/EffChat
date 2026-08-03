@@ -31,6 +31,7 @@ interface ChatState {
   activeFolderId: SessionFolderScope
   activeSessionId: number | null
   activeSessionGeneration: number
+  messageWindowGeneration: number
   messages: Message[]
   conversationTurns: messagesApi.ConversationTurnIndex[]
   totalConversationTurns: number
@@ -70,15 +71,15 @@ interface ChatState {
   moveSessionToFolder: (id: number, folderId: number | null) => Promise<void>
   setSessionPinned: (id: number, pinned: boolean) => Promise<void>
   updateSessionLocal: (id: number, patch: Partial<Session>) => void
-  loadMessages: (sessionId: number) => Promise<void>
+  loadMessages: (sessionId: number) => Promise<boolean>
   loadOlderMessages: () => Promise<number>
   loadNewerMessages: () => Promise<number>
-  loadMessageWindowAround: (turnId: number) => Promise<void>
+  loadMessageWindowAround: (turnId: number) => Promise<boolean>
   trimLoadedMessageWindow: (limit: number, keep: "start" | "end") => void
   beginCompaction: (sessionId: number, operationId: string, notice?: string) => void
   finishCompaction: (sessionId: number, operationId: string) => void
   setMessages: (messages: Message[]) => void
-  syncMessages: (messages: Message[]) => void
+  syncMessages: (messages: Message[], expectedWindowGeneration?: number) => boolean
   addMessage: (msg: Message) => void
   updateMessage: (id: number, patch: Partial<Message>) => void
   updateMessagesByRequest: (requestId: string, patch: Partial<Message>) => void
@@ -110,7 +111,7 @@ const emptyStreaming: StreamingState = {
 }
 
 let latestMessagesRequest = 0
-let latestOlderMessagesRequest = 0
+let latestPaginationRequest = 0
 let latestSessionsRequest = 0
 let latestSessionFoldersRequest = 0
 let latestSessionCreateReadinessRequest = 0
@@ -122,6 +123,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   activeFolderId: "all",
   activeSessionId: null,
   activeSessionGeneration: 0,
+  messageWindowGeneration: 0,
   messages: [],
   conversationTurns: [],
   totalConversationTurns: 0,
@@ -272,12 +274,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   setActiveSession: (id: number | null) => {
     latestMessagesRequest += 1
-    latestOlderMessagesRequest += 1
+    latestPaginationRequest += 1
     if (id) localStorage.setItem("active_session_id", String(id))
     else localStorage.removeItem("active_session_id")
     set((s) => ({
       activeSessionId: id,
       activeSessionGeneration: s.activeSessionGeneration + 1,
+      messageWindowGeneration: s.messageWindowGeneration + 1,
       messages: [],
       conversationTurns: [],
       totalConversationTurns: 0,
@@ -318,12 +321,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       set({ isCreatingSession: false })
     }
     latestMessagesRequest += 1
-    latestOlderMessagesRequest += 1
+    latestPaginationRequest += 1
     localStorage.setItem("active_session_id", String(session.id))
     set((s) => ({
       sessions: sessionBelongsToScope(session, s.activeFolderId) ? [session, ...s.sessions] : s.sessions,
       activeSessionId: session.id,
       activeSessionGeneration: s.activeSessionGeneration + 1,
+      messageWindowGeneration: s.messageWindowGeneration + 1,
       messages: [],
       conversationTurns: [],
       totalConversationTurns: 0,
@@ -345,7 +349,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     const deletingActive = get().activeSessionId === id
     if (deletingActive) {
       latestMessagesRequest += 1
-      latestOlderMessagesRequest += 1
+      latestPaginationRequest += 1
       localStorage.removeItem("active_session_id")
     }
     set((s) => {
@@ -355,6 +359,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         sessions: s.sessions.filter((x) => x.id !== id),
         activeSessionId: deletingActive ? null : s.activeSessionId,
         activeSessionGeneration: deletingActive ? s.activeSessionGeneration + 1 : s.activeSessionGeneration,
+        messageWindowGeneration: deletingActive ? s.messageWindowGeneration + 1 : s.messageWindowGeneration,
         messages: deletingActive ? [] : s.messages,
         conversationTurns: deletingActive ? [] : s.conversationTurns,
         totalConversationTurns: deletingActive ? 0 : s.totalConversationTurns,
@@ -410,13 +415,24 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   loadMessages: async (sessionId: number) => {
     const requestId = ++latestMessagesRequest
-    set({ isLoadingMessages: true, messageLoadError: null })
+    const windowGeneration = get().messageWindowGeneration + 1
+    latestPaginationRequest += 1
+    set({
+      messageWindowGeneration: windowGeneration,
+      isLoadingMessages: true,
+      isLoadingOlder: false,
+      isLoadingNewer: false,
+      messageLoadError: null,
+    })
     void loadConversationTurnIndex(sessionId, requestId, get, set).catch(() => undefined)
     try {
       const res = await messagesApi.listMessageWindow(sessionId, { latest: true, turnLimit: 16 })
-      if (get().activeSessionId !== sessionId || requestId !== latestMessagesRequest) return
+      if (get().activeSessionId !== sessionId || requestId !== latestMessagesRequest || get().messageWindowGeneration !== windowGeneration) return false
+      // Full/latest loads replace the durable window. Only optimistic local rows may
+      // survive long enough to be reconciled against the incoming persisted batch.
+      const localMessages = get().messages.filter((message) => message.is_local)
       set({
-        messages: mergeSyncedMessages(get().messages, res.messages || []),
+        messages: mergeSyncedMessages(localMessages, res.messages || []),
         hasMoreMessages: !!res.has_older,
         hasNewerMessages: !!res.has_newer,
         firstLoadedTurnId: res.first_turn_id || null,
@@ -425,6 +441,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         isLoadingNewer: false,
         messageLoadError: null,
       })
+      return true
     } catch (err) {
       const message = formatStoreError(err, "加载消息失败")
       if (get().activeSessionId === sessionId && requestId === latestMessagesRequest) {
@@ -441,16 +458,23 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   // 向上回溯：以当前最旧消息 id 作游标拉取更早一页，prepend 到头部。
   // 返回本次实际新增的消息条数，供视图做滚动锚定。并发/到头时直接返回 0。
   loadOlderMessages: async () => {
-    const { activeSessionId, hasMoreMessages, isLoadingOlder, firstLoadedTurnId } = get()
-    if (!activeSessionId || !hasMoreMessages || isLoadingOlder) return 0
+    const { activeSessionId, hasMoreMessages, isLoadingOlder, isLoadingNewer, firstLoadedTurnId, messageWindowGeneration } = get()
+    if (!activeSessionId || !hasMoreMessages || isLoadingOlder || isLoadingNewer) return 0
     if (!firstLoadedTurnId) return 0
 
-    const requestId = ++latestOlderMessagesRequest
+    const requestId = ++latestPaginationRequest
     const sessionId = activeSessionId
+    const cursor = firstLoadedTurnId
     set({ isLoadingOlder: true })
     try {
-      const res = await messagesApi.listMessageWindow(sessionId, { beforeTurnId: firstLoadedTurnId, turnLimit: 12 })
-      if (get().activeSessionId !== sessionId || requestId !== latestOlderMessagesRequest) return 0
+      const res = await messagesApi.listMessageWindow(sessionId, { beforeTurnId: cursor, turnLimit: 12 })
+      const current = get()
+      if (
+        current.activeSessionId !== sessionId
+        || current.messageWindowGeneration !== messageWindowGeneration
+        || requestId !== latestPaginationRequest
+        || current.firstLoadedTurnId !== cursor
+      ) return 0
       const older = normalizeMessages(res.messages || [])
       const existingIds = new Set(get().messages.map((m) => m.id))
       const fresh = older.filter((m) => !existingIds.has(m.id))
@@ -470,21 +494,32 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     } catch {
       return 0
     } finally {
-      if (get().activeSessionId === sessionId && requestId === latestOlderMessagesRequest) {
+      if (
+        get().activeSessionId === sessionId
+        && get().messageWindowGeneration === messageWindowGeneration
+        && requestId === latestPaginationRequest
+      ) {
         set({ isLoadingOlder: false })
       }
     }
   },
 
   loadNewerMessages: async () => {
-    const { activeSessionId, hasNewerMessages, isLoadingNewer, lastLoadedTurnId } = get()
-    if (!activeSessionId || !hasNewerMessages || isLoadingNewer || !lastLoadedTurnId) return 0
-    const requestId = ++latestOlderMessagesRequest
+    const { activeSessionId, hasNewerMessages, isLoadingOlder, isLoadingNewer, lastLoadedTurnId, messageWindowGeneration } = get()
+    if (!activeSessionId || !hasNewerMessages || isLoadingOlder || isLoadingNewer || !lastLoadedTurnId) return 0
+    const requestId = ++latestPaginationRequest
     const sessionId = activeSessionId
+    const cursor = lastLoadedTurnId
     set({ isLoadingNewer: true })
     try {
-      const res = await messagesApi.listMessageWindow(sessionId, { afterTurnId: lastLoadedTurnId, turnLimit: 12 })
-      if (get().activeSessionId !== sessionId || requestId !== latestOlderMessagesRequest) return 0
+      const res = await messagesApi.listMessageWindow(sessionId, { afterTurnId: cursor, turnLimit: 12 })
+      const current = get()
+      if (
+        current.activeSessionId !== sessionId
+        || current.messageWindowGeneration !== messageWindowGeneration
+        || requestId !== latestPaginationRequest
+        || current.lastLoadedTurnId !== cursor
+      ) return 0
       const existingIds = new Set(get().messages.map((message) => message.id))
       const fresh = normalizeMessages(res.messages || []).filter((message) => !existingIds.has(message.id))
       set((state) => {
@@ -503,16 +538,27 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     } catch {
       return 0
     } finally {
-      if (get().activeSessionId === sessionId && requestId === latestOlderMessagesRequest) set({ isLoadingNewer: false })
+      if (
+        get().activeSessionId === sessionId
+        && get().messageWindowGeneration === messageWindowGeneration
+        && requestId === latestPaginationRequest
+      ) set({ isLoadingNewer: false })
     }
   },
 
   loadMessageWindowAround: async (turnId: number) => {
     const sessionId = get().activeSessionId
-    if (!sessionId || turnId <= 0) return
+    if (!sessionId || turnId <= 0) return false
     const requestId = ++latestMessagesRequest
+    const windowGeneration = get().messageWindowGeneration + 1
+    latestPaginationRequest += 1
+    set({
+      messageWindowGeneration: windowGeneration,
+      isLoadingOlder: false,
+      isLoadingNewer: false,
+    })
     const res = await messagesApi.listMessageWindow(sessionId, { aroundTurnId: turnId, turnLimit: 16 })
-    if (get().activeSessionId !== sessionId || requestId !== latestMessagesRequest) return
+    if (get().activeSessionId !== sessionId || requestId !== latestMessagesRequest || get().messageWindowGeneration !== windowGeneration) return false
     set({
       messages: normalizeMessages(res.messages || []),
       hasMoreMessages: !!res.has_older,
@@ -521,6 +567,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       lastLoadedTurnId: res.last_turn_id || null,
       messageLoadError: null,
     })
+    return true
   },
 
   trimLoadedMessageWindow: (limit: number, keep: "start" | "end") => set((state) => {
@@ -536,8 +583,34 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }
   }),
 
-  setMessages: (messages: Message[]) => set({ messages: normalizeMessages(messages), messageLoadError: null }),
-  syncMessages: (messages: Message[]) => set((s) => ({ messages: mergeSyncedMessages(s.messages, messages), messageLoadError: null })),
+  setMessages: (messages: Message[]) => {
+    latestMessagesRequest += 1
+    latestPaginationRequest += 1
+    set((state) => ({
+      messages: normalizeMessages(messages),
+      messageWindowGeneration: state.messageWindowGeneration + 1,
+      isLoadingMessages: false,
+      isLoadingOlder: false,
+      isLoadingNewer: false,
+      messageLoadError: null,
+    }))
+  },
+  syncMessages: (messages: Message[], expectedWindowGeneration = get().messageWindowGeneration) => {
+    let committed = false
+    set((state) => {
+      if (state.messageWindowGeneration !== expectedWindowGeneration || state.hasNewerMessages) return state
+      const merged = mergeSyncedMessages(state.messages, messages)
+      const bounds = messageTurnBounds(merged)
+      committed = true
+      return {
+        messages: merged,
+        firstLoadedTurnId: bounds.first,
+        lastLoadedTurnId: bounds.last,
+        messageLoadError: null,
+      }
+    })
+    return committed
+  },
 
   beginCompaction: (sessionId: number, operationId: string, notice = "") =>
     set((s) => ({
@@ -762,7 +835,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   resetAccountState: () => {
     latestMessagesRequest += 1
-    latestOlderMessagesRequest += 1
+    latestPaginationRequest += 1
     latestSessionsRequest += 1
     latestSessionFoldersRequest += 1
     latestSessionCreateReadinessRequest += 1
@@ -773,6 +846,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       activeFolderId: "all",
       activeSessionId: null,
       activeSessionGeneration: get().activeSessionGeneration + 1,
+      messageWindowGeneration: get().messageWindowGeneration + 1,
       messages: [],
       conversationTurns: [],
       totalConversationTurns: 0,

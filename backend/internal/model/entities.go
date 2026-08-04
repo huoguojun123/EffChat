@@ -8,21 +8,28 @@ import (
 )
 
 type User struct {
-	ID           int64      `json:"id"`
-	Username     string     `json:"username"`
-	Email        *string    `json:"email,omitempty"`
-	PasswordHash string     `json:"-"` // 不返回给前端
-	Nickname     *string    `json:"nickname,omitempty"`
-	AvatarURL    *string    `json:"avatar_url,omitempty"`
-	Role         string     `json:"role"`               // admin, user
-	GroupID      *int64     `json:"group_id,omitempty"` // 所属分级组，NULL=默认最低级
-	Permissions  []byte     `json:"permissions,omitempty"`
-	Preferences  []byte     `json:"preferences,omitempty"`
-	IsActive     bool       `json:"is_active"`
-	AuthVersion  int        `json:"-"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	ID             int64               `json:"id"`
+	Username       string              `json:"username"`
+	Email          *string             `json:"email,omitempty"`
+	PasswordHash   string              `json:"-"` // 不返回给前端
+	Nickname       *string             `json:"nickname,omitempty"`
+	AvatarURL      *string             `json:"avatar_url,omitempty"`
+	Role           string              `json:"role"`               // admin, user
+	GroupID        *int64              `json:"group_id,omitempty"` // 原始分级组；NULL 动态继承当前默认组
+	EffectiveGroup *EffectiveUserGroup `json:"-"`                  // repository 解析的当前生效组，不持久化
+	Permissions    []byte              `json:"permissions,omitempty"`
+	Preferences    []byte              `json:"preferences,omitempty"`
+	IsActive       bool                `json:"is_active"`
+	AuthVersion    int                 `json:"-"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+	LastLoginAt    *time.Time          `json:"last_login_at,omitempty"`
+}
+
+type EffectiveUserGroup struct {
+	ID    int64
+	Name  string
+	Level int
 }
 
 // UserGroup 用户分级组（user_groups 表）。level 越大权限越高。

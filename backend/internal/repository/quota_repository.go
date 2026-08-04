@@ -98,31 +98,15 @@ func NewQuotaRepository(db *sql.DB) *QuotaRepository {
 func (r *QuotaRepository) LimitsForUser(ctx context.Context, userID int64) (UserQuotaLimits, error) {
 	query := `
 		SELECT
-			COALESCE(g.daily_message_limit, dg.daily_message_limit, 0),
-			COALESCE(g.daily_token_limit, dg.daily_token_limit, 0),
-			COALESCE(g.concurrent_run_limit, dg.concurrent_run_limit, 0),
-			COALESCE(g.daily_tool_call_limit, dg.daily_tool_call_limit, 0),
-			COALESCE(g.daily_web_search_limit, dg.daily_web_search_limit, 0),
-			COALESCE(g.daily_web_extract_limit, dg.daily_web_extract_limit, 0),
-			COALESCE(g.daily_ocr_file_limit, dg.daily_ocr_file_limit, 0),
-			COALESCE(g.daily_ocr_page_limit, dg.daily_ocr_page_limit, 0)
-		FROM users u
-		LEFT JOIN user_groups g ON g.id = u.group_id
-		LEFT JOIN LATERAL (
-			SELECT
-				daily_message_limit,
-				daily_token_limit,
-				concurrent_run_limit,
-				daily_tool_call_limit,
-				daily_web_search_limit,
-				daily_web_extract_limit,
-				daily_ocr_file_limit,
-				daily_ocr_page_limit
-			FROM user_groups
-			WHERE is_default = true
-			ORDER BY level ASC, id ASC
-			LIMIT 1
-		) dg ON true
+			COALESCE(assigned_group.daily_message_limit, default_group.daily_message_limit, 0),
+			COALESCE(assigned_group.daily_token_limit, default_group.daily_token_limit, 0),
+			COALESCE(assigned_group.concurrent_run_limit, default_group.concurrent_run_limit, 0),
+			COALESCE(assigned_group.daily_tool_call_limit, default_group.daily_tool_call_limit, 0),
+			COALESCE(assigned_group.daily_web_search_limit, default_group.daily_web_search_limit, 0),
+			COALESCE(assigned_group.daily_web_extract_limit, default_group.daily_web_extract_limit, 0),
+			COALESCE(assigned_group.daily_ocr_file_limit, default_group.daily_ocr_file_limit, 0),
+			COALESCE(assigned_group.daily_ocr_page_limit, default_group.daily_ocr_page_limit, 0)
+		FROM users u` + effectiveUserGroupJoinSQL + `
 		WHERE u.id = $1
 	`
 	var limits UserQuotaLimits
@@ -409,31 +393,15 @@ func checkOCRQuota(limits UserQuotaLimits, usage QuotaUsage, pageCount int) erro
 func limitsForUserInTx(ctx context.Context, tx *sql.Tx, userID int64) (UserQuotaLimits, error) {
 	query := `
 		SELECT
-			COALESCE(g.daily_message_limit, dg.daily_message_limit, 0),
-			COALESCE(g.daily_token_limit, dg.daily_token_limit, 0),
-			COALESCE(g.concurrent_run_limit, dg.concurrent_run_limit, 0),
-			COALESCE(g.daily_tool_call_limit, dg.daily_tool_call_limit, 0),
-			COALESCE(g.daily_web_search_limit, dg.daily_web_search_limit, 0),
-			COALESCE(g.daily_web_extract_limit, dg.daily_web_extract_limit, 0),
-			COALESCE(g.daily_ocr_file_limit, dg.daily_ocr_file_limit, 0),
-			COALESCE(g.daily_ocr_page_limit, dg.daily_ocr_page_limit, 0)
-		FROM users u
-		LEFT JOIN user_groups g ON g.id = u.group_id
-		LEFT JOIN LATERAL (
-			SELECT
-				daily_message_limit,
-				daily_token_limit,
-				concurrent_run_limit,
-				daily_tool_call_limit,
-				daily_web_search_limit,
-				daily_web_extract_limit,
-				daily_ocr_file_limit,
-				daily_ocr_page_limit
-			FROM user_groups
-			WHERE is_default = true
-			ORDER BY level ASC, id ASC
-			LIMIT 1
-		) dg ON true
+			COALESCE(assigned_group.daily_message_limit, default_group.daily_message_limit, 0),
+			COALESCE(assigned_group.daily_token_limit, default_group.daily_token_limit, 0),
+			COALESCE(assigned_group.concurrent_run_limit, default_group.concurrent_run_limit, 0),
+			COALESCE(assigned_group.daily_tool_call_limit, default_group.daily_tool_call_limit, 0),
+			COALESCE(assigned_group.daily_web_search_limit, default_group.daily_web_search_limit, 0),
+			COALESCE(assigned_group.daily_web_extract_limit, default_group.daily_web_extract_limit, 0),
+			COALESCE(assigned_group.daily_ocr_file_limit, default_group.daily_ocr_file_limit, 0),
+			COALESCE(assigned_group.daily_ocr_page_limit, default_group.daily_ocr_page_limit, 0)
+		FROM users u` + effectiveUserGroupJoinSQL + `
 		WHERE u.id = $1
 	`
 	var limits UserQuotaLimits

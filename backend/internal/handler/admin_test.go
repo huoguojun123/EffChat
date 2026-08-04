@@ -178,6 +178,9 @@ func TestAdminListUsers(t *testing.T) {
 			if u.Role != "admin" {
 				t.Errorf("first user should be admin, got role=%s", u.Role)
 			}
+			if u.GroupID != nil || !u.EffectiveGroup.Inherited || u.EffectiveGroup.ID <= 0 || u.EffectiveGroup.Name == "" {
+				t.Errorf("unassigned admin effective group = %+v raw_group_id=%v", u.EffectiveGroup, u.GroupID)
+			}
 			found = true
 		}
 	}

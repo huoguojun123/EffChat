@@ -412,16 +412,9 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 		}
 	}
 
-	mountedTools := make(map[string]bool, len(tools))
-	for _, mountedTool := range tools {
-		info, err := mountedTool.Info(setupCtx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to inspect mounted tool: %w", err)
-		}
-		if info == nil || strings.TrimSpace(info.Name) == "" {
-			return nil, errors.New("mounted tool has no name")
-		}
-		mountedTools[info.Name] = true
+	mountedTools, err := validateMountedToolGovernance(setupCtx, toolRuntime, tools)
+	if err != nil {
+		return nil, err
 	}
 
 	instruction, err := buildInstruction(a.configRepo, req, searchDecision, mountedTools)
@@ -527,6 +520,28 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 		return &classicPreparedIterator{inner: runner.Run(runCtx, einoMessages)}
 	}
 	return prepared, nil
+}
+
+// validateMountedToolGovernance is the final assembly invariant between Eino
+// ToolInfo and the Admin/runtime catalog. A Tool that is executable but absent
+// from the catalog would otherwise be invisible to administrators and could
+// bypass the configured enabled state, so setup fails before model execution.
+func validateMountedToolGovernance(ctx context.Context, runtime service.ToolRuntimeConfigSet, tools []einoTool.BaseTool) (map[string]bool, error) {
+	mounted := make(map[string]bool, len(tools))
+	for _, mountedTool := range tools {
+		info, err := mountedTool.Info(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect mounted tool: %w", err)
+		}
+		if info == nil || strings.TrimSpace(info.Name) == "" {
+			return nil, errors.New("mounted tool has no name")
+		}
+		if !runtime.IsKnown(info.Name) {
+			return nil, fmt.Errorf("mounted tool %q is not registered in runtime governance", info.Name)
+		}
+		mounted[info.Name] = true
+	}
+	return mounted, nil
 }
 
 // RunPreparedChat executes a successfully prepared chat with the durable run

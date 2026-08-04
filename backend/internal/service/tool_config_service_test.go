@@ -19,6 +19,12 @@ func TestToolConfigService_RuntimeConfigDefaults(t *testing.T) {
 	if got := runtime.Timeout("web_extract").Seconds(); got != 30 {
 		t.Fatalf("web_extract timeout = %.0f, want 30", got)
 	}
+	if runtime.IsEnabled("unregistered_tool") {
+		t.Fatal("unknown tools must fail closed")
+	}
+	if runtime.IsKnown("unregistered_tool") {
+		t.Fatal("unknown tool reported as governed")
+	}
 }
 
 func TestToolConfigService_RejectsUnknownTool(t *testing.T) {

@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/modelstream"
 	"github.com/huoguojun123/EffChat/internal/repository"
@@ -20,6 +22,36 @@ import (
 	internaltool "github.com/huoguojun123/EffChat/internal/tool"
 	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
+
+type governanceInfoTool struct {
+	name string
+}
+
+func (t governanceInfoTool) Info(context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: t.name}, nil
+}
+
+func TestValidateMountedToolGovernanceRejectsUnknownTool(t *testing.T) {
+	runtime := service.NewToolConfigService(nil).RuntimeConfigSet()
+	if _, err := validateMountedToolGovernance(t.Context(), runtime, []einoTool.BaseTool{
+		governanceInfoTool{name: "unregistered_tool"},
+	}); err == nil || !strings.Contains(err.Error(), "not registered in runtime governance") {
+		t.Fatalf("validation error = %v, want unregistered governance error", err)
+	}
+}
+
+func TestValidateMountedToolGovernanceAcceptsCatalogTool(t *testing.T) {
+	runtime := service.NewToolConfigService(nil).RuntimeConfigSet()
+	mounted, err := validateMountedToolGovernance(t.Context(), runtime, []einoTool.BaseTool{
+		governanceInfoTool{name: "memory"},
+	})
+	if err != nil {
+		t.Fatalf("validate known tool: %v", err)
+	}
+	if !mounted["memory"] {
+		t.Fatalf("mounted = %#v, want memory", mounted)
+	}
+}
 
 func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	runtime := service.ToolRuntimeConfigSet{

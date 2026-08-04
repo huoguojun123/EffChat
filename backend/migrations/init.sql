@@ -55,7 +55,7 @@ CREATE TRIGGER update_user_groups_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 COMMENT ON TABLE  user_groups            IS '用户分级组：level 越大权限越高';
-COMMENT ON COLUMN user_groups.is_default IS '未显式分组用户动态继承的默认组（应仅一个为 true）';
+COMMENT ON COLUMN user_groups.is_default IS '新用户默认组（应仅一个为 true）';
 COMMENT ON COLUMN user_groups.daily_message_limit IS '每日用户消息数上限，0 表示不限制';
 COMMENT ON COLUMN user_groups.daily_token_limit IS '每日模型 token 近似上限，0 表示不限制';
 COMMENT ON COLUMN user_groups.concurrent_run_limit IS '并发 chat run 上限，0 表示不限制';
@@ -99,7 +99,7 @@ CREATE TRIGGER update_users_updated_at
 
 COMMENT ON TABLE users IS '用户表';
 COMMENT ON COLUMN users.role IS '角色：admin（管理员）或 user（普通用户）。首个注册用户由应用层自动设为 admin';
-COMMENT ON COLUMN users.group_id IS '显式所属分级组，NULL 动态继承当前默认组';
+COMMENT ON COLUMN users.group_id IS '所属分级组，NULL 视为默认最低级';
 
 -- ============================================
 -- 3. 会话文件夹表

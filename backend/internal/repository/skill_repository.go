@@ -131,6 +131,15 @@ func (r *SkillRepository) UpsertPackageWithRecord(skill *model.Skill, files []mo
 		).Scan(&record.ID, &record.CreatedAt); err != nil {
 			return fmt.Errorf("failed to insert skill import record: %w", err)
 		}
+		for _, file := range files {
+			if _, err := tx.Exec(`
+				INSERT INTO skill_import_record_files (
+					import_record_id, relative_path, storage_path, kind, size, checksum
+				) VALUES ($1, $2, $3, $4, $5, $6)
+			`, record.ID, file.RelativePath, file.StoragePath, file.Kind, file.Size, file.Checksum); err != nil {
+				return fmt.Errorf("failed to retain skill import file %s: %w", file.RelativePath, err)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -344,12 +353,18 @@ func (r *SkillRepository) FilePathsForSkill(id string) ([]string, error) {
 	return paths, rows.Err()
 }
 
-func (r *SkillRepository) ActiveFilePaths() ([]string, error) {
+// RetainedFilePaths returns both the active package files and immutable files
+// referenced by import history. Cleanup must preserve both sets: an inactive
+// package may still be the only locally available source for a native rollback.
+func (r *SkillRepository) RetainedFilePaths() ([]string, error) {
 	rows, err := r.db.Query(`
 		SELECT f.storage_path
 		FROM skill_files f
 		JOIN skills s ON s.id = f.skill_id
 		WHERE s.deleted_at IS NULL
+		UNION
+		SELECT storage_path
+		FROM skill_import_record_files
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list active skill paths: %w", err)
@@ -364,6 +379,31 @@ func (r *SkillRepository) ActiveFilePaths() ([]string, error) {
 		paths = append(paths, path)
 	}
 	return paths, rows.Err()
+}
+
+func (r *SkillRepository) ListImportRecordFiles(recordID int64) ([]model.SkillImportRecordFile, error) {
+	rows, err := r.db.Query(`
+		SELECT import_record_id, relative_path, storage_path, kind, size, checksum
+		FROM skill_import_record_files
+		WHERE import_record_id = $1
+		ORDER BY CASE WHEN kind = 'entry' THEN 0 ELSE 1 END, relative_path ASC
+	`, recordID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list retained skill import files: %w", err)
+	}
+	defer rows.Close()
+	var files []model.SkillImportRecordFile
+	for rows.Next() {
+		var file model.SkillImportRecordFile
+		if err := rows.Scan(&file.ImportRecordID, &file.RelativePath, &file.StoragePath, &file.Kind, &file.Size, &file.Checksum); err != nil {
+			return nil, fmt.Errorf("failed to scan retained skill import file: %w", err)
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate retained skill import files: %w", err)
+	}
+	return files, nil
 }
 
 type skillScanner interface {

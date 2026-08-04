@@ -712,12 +712,12 @@ func (s *SkillService) cleanupExpiredSkillPackages() {
 		return
 	}
 
-	activePaths, err := s.skillRepo.ActiveFilePaths()
+	retainedPaths, err := s.skillRepo.RetainedFilePaths()
 	if err != nil {
 		return
 	}
 	activeRoots := map[string]struct{}{}
-	for _, path := range activePaths {
+	for _, path := range retainedPaths {
 		if root := skillPackageRootFromPath(path); root != "" {
 			activeRoots[root] = struct{}{}
 		}

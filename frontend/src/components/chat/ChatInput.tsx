@@ -147,16 +147,16 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     }
   }
 
-  const markMemorySeen = useCallback((changeId: number | null) => {
-    if (!activeSessionId || !changeId) return
-    localStorage.setItem(`session-memory-seen:${activeSessionId}`, String(changeId))
+  const markMemorySeen = useCallback((sessionId: number, changeId: number | null) => {
+    if (!changeId) return
+    localStorage.setItem(`session-memory-seen:${sessionId}`, String(changeId))
+    if (sessionId !== useChatStore.getState().activeSessionId) return
     setMemoryUnseen(false)
-  }, [activeSessionId])
+  }, [])
 
-  const handleMemoryEnabledChange = useCallback((enabled: boolean) => {
-    if (!activeSessionId) return
-    updateSessionLocal(activeSessionId, { memory_enabled: enabled })
-  }, [activeSessionId, updateSessionLocal])
+  const handleMemoryEnabledChange = useCallback((sessionId: number, enabled: boolean) => {
+    updateSessionLocal(sessionId, { memory_enabled: enabled })
+  }, [updateSessionLocal])
 
   useEffect(() => {
     if (!activeSessionId || !memoryEnabled || streamingStatus !== "idle") {

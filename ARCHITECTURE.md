@@ -80,6 +80,8 @@ backend (Gin)
 
 Session 的数据库实体继续以 JSONB bytes 保存 `metadata`，但 HTTP wire boundary 必须把它序列化为 JSON object。Create、Get 和 List 使用同一模型级契约，前端刷新或重新进入会话后仍可直接读取 `skills_enabled` 等结构化字段；反序列化兼容旧版本曾返回的 base64 string，只用于读取历史响应，不再对外生成旧 shape。该修复不改变数据库 JSONB、Skill 权限过滤或 Agent 运行时读取路径。
 
+会话 Skill 快速切换由前端每个 session 的局部 mutation coordinator 串行提交。同一 session 在途时只保留最新 desired set，旧 success/failure 不得覆盖后续点击；成功必须消费服务端权限过滤后的 canonical `skills_enabled`，最终失败重新读取会话 canonical 状态。coordinator 空闲后从当前 store 快照重新建立基线，组件卸载或账户 reset 会失效全部 owner，迟到响应不能写入新账户。该前端所有权不改变后端 JSONB 定点更新、权限过滤或 Agent preflight，也不承诺跨标签页同字段 CAS；若未来需要多客户端确定性，应增加窄 `skills_enabled` revision，而不是扩展为全 Session CRDT。
+
 会话列表的 `limit/offset/folder_id` 同样是显式查询契约：limit 只接受 1–100，offset 必须非负，folder scope 只接受 `all`、`unfiled` 或正整数 ID；非法值统一返回 `session_list_query_invalid` 400，不静默回退默认分页。该校验不改变 `has_more/next_offset`、置顶排序、folder 归属或前端加载更多行为，repository 故障仍使用带 request ID 的 retryable `session_list_failed` 5xx。
 
 全局对话检索只接受 2–120 字符 query、`all/unfiled/folder` scope、folder scope 的正整数 ID 和 1–50 的 limit；非法值统一返回 `conversation_search_query_invalid` 400，不再以裸 error 或默认 limit 隐藏错误。检索仍只读取当前用户未删除会话及可见 selected answer，repository query/scan/iteration 故障统一为带 request ID 的 retryable `conversation_search_failed` 5xx；前端既有 debounce、迟到响应 owner 和结果跳转行为不变。

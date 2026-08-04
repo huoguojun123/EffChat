@@ -78,6 +78,8 @@ backend (Gin)
 
 会话详情、消息分页/turn/window、Markdown 导出，以及 Run/记忆入口的会话归属查询共享同一隐私边界：不存在与无权访问均公开为 `session_not_found`，但 PostgreSQL 和扫描故障必须保留到带 request ID 的 retryable 5xx，不能在 service 层压成 404。消息 window 的目标 turn 不存在使用独立 404；本地 cursor/limit/window 参数错误使用稳定 400。
 
+Session 的数据库实体继续以 JSONB bytes 保存 `metadata`，但 HTTP wire boundary 必须把它序列化为 JSON object。Create、Get 和 List 使用同一模型级契约，前端刷新或重新进入会话后仍可直接读取 `skills_enabled` 等结构化字段；反序列化兼容旧版本曾返回的 base64 string，只用于读取历史响应，不再对外生成旧 shape。该修复不改变数据库 JSONB、Skill 权限过滤或 Agent 运行时读取路径。
+
 会话列表的 `limit/offset/folder_id` 同样是显式查询契约：limit 只接受 1–100，offset 必须非负，folder scope 只接受 `all`、`unfiled` 或正整数 ID；非法值统一返回 `session_list_query_invalid` 400，不静默回退默认分页。该校验不改变 `has_more/next_offset`、置顶排序、folder 归属或前端加载更多行为，repository 故障仍使用带 request ID 的 retryable `session_list_failed` 5xx。
 
 全局对话检索只接受 2–120 字符 query、`all/unfiled/folder` scope、folder scope 的正整数 ID 和 1–50 的 limit；非法值统一返回 `conversation_search_query_invalid` 400，不再以裸 error 或默认 limit 隐藏错误。检索仍只读取当前用户未删除会话及可见 selected answer，repository query/scan/iteration 故障统一为带 request ID 的 retryable `conversation_search_failed` 5xx；前端既有 debounce、迟到响应 owner 和结果跳转行为不变。

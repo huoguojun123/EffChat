@@ -148,6 +148,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 手动维护先生成并校验候选记忆，再在同一 PostgreSQL 事务中提交 durable terminal、记忆 CAS、`session_memory_changes` 和 `model_task_runs`。`session_memory_changes.run_id` 使 ambiguous terminal commit 的恢复重试不会重复写入记忆历史。
 - 记忆 REST 与维护任务的 HTTP 准入遵循公共错误契约：内容或 change id 校验为 400，缺失 change 为 404，CAS/不可撤销状态为 409，不可用维护服务为 503；memory repository、响应重建和 stream 初始化故障为带 request ID 的 retryable 5xx。任务一旦进入 RunHub，后续失败继续由既有 SSE/terminal 公共事件收口，原始错误只进入内部 task run 与日志。
 - 记忆 GET/PUT/undo、记忆维护与回答版本切换共享同一个 session ID 解析边界；非正整数统一返回 `session_id_invalid` 400、`retryable=false`，不能因入口不同退化为裸错误。该共享校验不改变会话所有权查询、记忆 CAS、RunHub 维护任务或回答选择事务。
+- 记忆弹窗的异步读取和 mutation 绑定局部 `{sessionId, dialogGeneration, operationId}` owner。打开、关闭、切换会话或重新加载会推进 generation；同一窗口内的新操作递增 operation ID。迟到的 load/save/compact/retry/undo success、error、finally 和 quiet reload 只能更新仍拥有该 owner 的窗口，不能覆盖另一会话的 sections、changes、task runs、pending、success/error 或 saving。`onEnabledChange` 与 `onSeenChange` 显式携带请求 session ID，不能在响应到达时读取当前活动会话；后端现有 memory CAS、RunHub terminal 和草稿基线不因前端竞态修复而改变。
 
 ## 数据库与迁移
 

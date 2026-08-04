@@ -38,16 +38,24 @@ func (s *UserAdminService) SetRunHub(runHub *RunHub) {
 }
 
 type UserResponse struct {
-	ID          int64           `json:"id"`
-	Username    string          `json:"username"`
-	Email       *string         `json:"email,omitempty"`
-	Nickname    *string         `json:"nickname,omitempty"`
-	Role        string          `json:"role"`
-	GroupID     *int64          `json:"group_id,omitempty"`
-	Permissions json.RawMessage `json:"permissions,omitempty"`
-	IsActive    bool            `json:"is_active"`
-	CreatedAt   string          `json:"created_at"`
-	LastLoginAt *string         `json:"last_login_at,omitempty"`
+	ID             int64                      `json:"id"`
+	Username       string                     `json:"username"`
+	Email          *string                    `json:"email,omitempty"`
+	Nickname       *string                    `json:"nickname,omitempty"`
+	Role           string                     `json:"role"`
+	GroupID        *int64                     `json:"group_id"`
+	EffectiveGroup EffectiveUserGroupResponse `json:"effective_group"`
+	Permissions    json.RawMessage            `json:"permissions,omitempty"`
+	IsActive       bool                       `json:"is_active"`
+	CreatedAt      string                     `json:"created_at"`
+	LastLoginAt    *string                    `json:"last_login_at,omitempty"`
+}
+
+type EffectiveUserGroupResponse struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Level     int    `json:"level"`
+	Inherited bool   `json:"inherited"`
 }
 
 type CreateUserRequest struct {
@@ -72,7 +80,7 @@ type ResetPasswordRequest struct {
 	Password string `json:"password" binding:"required,min=6"`
 }
 
-// SetGroupRequest 设置用户分级组（group_id 为 null 时清空，回落默认最低级）。
+// SetGroupRequest 设置原始用户组；group_id 为 null 时动态继承当前默认组。
 type SetGroupRequest struct {
 	GroupID *int64 `json:"group_id"`
 }
@@ -175,7 +183,11 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 	if err := s.userRepo.Create(user); err != nil {
 		return nil, err
 	}
-	return toUserResponse(user), nil
+	created, err := s.userRepo.GetByIDIncludeInactive(user.ID)
+	if err != nil {
+		return nil, err
+	}
+	return toUserResponse(created), nil
 }
 
 func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserResponse, error) {
@@ -272,16 +284,23 @@ func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest
 }
 
 func toUserResponse(u *model.User) *UserResponse {
+	effectiveGroup := EffectiveUserGroupResponse{Inherited: u.GroupID == nil}
+	if u.EffectiveGroup != nil {
+		effectiveGroup.ID = u.EffectiveGroup.ID
+		effectiveGroup.Name = u.EffectiveGroup.Name
+		effectiveGroup.Level = u.EffectiveGroup.Level
+	}
 	resp := &UserResponse{
-		ID:          u.ID,
-		Username:    u.Username,
-		Email:       u.Email,
-		Nickname:    u.Nickname,
-		Role:        u.Role,
-		GroupID:     u.GroupID,
-		Permissions: json.RawMessage(u.Permissions),
-		IsActive:    u.IsActive,
-		CreatedAt:   u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:             u.ID,
+		Username:       u.Username,
+		Email:          u.Email,
+		Nickname:       u.Nickname,
+		Role:           u.Role,
+		GroupID:        u.GroupID,
+		EffectiveGroup: effectiveGroup,
+		Permissions:    json.RawMessage(u.Permissions),
+		IsActive:       u.IsActive,
+		CreatedAt:      u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if u.LastLoginAt != nil {
 		s := u.LastLoginAt.Format("2006-01-02T15:04:05Z07:00")

@@ -339,10 +339,11 @@ func (r *UserRepository) UpdatePassword(userID int64, hashedPassword string) err
 // ListAll 获取所有用户（管理员用，含禁用账户）
 func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 	query := `
-		SELECT id, username, email, password_hash, nickname, avatar_url, role, group_id,
-		       permissions, preferences, is_active, auth_version, created_at, updated_at, last_login_at
-		FROM users
-		ORDER BY created_at DESC
+		SELECT u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.role, u.group_id,
+		       u.permissions, u.preferences, u.is_active, u.auth_version, u.created_at, u.updated_at, u.last_login_at,` +
+		effectiveUserGroupIdentitySQL + `
+		FROM users u` + effectiveUserGroupJoinSQL + `
+		ORDER BY u.created_at DESC
 		LIMIT $1 OFFSET $2
 	`
 
@@ -355,6 +356,7 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 	var users []*model.User
 	for rows.Next() {
 		user := &model.User{}
+		effectiveGroup := &model.EffectiveUserGroup{}
 		err := rows.Scan(
 			&user.ID,
 			&user.Username,
@@ -371,10 +373,14 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 			&user.CreatedAt,
 			&user.UpdatedAt,
 			&user.LastLoginAt,
+			&effectiveGroup.ID,
+			&effectiveGroup.Name,
+			&effectiveGroup.Level,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan user: %w", err)
 		}
+		user.EffectiveGroup = effectiveGroup
 		users = append(users, user)
 	}
 	if err := rows.Err(); err != nil {
@@ -383,7 +389,7 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 	return users, nil
 }
 
-// SetGroup 设置用户所属分级组（groupID 为 nil 时清空，视为默认最低级）。
+// SetGroup 设置原始用户组；nil 保持为 NULL，并动态继承当前默认组。
 func (r *UserRepository) SetGroup(userID int64, groupID *int64) error {
 	result, err := r.db.Exec(`UPDATE users SET group_id = $1, updated_at = NOW() WHERE id = $2`, groupID, userID)
 	if err != nil {
@@ -407,25 +413,17 @@ func isUserGroupForeignKeyViolation(err error) bool {
 	return errors.As(err, &pqErr) && pqErr.Code == "23503" && pqErr.Constraint == "users_group_id_fkey"
 }
 
-// GetGroupLevel 返回用户所属组的 level；未分组（NULL）或组不存在时返回 0（默认最低级）。
+// GetGroupLevel 返回用户当前有效组的 level；NULL 用户动态继承默认组。
 func (r *UserRepository) GetGroupLevel(userID int64) (int, error) {
 	return r.GetGroupLevelContext(context.Background(), userID)
 }
 
 func (r *UserRepository) GetGroupLevelContext(ctx context.Context, userID int64) (int, error) {
-	var level int
-	query := `SELECT COALESCE(g.level, 0)
-		FROM users u
-		LEFT JOIN user_groups g ON g.id = u.group_id
-		WHERE u.id = $1`
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(&level)
-	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("user not found: %w", ErrNotFound)
-	}
+	group, err := r.GetEffectiveGroupContext(ctx, userID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get user group level: %w", err)
+		return 0, err
 	}
-	return level, nil
+	return group.Level, nil
 }
 
 // CountAll 统计全部用户数量（含禁用）
@@ -441,11 +439,13 @@ func (r *UserRepository) CountAll() (int, error) {
 // GetByIDIncludeInactive 根据 ID 获取用户（含禁用账户，管理员用）
 func (r *UserRepository) GetByIDIncludeInactive(id int64) (*model.User, error) {
 	user := &model.User{}
+	effectiveGroup := &model.EffectiveUserGroup{}
 	query := `
-		SELECT id, username, email, password_hash, nickname, avatar_url, role, group_id,
-		       permissions, preferences, is_active, auth_version, created_at, updated_at, last_login_at
-		FROM users
-		WHERE id = $1
+		SELECT u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.role, u.group_id,
+		       u.permissions, u.preferences, u.is_active, u.auth_version, u.created_at, u.updated_at, u.last_login_at,` +
+		effectiveUserGroupIdentitySQL + `
+		FROM users u` + effectiveUserGroupJoinSQL + `
+		WHERE u.id = $1
 	`
 	err := r.db.QueryRow(query, id).Scan(
 		&user.ID,
@@ -463,6 +463,9 @@ func (r *UserRepository) GetByIDIncludeInactive(id int64) (*model.User, error) {
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
+		&effectiveGroup.ID,
+		&effectiveGroup.Name,
+		&effectiveGroup.Level,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("user not found: %w", ErrNotFound)
@@ -470,5 +473,6 @@ func (r *UserRepository) GetByIDIncludeInactive(id int64) (*model.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
+	user.EffectiveGroup = effectiveGroup
 	return user, nil
 }

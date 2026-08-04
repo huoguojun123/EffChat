@@ -181,9 +181,9 @@ Prompt Group list/create/update/delete 复用独立的资源错误边界：ID �
 
 个人与共享 Prompt CRUD 复用同一领域错误出口：ID、分页、标题、正文与分组字段的本地约束为稳定 400，缺失 Prompt 或不可访问分组为 404，个人入口修改可见共享 Prompt 为 403，repository、transaction、rows iteration 与 rows-affected 故障为带 request ID 的 retryable 5xx。共享 Prompt 仍只能由管理员入口创建、更新和删除；个人私有 Prompt 与共享库的可见性隔离不变。本契约不把有界 page 当完整 catalog，不改变前端 editor owner，也不改变 partial PATCH 的完整对象写回语义；这些分别继续由 P2-27、P2-23 与 P2-47 收口。
 
-管理员 User Group list/create/update/delete 复用稳定资源错误边界：ID、名称、描述、等级与配额限制校验为 400，名称重名及撤销/删除最后默认组的 invariant 冲突为 409，缺失资源为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。默认组 advisory-lock 与事务保护继续由 repository 持有；本契约不改变 effective group 解析、request context 传播或 partial PATCH 并发所有权。
+管理员 User Group list/create/update/delete 复用稳定资源错误边界：ID、名称、描述、等级与配额限制校验为 400，名称重名及撤销/删除最后默认组的 invariant 冲突为 409，缺失资源为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。默认组 advisory-lock 与事务保护继续由 repository 持有。`users.group_id` 是原始显式绑定；NULL 不复制某个历史组，也不等于 level 0，而是由 repository 在每次权限或配额读取时动态解析为当前唯一默认组。模型与 Skill 消费共享的 effective level，quota 消费同一 effective group 的限制字段；默认组切换、等级/限额更新及显式组删除后的 `ON DELETE SET NULL` 因而立即在各链一致生效。该契约不改变 request context 传播或 partial PATCH 并发所有权。
 
-管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名及最后活动管理员 invariant 为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
+管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名及最后活动管理员 invariant 为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。用户响应同时返回可空的原始 `group_id` 与非空 `effective_group`；后者包含 id/name/level 及 inherited 标记，使 Admin Users 能明确显示“继承默认组 X（等级 N）”，而不是把 NULL 误称为最低级。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
 
 个人 profile 读取、资料更新与改密共享账户错误边界：邮箱、昵称和新密码的本地约束为稳定 400，当前用户缺失为 404，邮箱重名为 409，repository、事务和密码哈希故障为带 request ID 的 retryable 5xx；错误旧密码继续作为不泄漏账户内部状态的受控 400。密码在 bcrypt 前按 6–72 bytes 校验，资料更新在 repository 约束 owner 保留 unique 与 rows-affected 分类，改密成功仍沿既有事务递增 auth version、取消数据库 run 与 RunHub run。本契约不改变头像文件生命周期、Settings 草稿所有权、HTTP request context 或字段级 PATCH/lost-update 语义。
 

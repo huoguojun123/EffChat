@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/huoguojun123/EffChat/internal/model"
@@ -115,13 +116,37 @@ func TestUserGroupRepository_CRUD(t *testing.T) {
 	}
 }
 
-// TestUserRepository_GroupLevel 验证用户组等级解析：未分组→0，分组后→组 level。
-func TestUserRepository_GroupLevel(t *testing.T) {
+func TestUserRepository_EffectiveGroupContract(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
 	userRepo := NewUserRepository(db)
 	groupRepo := NewUserGroupRepository(db)
+	quotaRepo := NewQuotaRepository(db)
+
+	var originalDefaultID int64
+	if err := db.QueryRow(`SELECT id FROM user_groups WHERE is_default = true`).Scan(&originalDefaultID); err != nil {
+		t.Fatalf("load original default group: %v", err)
+	}
+
+	groups := []*model.UserGroup{
+		{Name: "zz_effective_default_a", Level: 7, IsDefault: false, DailyMessageLimit: 17},
+		{Name: "zz_effective_default_b", Level: 19, IsDefault: false, DailyMessageLimit: 29},
+		{Name: "zz_effective_explicit", Level: 41, IsDefault: false, DailyMessageLimit: 43},
+	}
+	for _, group := range groups {
+		_, _ = db.Exec("DELETE FROM user_groups WHERE name = $1", group.Name)
+		if err := groupRepo.Create(group); err != nil {
+			t.Fatalf("create group %s: %v", group.Name, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(`UPDATE user_groups SET is_default = false WHERE is_default = true`)
+		_, _ = db.Exec(`UPDATE user_groups SET is_default = true WHERE id = $1`, originalDefaultID)
+		for _, group := range groups {
+			_, _ = db.Exec("DELETE FROM user_groups WHERE id = $1", group.ID)
+		}
+	})
 
 	uname := "zz_grp_user"
 	_, _ = db.Exec("DELETE FROM users WHERE username = $1", uname)
@@ -131,30 +156,70 @@ func TestUserRepository_GroupLevel(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM users WHERE id = $1", u.ID) })
 
-	// 未分组 → level 0
-	if lv, err := userRepo.GetGroupLevel(u.ID); err != nil || lv != 0 {
-		t.Fatalf("ungrouped level: want 0 err nil, got %d err %v", lv, err)
+	setDefault := func(group *model.UserGroup) {
+		t.Helper()
+		group.IsDefault = true
+		if err := groupRepo.Update(group); err != nil {
+			t.Fatalf("set default group %s: %v", group.Name, err)
+		}
+	}
+	assertEffective := func(want *model.UserGroup) {
+		t.Helper()
+		got, err := userRepo.GetEffectiveGroupContext(t.Context(), u.ID)
+		if err != nil {
+			t.Fatalf("get effective group: %v", err)
+		}
+		if got.ID != want.ID || got.Name != want.Name || got.Level != want.Level {
+			t.Fatalf("effective group = %+v, want id=%d name=%q level=%d", got, want.ID, want.Name, want.Level)
+		}
+		level, err := userRepo.GetGroupLevel(u.ID)
+		if err != nil || level != want.Level {
+			t.Fatalf("effective level = %d err=%v, want %d", level, err, want.Level)
+		}
+		limits, err := quotaRepo.LimitsForUser(t.Context(), u.ID)
+		if err != nil || limits.DailyMessageLimit != want.DailyMessageLimit {
+			t.Fatalf("effective message limit = %d err=%v, want %d", limits.DailyMessageLimit, err, want.DailyMessageLimit)
+		}
+		adminUser, err := userRepo.GetByIDIncludeInactive(u.ID)
+		if err != nil {
+			t.Fatalf("load administrator user view: %v", err)
+		}
+		if adminUser.EffectiveGroup == nil || adminUser.EffectiveGroup.ID != want.ID || adminUser.EffectiveGroup.Name != want.Name || adminUser.EffectiveGroup.Level != want.Level {
+			t.Fatalf("administrator effective group = %+v, want %+v", adminUser.EffectiveGroup, want)
+		}
 	}
 
-	g := &model.UserGroup{Name: "zz_grp_lvl", Level: 88}
-	_, _ = db.Exec("DELETE FROM user_groups WHERE name = $1", g.Name)
-	if err := groupRepo.Create(g); err != nil {
-		t.Fatalf("create group: %v", err)
-	}
-	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM user_groups WHERE id = $1", g.ID) })
+	// NULL users inherit both permissions and quotas from the current default.
+	setDefault(groups[0])
+	assertEffective(groups[0])
 
-	if err := userRepo.SetGroup(u.ID, &g.ID); err != nil {
-		t.Fatalf("set group: %v", err)
+	groups[0].Name = "zz_effective_default_a_updated"
+	groups[0].Level = 11
+	groups[0].DailyMessageLimit = 23
+	if err := groupRepo.Update(groups[0]); err != nil {
+		t.Fatalf("update active default group: %v", err)
 	}
-	if lv, err := userRepo.GetGroupLevel(u.ID); err != nil || lv != 88 {
-		t.Fatalf("grouped level: want 88 err nil, got %d err %v", lv, err)
-	}
+	assertEffective(groups[0])
 
-	// 清空分组 → 回落 0
-	if err := userRepo.SetGroup(u.ID, nil); err != nil {
-		t.Fatalf("clear group: %v", err)
+	setDefault(groups[1])
+	assertEffective(groups[1])
+
+	// An explicit assignment remains stable when the default changes.
+	if err := userRepo.SetGroup(u.ID, &groups[2].ID); err != nil {
+		t.Fatalf("set explicit group: %v", err)
 	}
-	if lv, _ := userRepo.GetGroupLevel(u.ID); lv != 0 {
-		t.Errorf("after clear: want 0, got %d", lv)
+	assertEffective(groups[2])
+	setDefault(groups[0])
+	assertEffective(groups[2])
+
+	// ON DELETE SET NULL returns the user to dynamic default inheritance.
+	if err := groupRepo.Delete(groups[2].ID); err != nil {
+		t.Fatalf("delete explicit group: %v", err)
+	}
+	groups[2].ID = 0
+	assertEffective(groups[0])
+
+	if _, err := userRepo.GetEffectiveGroupContext(t.Context(), -1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing user error = %v, want ErrNotFound", err)
 	}
 }

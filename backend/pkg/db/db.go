@@ -11,7 +11,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const RequiredSchemaVersion = "048_model_openai_request_profile.sql"
+const RequiredSchemaVersion = "049_effective_user_group_contract.sql"
 
 func VerifySchemaVersion(ctx context.Context, database *sql.DB) (string, error) {
 	var compatible bool

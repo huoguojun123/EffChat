@@ -8,7 +8,13 @@ export interface AdminUser {
   email?: string
   nickname?: string
   role: "admin" | "user"
-  group_id?: number
+  group_id: number | null
+  effective_group: {
+    id: number
+    name: string
+    level: number
+    inherited: boolean
+  }
   permissions?: Record<string, unknown>
   is_active: boolean
   created_at: string

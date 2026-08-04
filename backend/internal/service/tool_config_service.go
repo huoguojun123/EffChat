@@ -143,9 +143,17 @@ func disabledToolRuntimeConfigSet() ToolRuntimeConfigSet {
 func (set ToolRuntimeConfigSet) IsEnabled(key string) bool {
 	cfg, ok := set[normalizeToolKey(key)]
 	if !ok {
-		return true
+		return false
 	}
 	return cfg.Enabled
+}
+
+// IsKnown reports whether a Tool belongs to the governed runtime catalog.
+// Unknown names must never become callable merely because a new Tool was
+// appended in Agent assembly without a matching Admin/configuration entry.
+func (set ToolRuntimeConfigSet) IsKnown(key string) bool {
+	_, ok := set[normalizeToolKey(key)]
+	return ok
 }
 
 func (set ToolRuntimeConfigSet) Timeout(key string) time.Duration {

@@ -649,11 +649,25 @@ func TestSessionCRUD(t *testing.T) {
 	if !session.MemoryEnabled {
 		t.Error("memory_enabled: want true by default")
 	}
+	var createPayload map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &createPayload); err != nil {
+		t.Fatalf("decode create session payload: %v", err)
+	}
+	if _, ok := createPayload["metadata"].(map[string]interface{}); !ok {
+		t.Fatalf("create metadata must be an object: %#v", createPayload["metadata"])
+	}
 
 	// Get
 	w = env.doRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d", session.ID), nil)
 	if w.Code != http.StatusOK {
 		t.Errorf("get session: want 200, got %d", w.Code)
+	}
+	var getPayload map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &getPayload); err != nil {
+		t.Fatalf("decode get session payload: %v", err)
+	}
+	if _, ok := getPayload["metadata"].(map[string]interface{}); !ok {
+		t.Fatalf("get metadata must be an object: %#v", getPayload["metadata"])
 	}
 
 	// List
@@ -668,6 +682,13 @@ func TestSessionCRUD(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &listResp)
 	if len(listResp.Sessions) < 1 {
 		t.Errorf("list: want at least 1 session, got %d", len(listResp.Sessions))
+	}
+	listed, ok := listResp.Sessions[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("list session shape = %#v", listResp.Sessions[0])
+	}
+	if _, ok := listed["metadata"].(map[string]interface{}); !ok {
+		t.Fatalf("list metadata must be an object: %#v", listed["metadata"])
 	}
 
 	// Update

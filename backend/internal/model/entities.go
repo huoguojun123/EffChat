@@ -1,6 +1,11 @@
 package model
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 type User struct {
 	ID           int64      `json:"id"`
@@ -59,6 +64,72 @@ type Session struct {
 	CreatedAt               time.Time  `json:"created_at"`
 	UpdatedAt               time.Time  `json:"updated_at"`
 	DeletedAt               *time.Time `json:"deleted_at,omitempty"`
+}
+
+// MarshalJSON keeps the database representation of Session.Metadata private
+// from the HTTP wire contract. The field is stored as JSONB bytes so services
+// and repositories can preserve the exact document, but encoding []byte
+// directly would expose a base64 string and make the frontend lose structured
+// session state after a refresh.
+func (s Session) MarshalJSON() ([]byte, error) {
+	type sessionAlias Session
+	encoded, err := json.Marshal(sessionAlias(s))
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	metadata := bytes.TrimSpace(s.Metadata)
+	if len(metadata) == 0 || bytes.Equal(metadata, []byte("null")) {
+		metadata = []byte("{}")
+	}
+	if !json.Valid(metadata) || metadata[0] != '{' {
+		return nil, fmt.Errorf("session metadata must be a JSON object")
+	}
+	fields["metadata"] = json.RawMessage(metadata)
+	return json.Marshal(fields)
+}
+
+// UnmarshalJSON accepts both the corrected structured object and the legacy
+// base64 string emitted by the old []byte wire shape. This keeps tests,
+// clients and migration tooling able to read historical responses while all
+// newly emitted Session payloads use an object.
+func (s *Session) UnmarshalJSON(data []byte) error {
+	type sessionAlias Session
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	metadata := bytes.TrimSpace(fields["metadata"])
+	delete(fields, "metadata")
+	withoutMetadata, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var decoded sessionAlias
+	if err := json.Unmarshal(withoutMetadata, &decoded); err != nil {
+		return err
+	}
+	*s = Session(decoded)
+	if len(metadata) == 0 || bytes.Equal(metadata, []byte("null")) {
+		s.Metadata = []byte("{}")
+		return nil
+	}
+	if metadata[0] == '"' {
+		var legacy []byte
+		if err := json.Unmarshal(metadata, &legacy); err != nil {
+			return fmt.Errorf("decode legacy session metadata: %w", err)
+		}
+		s.Metadata = legacy
+		return nil
+	}
+	if !json.Valid(metadata) || metadata[0] != '{' {
+		return fmt.Errorf("session metadata must be a JSON object")
+	}
+	s.Metadata = append([]byte(nil), metadata...)
+	return nil
 }
 
 type SessionFolder struct {

@@ -123,6 +123,22 @@ SELECT
     AND (
         SELECT timeout_seconds FROM tool_configs WHERE tool_key = 'web_extract'
     ) = 30
+    AND (
+        SELECT count(*) FROM tool_configs
+    ) = 9
+    AND NOT EXISTS (
+        SELECT 1 FROM tool_configs
+        WHERE tool_key NOT IN (
+            'memory', 'file_list', 'file_search', 'file_read',
+            'skill_list', 'skill_search', 'skill_read',
+            'web_search', 'web_extract'
+        )
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'tool_configs'::regclass
+          AND conname = 'tool_configs_tool_key_check'
+    )
     AND EXISTS (
         SELECT 1
         FROM information_schema.columns
@@ -136,9 +152,16 @@ SELECT
 SQL
 )"
 [ "$result" = "t" ] || {
-    echo "fresh schema does not satisfy the version 044 OCR fencing contract" >&2
+    echo "fresh schema does not satisfy the current catalog and OCR fencing contracts" >&2
     exit 1
 }
+
+if psql_db "$ATOMIC_DB" -c \
+    "INSERT INTO tool_configs (tool_key, display_name) VALUES ('unregistered_tool', 'Unregistered');" \
+    >/dev/null 2>&1; then
+    echo "tool catalog constraint accepted an unregistered key" >&2
+    exit 1
+fi
 
 psql_db "$ATOMIC_DB" >/dev/null <<'SQL'
 UPDATE schema_migrations SET checksum = 'legacy-baseline-v1' WHERE version = '001_schema.sql';

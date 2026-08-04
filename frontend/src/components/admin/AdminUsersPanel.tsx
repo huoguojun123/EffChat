@@ -35,6 +35,14 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
   const [query, setQuery] = useState("")
   const [page, setPage] = useState(1)
   const activeUserId = draft?.id
+  const editedUser = activeUserId ? users.find((user) => user.id === activeUserId) : undefined
+  const defaultGroup = groups.find((group) => group.is_default)
+  const assignedGroup = editedUser?.group_id == null ? undefined : groups.find((group) => group.id === editedUser.group_id)
+  // Group mutations update the shared group list before Users is reloaded. Derive
+  // the visible effective group from that current list so default switches and
+  // ON DELETE SET NULL semantics are not temporarily represented by stale wire data.
+  const visibleEffectiveGroup = assignedGroup || defaultGroup || editedUser?.effective_group
+  const visibleGroupID = assignedGroup?.id ?? ""
   const canResetPassword = resetPasswordOpen && resetPasswordDirty && resetPassword.length >= 6
 
   // 模糊搜索：账号/昵称/邮箱任一命中即可（大小写不敏感）。
@@ -53,7 +61,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
     [filtered, safePage]
   )
 
-  // 设置用户分级组（group_id 为 null 时清空）。
+  // group_id 只表示显式绑定；null 会在后端动态解析为当前默认组。
   async function setUserGroup(userId: number, groupId: number | null) {
     setSaving(`group-${userId}`)
     setError("")
@@ -320,16 +328,26 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
                   {draft.id && (
                     <Field label="分级组">
                       <select
-                        value={users.find((u) => u.id === draft.id)?.group_id ?? ""}
+                        value={visibleGroupID}
                         onChange={(e) => draft.id && setUserGroup(draft.id, e.target.value === "" ? null : Number(e.target.value))}
                         className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm"
                         disabled={saving === `group-${draft.id}`}
                       >
-                        <option value="">默认（最低级）</option>
+                        <option value="">
+                          {defaultGroup
+                            ? `继承默认组 ${defaultGroup.name}（等级 ${defaultGroup.level}）`
+                            : "继承默认组"}
+                        </option>
                         {groups.map((g) => (
                           <option key={g.id} value={g.id}>{g.name}（等级 {g.level}）</option>
                         ))}
                       </select>
+                      {visibleEffectiveGroup && (
+                        <span className="mt-1.5 block text-xs text-muted-foreground">
+                          当前生效：{assignedGroup ? "显式组 " : "继承默认组 "}
+                          {visibleEffectiveGroup.name}（等级 {visibleEffectiveGroup.level}）
+                        </span>
+                      )}
                     </Field>
                   )}
                   {draft.id && (

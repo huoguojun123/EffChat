@@ -99,7 +99,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
   }
 
   async function deleteGroup(group: UserGroup) {
-    if (!window.confirm(`删除分组「${group.name}」？该组用户将回落默认最低级。`)) return
+    if (!window.confirm(`删除分组「${group.name}」？显式绑定该组的用户将继承当前默认组。`)) return
     setSaving(`delete-${group.id}`)
     setError("")
     try {
@@ -230,7 +230,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
                       checked={draft.is_default}
                       onChange={(e) => setDraft((prev) => prev ? { ...prev, is_default: e.target.checked } : prev)}
                     />
-                    设为默认组（新用户参考标识，不自动改库）
+                    设为默认组（未显式分组的用户将动态继承）
                   </label>
                 </div>
               </div>

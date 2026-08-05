@@ -207,7 +207,7 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 头像 upload/delete/serve 使用独立的文件与账户错误边界：缺少文件、无效图片和大小超限为稳定 400/413，用户缺失为 404，读取、处理、受管目录/文件写入与 repository 故障为带 request ID 的 retryable 5xx。已写入新文件后若 profile 读取或头像更新失败，handler 继续补偿删除本请求新文件。本公共错误契约不改变头像的并发 swap、旧文件删除 owner 或 profile partial PATCH 策略；这些仍由 P2-47 收口。
 
-字体 list/upload/update/select/delete/file 使用独立的资源与存储错误边界：ID、slot、metadata、multipart、内容类型和大小校验为稳定 400/413，字体缺失为 404，已停用字体不可选择为 409；repository、配置解析、请求体读取、受管目录/文件写入和已登记字体文件缺失等内部故障为带 request ID 的 retryable 5xx。repository 列表与 mutation 必须检查 iterator/rows-affected 错误，配置中的非法字体 ID 不能静默退回系统默认。本公共错误契约不改变显式 null/legacy 回退或 FontAsset partial PATCH 语义；这些仍分别由 P2-30 与 P2-47 收口。
+字体 list/upload/update/select/delete/file 使用独立的资源与存储错误边界：ID、slot、metadata、multipart、内容类型和大小校验为稳定 400/413，字体缺失为 404，已停用字体不可选择为 409；repository、配置解析、请求体读取、受管目录/文件写入和已登记字体文件缺失等内部故障为带 request ID 的 retryable 5xx。repository 列表与 mutation 必须检查 iterator/rows-affected 错误，配置中的非法字体 ID 不能静默退回系统默认。新槽位配置键缺失时才允许从 legacy 全局键兼容回退；键已存在且 JSON 值为 `null` 时表示该槽位明确使用系统默认，读取和 `/system/info` 必须保留该 `null`，前端也只能对 `undefined` 做 legacy 兼容。本公共错误契约不改变 FontAsset partial PATCH 语义；该问题仍由 P2-47 收口。
 
 字体槽位选择由独立 repository 职责按 typed slot 提交，只更新目标配置键；中文槽位与 legacy 兼容键在同一 transaction 内镜像。目标字体行使用 `FOR UPDATE` 与禁用/删除串行化：生命周期 mutation 在同一 transaction 更新资产并只条件清除仍引用该字体的槽位，数据库失败时资产、selection 和物理文件都保持原状。Admin 的 update/delete 响应同时返回 committed `selected_font_ids`；前端按槽位维护 generation，只合并发起槽位，禁用/删除会 fence 旧选择响应，同 action 的旧 `finally` 不能释放新 busy，失败后通过有 generation 的字体列表请求恢复 canonical 状态。该边界不引入通用配置事务框架或任务队列，也不改变显式 null/legacy 回退和 glyph routing。
 

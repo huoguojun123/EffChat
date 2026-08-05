@@ -38,11 +38,11 @@ export const useSystemStore = create<SystemState>((set) => ({
   },
 }))
 
-function normalizeChatFonts(fonts: ChatFonts | undefined, legacyFont: FontAsset | null): ChatFonts {
+export function normalizeChatFonts(fonts: ChatFonts | undefined, legacyFont: FontAsset | null): ChatFonts {
   return {
-    chinese: fonts?.chinese || legacyFont || null,
-    latin: fonts?.latin || legacyFont || null,
-    code: fonts?.code || legacyFont || null,
+    chinese: fonts?.chinese === undefined ? legacyFont : fonts.chinese,
+    latin: fonts?.latin === undefined ? legacyFont : fonts.latin,
+    code: fonts?.code === undefined ? legacyFont : fonts.code,
   }
 }
 

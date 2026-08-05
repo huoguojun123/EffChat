@@ -185,6 +185,10 @@ Skill 管理编辑器为实体选择维护单调 generation，为当前草稿维
 
 渠道表单在组件挂载时建立独立 generation，卸载立即 fencing 旧 save/delete callback。每次可持久化字段变化推进 draft revision 并通知父级导航 guard；旧保存成功只确认其提交 revision，保留保存期间的新 Base URL、Key 或启停草稿。渠道 mutation 已在服务端完成时仍更新共享渠道目录并刷新模型，但只有当前 owner 可以清理草稿、错误、saving 或触发 `onSaved/onDeleted` 导航，因此 A 的迟到保存不能把已经切到 B 的管理界面拉回 A。
 
+Users/Groups、External Services 与 admin/user Prompt 编辑器复用相同的局部 generation/revision/operation contract。服务端已经提交的 mutation 继续收敛共享 catalog，但迟到 success、error、delete、probe 或 `finally` 只能更新仍拥有原实体和草稿代次的界面；普通资料与密码使用独立 revision，Prompt 与分组 mutation 也不能互相确认草稿。dirty 对象切换、新建和关闭必须确认放弃，较早 revision 的成功只能推进对应 baseline，不能覆盖或关闭后来编辑。
+
+Settings 的 profile/password tab 各自建立 editor generation 和 draft revision，并把 dirty 状态提升到弹窗级离开门禁。切 tab、取消、关闭弹窗或转入 Prompt Manager 使用同一确认语义；Appearance 是即时偏好，不制造草稿。资料或改密保存捕获提交 snapshot，输入在请求期间或成功后的延迟关闭窗口继续变化时，旧响应不得覆盖新资料、清空新密码或关闭弹窗。已经提交的 profile 结果仍更新共享认证用户；头像文件生命周期和后端 partial PATCH 并发边界保持独立。
+
 Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。
 
 个人与共享 Prompt CRUD 复用同一领域错误出口：ID、分页、标题、正文与分组字段的本地约束为稳定 400，缺失 Prompt 或不可访问分组为 404，个人入口修改可见共享 Prompt 为 403，repository、transaction、rows iteration 与 rows-affected 故障为带 request ID 的 retryable 5xx。共享 Prompt 仍只能由管理员入口创建、更新和删除；个人私有 Prompt 与共享库的可见性隔离不变。本契约不把有界 page 当完整 catalog，不改变前端 editor owner，也不改变 partial PATCH 的完整对象写回语义；这些分别继续由 P2-27、P2-23 与 P2-47 收口。

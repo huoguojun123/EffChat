@@ -187,6 +187,8 @@ Skill 管理编辑器为实体选择维护单调 generation，为当前草稿维
 
 Users/Groups、External Services 与 admin/user Prompt 编辑器复用相同的局部 generation/revision/operation contract。服务端已经提交的 mutation 继续收敛共享 catalog，但迟到 success、error、delete、probe 或 `finally` 只能更新仍拥有原实体和草稿代次的界面；普通资料与密码使用独立 revision，Prompt 与分组 mutation 也不能互相确认草稿。dirty 对象切换、新建和关闭必须确认放弃，较早 revision 的成功只能推进对应 baseline，不能覆盖或关闭后来编辑。
 
+AdminPage 只汇总各编辑器已经判定的 dirty 布尔值，不接管其草稿。该汇总统一守护桌面/移动栏目导航、返回聊天、浏览器历史与 `beforeunload`；选择继续编辑时保留当前组件和 generation，明确放弃后才继续路由并由卸载失效旧 owner。没有草稿的 Usage、Status、Tools、Fonts 等即时操作页不制造离开确认。
+
 Settings 的 profile/password tab 各自建立 editor generation 和 draft revision，并把 dirty 状态提升到弹窗级离开门禁。切 tab、取消、关闭弹窗或转入 Prompt Manager 使用同一确认语义；Appearance 是即时偏好，不制造草稿。资料或改密保存捕获提交 snapshot，输入在请求期间或成功后的延迟关闭窗口继续变化时，旧响应不得覆盖新资料、清空新密码或关闭弹窗。已经提交的 profile 结果仍更新共享认证用户；头像文件生命周期和后端 partial PATCH 并发边界保持独立。
 
 Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。

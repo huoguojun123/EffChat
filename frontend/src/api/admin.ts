@@ -795,7 +795,7 @@ export const adminApi = {
   },
 
   updateFont(id: number, data: FontInput) {
-    return api.patch<FontAsset>(`/admin/fonts/${id}`, data)
+    return api.patch<{ font: FontAsset; selected_font_ids: ChatFontSelection }>(`/admin/fonts/${id}`, data)
   },
 
   selectFont(id: number | null, slot?: keyof ChatFontSelection) {
@@ -803,6 +803,6 @@ export const adminApi = {
   },
 
   deleteFont(id: number) {
-    return api.delete<{ message: string }>(`/admin/fonts/${id}`)
+    return api.delete<{ message: string; selected_font_ids: ChatFontSelection }>(`/admin/fonts/${id}`)
   },
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -55,6 +55,7 @@ import {
   servicePresets,
 } from "./AdminChannelsPanel.constants";
 import { Field, Toggle } from "./AdminModelsPanel.controls";
+import { EditorOwnership } from "./editorOwnership";
 
 interface Props {
   services: ExternalService[];
@@ -124,6 +125,9 @@ export function AdminExternalServiceChain({
     null,
   );
   const [deletingKey, setDeletingKey] = useState("");
+  const [editorOwner] = useState(() => new EditorOwnership());
+  const [deleteOwner] = useState(() => new EditorOwnership());
+  const mountedRef = useRef(true);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, {
@@ -143,6 +147,30 @@ export function AdminExternalServiceChain({
     [services],
   );
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      editorOwner.invalidate();
+      deleteOwner.invalidate();
+    };
+  }, [deleteOwner, editorOwner]);
+
+  function changeDraft(update: SetStateAction<ExternalServiceInput>) {
+    editorOwner.change();
+    setTestMessage("");
+    setDraft(update);
+  }
+
+  function closeEditor() {
+    if (editorOwner.isDirty() && !window.confirm("放弃当前外部服务的未保存修改？")) return;
+    editorOwner.invalidate();
+    setSaving(false);
+    setTesting(false);
+    setTestMessage("");
+    setOpen(false);
+  }
+
   function openEditor(
     service?: ExternalService,
     key?: string,
@@ -159,18 +187,25 @@ export function AdminExternalServiceChain({
         ? serviceDraftFrom(service)
         : emptyServiceDraft(nextKey, nextOrder),
     );
+    editorOwner.activate(nextKey);
+    setSaving(false);
+    setTesting(false);
     setTestMessage("");
     setOpen(true);
   }
 
   async function saveService() {
+    const currentDraft = draft;
+    const operation = editorOwner.beginOperation();
     setSaving(true);
     setError("");
     try {
       const saved = await adminApi.saveExternalService({
-        ...draft,
-        api_key: draft.api_key?.trim() || undefined,
+        ...currentDraft,
+        api_key: currentDraft.api_key?.trim() || undefined,
       });
+      // Persisted mutations always converge the shared chain; only dialog-local
+      // state is fenced when the user edits further or opens another service.
       setServices((current) =>
         sortServices(
           current.some((item) => item.key === saved.key)
@@ -178,31 +213,48 @@ export function AdminExternalServiceChain({
             : [...current, saved],
         ),
       );
-      setOpen(false);
+      if (editorOwner.owns(operation, false)) {
+        editorOwner.acknowledge(operation.revision);
+        if (editorOwner.owns(operation)) {
+          setSaving(false);
+          editorOwner.invalidate();
+          setOpen(false);
+        } else {
+          setError("已保存较早版本，当前修改仍未保存");
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "外部服务保存失败");
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "外部服务保存失败");
+      }
     } finally {
-      setSaving(false);
+      if (mountedRef.current && editorOwner.owns(operation, false)) setSaving(false);
     }
   }
 
   async function testDraft() {
+    const currentDraft = draft;
+    const operation = editorOwner.beginOperation();
     setTesting(true);
     setTestMessage("");
     try {
       const result = await adminApi.testExternalService({
-        ...draft,
-        api_key: draft.api_key?.trim() || undefined,
+        ...currentDraft,
+        api_key: currentDraft.api_key?.trim() || undefined,
       });
-      setTestMessage(
-        result.ok
-          ? `连接成功${result.duration_ms ? ` · ${result.duration_ms}ms` : ""}`
-          : result.error || "连接失败",
-      );
+      if (editorOwner.owns(operation)) {
+        setTestMessage(
+          result.ok
+            ? `连接成功${result.duration_ms ? ` · ${result.duration_ms}ms` : ""}`
+            : result.error || "连接失败",
+        );
+      }
     } catch (err) {
-      setTestMessage(err instanceof Error ? err.message : "连接失败");
+      if (editorOwner.owns(operation)) {
+        setTestMessage(err instanceof Error ? err.message : "连接失败");
+      }
     } finally {
-      setTesting(false);
+      if (mountedRef.current && editorOwner.owns(operation, false)) setTesting(false);
     }
   }
 
@@ -239,19 +291,32 @@ export function AdminExternalServiceChain({
 
   async function deleteService() {
     if (!deleteTarget) return;
-    setDeletingKey(deleteTarget.key);
+    const target = deleteTarget;
+    const operation = deleteOwner.beginOperation();
+    setDeletingKey(target.key);
     setError("");
     try {
-      await adminApi.deleteExternalService(deleteTarget.key);
+      await adminApi.deleteExternalService(target.key);
       setServices((current) =>
-        current.filter((service) => service.key !== deleteTarget.key),
+        current.filter((service) => service.key !== target.key),
       );
-      setDeleteTarget(null);
+      if (deleteOwner.owns(operation, false)) {
+        setDeletingKey("");
+        setDeleteTarget(null);
+        deleteOwner.invalidate();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "服务删除失败");
+      if (deleteOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "服务删除失败");
+      }
     } finally {
-      setDeletingKey("");
+      if (mountedRef.current && deleteOwner.owns(operation, false)) setDeletingKey("");
     }
+  }
+
+  function requestDelete(service: ExternalService) {
+    deleteOwner.activate(service.key);
+    setDeleteTarget(service);
   }
 
   return (
@@ -268,7 +333,7 @@ export function AdminExternalServiceChain({
           sensors={sensors}
           onAdd={(key) => openEditor(undefined, key, "search")}
           onEdit={openEditor}
-          onDelete={setDeleteTarget}
+          onDelete={requestDelete}
           onDragEnd={handleDragEnd}
           busy={interactionLocked(open, saving, testing, reorderingKind, deleteTarget, deletingKey)}
         />
@@ -280,7 +345,7 @@ export function AdminExternalServiceChain({
           sensors={sensors}
           onAdd={(key) => openEditor(undefined, key, "crawler")}
           onEdit={openEditor}
-          onDelete={setDeleteTarget}
+          onDelete={requestDelete}
           onDragEnd={handleDragEnd}
           busy={interactionLocked(open, saving, testing, reorderingKind, deleteTarget, deletingKey)}
           showBasic
@@ -288,11 +353,11 @@ export function AdminExternalServiceChain({
         <OCRSection
           services={grouped.ocr}
           onEdit={openEditor}
-          onDelete={setDeleteTarget}
+          onDelete={requestDelete}
           busy={interactionLocked(open, saving, testing, reorderingKind, deleteTarget, deletingKey)}
         />
       </div>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) closeEditor(); }}>
         <DialogContent className="max-w-xl rounded-md">
           <DialogHeader>
             <DialogTitle>
@@ -307,7 +372,7 @@ export function AdminExternalServiceChain({
                 value={draft.base_url}
                 placeholder={servicePresets[draft.key]?.baseURL || "https://"}
                 onChange={(event) =>
-                  setDraft((current) => ({
+                  changeDraft((current) => ({
                     ...current,
                     base_url: event.target.value,
                   }))
@@ -324,7 +389,7 @@ export function AdminExternalServiceChain({
                     : "保存时留空保留现有 Key"
                 }
                 onChange={(event) =>
-                  setDraft((current) => ({
+                  changeDraft((current) => ({
                     ...current,
                     api_key: event.target.value,
                   }))
@@ -339,7 +404,7 @@ export function AdminExternalServiceChain({
                   max={20}
                   value={draft.max_concurrency || 2}
                   onChange={(event) =>
-                    setDraft((current) => ({
+                    changeDraft((current) => ({
                       ...current,
                       max_concurrency: clampConcurrency(event.target.value),
                     }))
@@ -365,7 +430,7 @@ export function AdminExternalServiceChain({
               label="状态"
               checked={draft.enabled}
               onChange={(enabled) =>
-                setDraft((current) => ({ ...current, enabled }))
+                changeDraft((current) => ({ ...current, enabled }))
               }
             />
             <div className="flex items-center gap-2">
@@ -395,7 +460,10 @@ export function AdminExternalServiceChain({
       <Dialog
         open={deleteTarget !== null}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && !deletingKey) setDeleteTarget(null);
+          if (!nextOpen && !deletingKey) {
+            deleteOwner.invalidate();
+            setDeleteTarget(null);
+          }
         }}
       >
         <DialogContent className="max-w-sm rounded-md">

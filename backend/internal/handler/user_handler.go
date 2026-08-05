@@ -77,8 +77,10 @@ func ListUsersHandler(userAdminService *service.UserAdminService) gin.HandlerFun
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"users": users,
-			"total": total,
+			"users":       users,
+			"total":       total,
+			"has_more":    offset+len(users) < total,
+			"next_offset": offset + len(users),
 		})
 	}
 }

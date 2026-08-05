@@ -343,7 +343,7 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 		       u.permissions, u.preferences, u.is_active, u.auth_version, u.created_at, u.updated_at, u.last_login_at,` +
 		effectiveUserGroupIdentitySQL + `
 		FROM users u` + effectiveUserGroupJoinSQL + `
-		ORDER BY u.created_at DESC
+		ORDER BY u.created_at DESC, u.id DESC
 		LIMIT $1 OFFSET $2
 	`
 

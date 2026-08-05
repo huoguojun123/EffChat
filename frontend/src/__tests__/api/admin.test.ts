@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApi } from "@/api/admin";
 import { api } from "@/api/client";
 
@@ -65,6 +65,34 @@ describe("adminApi catalog paths", () => {
     expect(api.get).toHaveBeenCalledWith(
       "/admin/models/catalog/deepseek-v4-flash?provider=deepseek",
     );
+  });
+});
+
+describe("adminApi bounded catalogs", () => {
+  beforeEach(() => vi.mocked(api.get).mockReset());
+
+  it("loads every user page through the server-provided next offset", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ users: Array.from({ length: 100 }, (_, index) => ({ id: index + 1 })), total: 101, has_more: true, next_offset: 100 })
+      .mockResolvedValueOnce({ users: [{ id: 101 }], total: 101, has_more: false, next_offset: 101 });
+
+    const users = await adminApi.listAllUsers();
+
+    expect(users).toHaveLength(101);
+    expect(api.get).toHaveBeenNthCalledWith(1, "/admin/users?limit=100&offset=0");
+    expect(api.get).toHaveBeenNthCalledWith(2, "/admin/users?limit=100&offset=100");
+  });
+
+  it("loads every shared prompt page", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce({ prompts: Array.from({ length: 100 }, (_, index) => ({ id: index + 1 })), total: 101, has_more: true, next_offset: 100 })
+      .mockResolvedValueOnce({ prompts: [{ id: 101 }], total: 101, has_more: false, next_offset: 101 });
+
+    const prompts = await adminApi.listAllPrompts();
+
+    expect(prompts).toHaveLength(101);
+    expect(api.get).toHaveBeenNthCalledWith(1, "/admin/prompts?limit=100&offset=0");
+    expect(api.get).toHaveBeenNthCalledWith(2, "/admin/prompts?limit=100&offset=100");
   });
 });
 

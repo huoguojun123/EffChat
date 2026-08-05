@@ -120,8 +120,16 @@ func ListPromptsHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc
 		if prompts == nil {
 			prompts = []*model.Prompt{}
 		}
+		total, err := promptRepo.CountByUser(userID)
+		if err != nil {
+			writePromptError(c, "list", err)
+			return
+		}
 
-		c.JSON(http.StatusOK, gin.H{"prompts": prompts, "total": len(prompts)})
+		c.JSON(http.StatusOK, gin.H{
+			"prompts": prompts, "total": total,
+			"has_more": offset+len(prompts) < total, "next_offset": offset + len(prompts),
+		})
 	}
 }
 
@@ -141,6 +149,11 @@ func ListPublicPromptsHandler(promptRepo *repository.PromptRepository) gin.Handl
 		if prompts == nil {
 			prompts = []*model.Prompt{}
 		}
+		total, err := promptRepo.CountPublic()
+		if err != nil {
+			writePromptError(c, "list_public", err)
+			return
+		}
 
 		publicPrompts := make([]publicPromptResponse, 0, len(prompts))
 		for _, prompt := range prompts {
@@ -159,7 +172,10 @@ func ListPublicPromptsHandler(promptRepo *repository.PromptRepository) gin.Handl
 			})
 		}
 
-		c.JSON(http.StatusOK, gin.H{"prompts": publicPrompts, "total": len(publicPrompts)})
+		c.JSON(http.StatusOK, gin.H{
+			"prompts": publicPrompts, "total": total,
+			"has_more": offset+len(publicPrompts) < total, "next_offset": offset + len(publicPrompts),
+		})
 	}
 }
 
@@ -298,8 +314,16 @@ func ListSharedPromptsHandler(promptRepo *repository.PromptRepository) gin.Handl
 		if prompts == nil {
 			prompts = []*model.Prompt{}
 		}
+		total, err := promptRepo.CountShared()
+		if err != nil {
+			writePromptError(c, "list_shared", err)
+			return
+		}
 
-		c.JSON(http.StatusOK, gin.H{"prompts": prompts, "total": len(prompts)})
+		c.JSON(http.StatusOK, gin.H{
+			"prompts": prompts, "total": total,
+			"has_more": offset+len(prompts) < total, "next_offset": offset + len(prompts),
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import { useSystemStore } from "@/stores/system"
 import type { FontAsset } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { FontActionOwnership, FontSlotOwnership, type FontSlot, type FontSlotGenerations } from "@/components/admin/fontSlotOwnership"
 import { Code2, Languages, LetterText, RotateCcw, Trash2, Upload } from "lucide-react"
 
 interface Props {
@@ -14,8 +15,6 @@ interface Props {
   setError: (error: string) => void
 }
 
-type FontSlot = keyof ChatFontSelection
-
 const fontSlots: Array<{ key: FontSlot; label: string; icon: React.ReactNode }> = [
   { key: "chinese", label: "中文字体", icon: <Languages className="h-3.5 w-3.5" /> },
   { key: "latin", label: "英文字体", icon: <LetterText className="h-3.5 w-3.5" /> },
@@ -25,9 +24,53 @@ const fontSlots: Array<{ key: FontSlot; label: string; icon: React.ReactNode }> 
 export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedFontIds, setError }: Props) {
   const reloadSystem = useSystemStore((s) => s.load)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const slotOwnershipRef = useRef(new FontSlotOwnership())
+  const actionOwnershipRef = useRef(new FontActionOwnership())
+  const canonicalReloadRef = useRef(0)
+  const errorOwnerRef = useRef(0)
   const [file, setFile] = useState<File | null>(null)
   const [displayName, setDisplayName] = useState("")
-  const [saving, setSaving] = useState("")
+  const [busyActions, setBusyActions] = useState<Set<string>>(() => new Set())
+  const [pendingSlots, setPendingSlots] = useState<Partial<Record<FontSlot, number>>>({})
+
+  function beginErrorOwner() {
+    errorOwnerRef.current += 1
+    setError("")
+    return errorOwnerRef.current
+  }
+
+  function setOwnedError(owner: number, error: unknown, fallback: string) {
+    if (errorOwnerRef.current === owner) setError(error instanceof Error ? error.message : fallback)
+  }
+
+  function setActionBusy(action: string, busy: boolean) {
+    setBusyActions((current) => {
+      const next = new Set(current)
+      if (busy) next.add(action)
+      else next.delete(action)
+      return next
+    })
+  }
+
+  function mergeOwnedSelection(selection: ChatFontSelection, generations: FontSlotGenerations) {
+    setSelectedFontIds((current) => {
+      const next = { ...current }
+      for (const slot of fontSlots) {
+        if (slotOwnershipRef.current.owns(slot.key, generations[slot.key])) {
+          next[slot.key] = selection[slot.key] ?? null
+        }
+      }
+      return next
+    })
+  }
+
+  async function reloadCanonical(generations: FontSlotGenerations) {
+    const reloadGeneration = ++canonicalReloadRef.current
+    const result = await adminApi.listFonts()
+    if (canonicalReloadRef.current !== reloadGeneration) return
+    setFonts(result.fonts || [])
+    mergeOwnedSelection(normalizeSelection(result), generations)
+  }
 
   function pickFile(nextFile?: File) {
     if (!nextFile) return
@@ -38,8 +81,9 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
 
   async function uploadFont() {
     if (!file) return
-    setSaving("upload")
-    setError("")
+    const errorOwner = beginErrorOwner()
+    const actionGeneration = actionOwnershipRef.current.begin("upload")
+    setActionBusy("upload", true)
     try {
       const uploaded = await adminApi.uploadFont(file, {
         display_name: displayName.trim() || undefined,
@@ -51,44 +95,74 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
       setDisplayName("")
       if (fileInputRef.current) fileInputRef.current.value = ""
     } catch (err) {
-      setError(err instanceof Error ? err.message : "字体上传失败")
+      setOwnedError(errorOwner, err, "字体上传失败")
     } finally {
-      setSaving("")
+      if (actionOwnershipRef.current.owns("upload", actionGeneration)) setActionBusy("upload", false)
     }
   }
 
   async function selectFont(slot: FontSlot, font: FontAsset | null) {
-    setSaving(font ? `select-${slot}-${font.id}` : `reset-${slot}`)
-    setError("")
+    const generation = slotOwnershipRef.current.begin(slot)
+    const errorOwner = beginErrorOwner()
+    setPendingSlots((current) => ({ ...current, [slot]: generation }))
     try {
       const res = await adminApi.selectFont(font?.id ?? null, slot)
-      if (res.selected_font_ids) {
-        setSelectedFontIds(res.selected_font_ids)
-      } else {
-        setSelectedFontIds((prev) => ({ ...prev, [slot]: font?.id ?? null }))
+      if (slotOwnershipRef.current.owns(slot, generation)) {
+        const selectedID = res.selected_font_ids ? res.selected_font_ids[slot] ?? null : font?.id ?? null
+        setSelectedFontIds((prev) => ({ ...prev, [slot]: selectedID }))
+        void reloadSystem()
       }
-      void reloadSystem()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "字体设置失败")
+      try {
+        const result = await adminApi.listFonts()
+        if (slotOwnershipRef.current.owns(slot, generation)) {
+          setFonts(result.fonts || [])
+          const canonical = normalizeSelection(result)
+          setSelectedFontIds((current) => ({ ...current, [slot]: canonical[slot] ?? null }))
+          void reloadSystem()
+        }
+      } catch {
+        // Preserve the original mutation error; the next Admin reload remains canonical.
+      }
+      if (slotOwnershipRef.current.owns(slot, generation)) setOwnedError(errorOwner, err, "字体设置失败")
     } finally {
-      setSaving("")
+      if (slotOwnershipRef.current.owns(slot, generation)) {
+        setPendingSlots((current) => {
+          const next = { ...current }
+          delete next[slot]
+          return next
+        })
+      }
     }
   }
 
   async function toggleFont(font: FontAsset) {
-    setSaving(`toggle-${font.id}`)
-    setError("")
+    const action = `toggle-${font.id}`
+    const errorOwner = beginErrorOwner()
+    const actionGeneration = actionOwnershipRef.current.begin(action)
+    const generations = font.enabled ? slotOwnershipRef.current.invalidateAll() : null
+    if (generations) setPendingSlots({})
+    setActionBusy(action, true)
     try {
-      const updated = await adminApi.updateFont(font.id, { enabled: !font.enabled })
+      const result = await adminApi.updateFont(font.id, { enabled: !font.enabled })
+      const updated = result.font
       setFonts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
-      if (!updated.enabled && isSelectedFont(updated.id, selectedFontIds)) {
-        setSelectedFontIds((prev) => clearFontFromSelection(prev, updated.id))
+      if (generations) {
+        mergeOwnedSelection(result.selected_font_ids, generations)
         void reloadSystem()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "字体状态更新失败")
+      if (generations) {
+        try {
+          await reloadCanonical(generations)
+          void reloadSystem()
+        } catch {
+          // Preserve the mutation error; a later Admin reload will reconcile state.
+        }
+      }
+      setOwnedError(errorOwner, err, "字体状态更新失败")
     } finally {
-      setSaving("")
+      if (actionOwnershipRef.current.owns(action, actionGeneration)) setActionBusy(action, false)
     }
   }
 
@@ -96,19 +170,27 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
     const selectedSlots = fontSlots.filter((slot) => selectedFontIds[slot.key] === font.id).map((slot) => slot.label)
     const slotText = selectedSlots.length > 0 ? `\n\n它正在用于：${selectedSlots.join("、")}。删除后这些槽位会恢复系统默认。` : ""
     if (!window.confirm(`删除字体「${font.display_name}」？字体文件也会从上传目录移除。${slotText}`)) return
-    setSaving(`delete-${font.id}`)
-    setError("")
+    const action = `delete-${font.id}`
+    const errorOwner = beginErrorOwner()
+    const actionGeneration = actionOwnershipRef.current.begin(action)
+    const generations = slotOwnershipRef.current.invalidateAll()
+    setPendingSlots({})
+    setActionBusy(action, true)
     try {
-      await adminApi.deleteFont(font.id)
+      const result = await adminApi.deleteFont(font.id)
       setFonts((prev) => prev.filter((item) => item.id !== font.id))
-      if (isSelectedFont(font.id, selectedFontIds)) {
-        setSelectedFontIds((prev) => clearFontFromSelection(prev, font.id))
-        void reloadSystem()
-      }
+      mergeOwnedSelection(result.selected_font_ids, generations)
+      void reloadSystem()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "字体删除失败")
+      try {
+        await reloadCanonical(generations)
+        void reloadSystem()
+      } catch {
+        // Preserve the mutation error; a later Admin reload will reconcile state.
+      }
+      setOwnedError(errorOwner, err, "字体删除失败")
     } finally {
-      setSaving("")
+      if (actionOwnershipRef.current.owns(action, actionGeneration)) setActionBusy(action, false)
     }
   }
 
@@ -136,7 +218,7 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
         <Field label="显示名称">
           <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="例如：霞鹜文楷" className="h-8" />
         </Field>
-        <Button size="sm" className="h-8" onClick={uploadFont} disabled={!file || saving === "upload"}>
+        <Button size="sm" className="h-8" onClick={uploadFont} disabled={!file || busyActions.has("upload")}>
           <Upload className="h-3.5 w-3.5" />
           上传
         </Button>
@@ -155,14 +237,14 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
                 className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm"
                 value={selected?.id ?? ""}
                 onChange={(e) => void selectFont(slot.key, findFont(fonts, Number(e.target.value)) || null)}
-                disabled={saving.startsWith(`select-${slot.key}`) || saving === `reset-${slot.key}`}
+                disabled={pendingSlots[slot.key] !== undefined}
               >
                 <option value="">系统默认</option>
                 {fonts.filter((font) => font.enabled).map((font) => (
                   <option key={font.id} value={font.id}>{font.display_name}</option>
                 ))}
               </select>
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => void selectFont(slot.key, null)} disabled={!selected || saving === `reset-${slot.key}`} aria-label={`恢复${slot.label}系统字体`} title="恢复系统字体">
+              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => void selectFont(slot.key, null)} disabled={!selected || pendingSlots[slot.key] !== undefined} aria-label={`恢复${slot.label}系统字体`} title="恢复系统字体">
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>
@@ -187,7 +269,7 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
               <button
                 type="button"
                 onClick={() => void toggleFont(font)}
-                disabled={saving === `toggle-${font.id}`}
+                disabled={busyActions.has(`toggle-${font.id}`)}
                 className="group inline-flex h-7 w-12 items-center rounded-full border border-border bg-muted px-0.5 transition-colors motion-control hover:border-foreground/30 disabled:cursor-not-allowed disabled:opacity-60 data-[enabled=true]:bg-foreground"
                 data-enabled={font.enabled}
                 aria-label={font.enabled ? "停用字体" : "启用字体"}
@@ -196,7 +278,7 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
                 <span className="h-5 w-5 rounded-full bg-background shadow-sm transition-transform motion-control group-data-[enabled=true]:translate-x-5" />
               </button>
               <div className="flex justify-end">
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => void deleteFont(font)} disabled={saving === `delete-${font.id}`} aria-label={`删除字体：${font.display_name}`} title="删除">
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => void deleteFont(font)} disabled={busyActions.has(`delete-${font.id}`)} aria-label={`删除字体：${font.display_name}`} title="删除">
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                 </Button>
               </div>
@@ -213,15 +295,11 @@ function findFont(fonts: FontAsset[], id?: number | null) {
   return fonts.find((font) => font.id === id) || null
 }
 
-function isSelectedFont(id: number, selection: ChatFontSelection) {
-  return selection.chinese === id || selection.latin === id || selection.code === id
-}
-
-function clearFontFromSelection(selection: ChatFontSelection, id: number): ChatFontSelection {
-  return {
-    chinese: selection.chinese === id ? null : selection.chinese,
-    latin: selection.latin === id ? null : selection.latin,
-    code: selection.code === id ? null : selection.code,
+function normalizeSelection(result: Awaited<ReturnType<typeof adminApi.listFonts>>): ChatFontSelection {
+  return result.selected_font_ids || {
+    chinese: result.selected_font_id ?? null,
+    latin: result.selected_font_id ?? null,
+    code: result.selected_font_id ?? null,
   }
 }
 

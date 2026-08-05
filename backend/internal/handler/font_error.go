@@ -10,6 +10,10 @@ import (
 )
 
 func writeFontError(c *gin.Context, operation string, err error) {
+	if errors.Is(err, repository.ErrFontUnavailable) {
+		writePublicError(c, http.StatusConflict, "font_not_available", "font is not available", false)
+		return
+	}
 	if errors.Is(err, repository.ErrNotFound) {
 		writePublicError(c, http.StatusNotFound, "font_not_found", "font not found", false)
 		return

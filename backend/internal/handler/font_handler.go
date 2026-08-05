@@ -186,37 +186,13 @@ func UpdateFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			writePublicError(c, http.StatusBadRequest, "font_metadata_invalid", "display_name and family_name are required", false)
 			return
 		}
-		if err := fontRepo.Update(font); err != nil {
+		selection, err := fontRepo.Update(font)
+		if err != nil {
 			writeFontError(c, "update", err)
 			return
 		}
-		if !font.Enabled {
-			selection, err := fontRepo.GetSelectedIDs()
-			if err == nil {
-				changed := false
-				if selection.Chinese != nil && *selection.Chinese == font.ID {
-					selection.Chinese = nil
-					changed = true
-				}
-				if selection.Latin != nil && *selection.Latin == font.ID {
-					selection.Latin = nil
-					changed = true
-				}
-				if selection.Code != nil && *selection.Code == font.ID {
-					selection.Code = nil
-					changed = true
-				}
-				if changed {
-					_ = fontRepo.SetSelectedIDs(selection)
-				}
-			}
-		}
-		updated, _ := fontRepo.Get(id)
-		if updated == nil {
-			updated = font
-		}
-		attachFontURL(updated)
-		c.JSON(http.StatusOK, updated)
+		attachFontURL(font)
+		c.JSON(http.StatusOK, gin.H{"font": font, "selected_font_ids": selection})
 	}
 }
 
@@ -234,17 +210,6 @@ func SelectFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			writePublicError(c, http.StatusBadRequest, "font_id_invalid", "invalid font id", false)
 			return
 		}
-		if req.FontID != nil {
-			font, err := fontRepo.Get(*req.FontID)
-			if err != nil {
-				writeFontError(c, "load", err)
-				return
-			}
-			if !font.Enabled {
-				writePublicError(c, http.StatusConflict, "font_not_available", "font is not available", false)
-				return
-			}
-		}
 		if req.Slot == "" {
 			if err := fontRepo.SetSelectedID(req.FontID); err != nil {
 				writeFontError(c, "selection_update", err)
@@ -253,23 +218,20 @@ func SelectFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			c.JSON(http.StatusOK, gin.H{"selected_font_id": req.FontID})
 			return
 		}
-		selection, err := fontRepo.GetSelectedIDs()
-		if err != nil {
-			writeFontError(c, "selection_load", err)
-			return
-		}
+		var slot repository.ChatFontSlot
 		switch req.Slot {
 		case "chinese":
-			selection.Chinese = req.FontID
+			slot = repository.ChatFontSlotChinese
 		case "latin":
-			selection.Latin = req.FontID
+			slot = repository.ChatFontSlotLatin
 		case "code":
-			selection.Code = req.FontID
+			slot = repository.ChatFontSlotCode
 		default:
 			writePublicError(c, http.StatusBadRequest, "font_slot_invalid", "invalid font slot", false)
 			return
 		}
-		if err := fontRepo.SetSelectedIDs(selection); err != nil {
+		selection, err := fontRepo.SetSelectedSlot(slot, req.FontID)
+		if err != nil {
 			writeFontError(c, "selection_update", err)
 			return
 		}
@@ -289,12 +251,13 @@ func DeleteFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			writeFontError(c, "load", err)
 			return
 		}
-		if err := fontRepo.Delete(id); err != nil {
+		selection, err := fontRepo.Delete(id)
+		if err != nil {
 			writeFontError(c, "delete", err)
 			return
 		}
 		_ = os.Remove(font.FilePath)
-		c.JSON(http.StatusOK, gin.H{"message": "font deleted"})
+		c.JSON(http.StatusOK, gin.H{"message": "font deleted", "selected_font_ids": selection})
 	}
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { FontAsset } from "@/types"
-import { normalizeChatFonts } from "@/stores/system"
+import { chatFontFaceRule, normalizeChatFonts } from "@/stores/system"
 
 const legacy: FontAsset = {
   id: 1,
@@ -25,5 +25,17 @@ describe("normalizeChatFonts", () => {
     expect(result.chinese).toBeNull()
     expect(result.latin).toBe(legacy)
     expect(result.code).toBeNull()
+  })
+
+  it("routes CJK and Latin glyphs through disjoint font-face ranges", () => {
+    const chinese = chatFontFaceRule("chinese", legacy)
+    const latin = chatFontFaceRule("latin", legacy)
+    const code = chatFontFaceRule("code", legacy)
+
+    expect(chinese).toContain("U+4E00-9FFF")
+    expect(chinese).not.toContain("U+0000-024F")
+    expect(latin).toContain("unicode-range: U+0000-024F")
+    expect(latin).not.toContain("U+4E00-9FFF")
+    expect(code).not.toContain("unicode-range")
   })
 })

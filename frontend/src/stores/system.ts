@@ -5,6 +5,13 @@ import type { FontAsset } from "@/types"
 const DEFAULT_SYSTEM_NAME = "EffChat"
 const DEFAULT_SYSTEM_VERSION = "pre-release 0.3.4"
 const CHAT_FONT_STYLE_ID = "effchat-chat-font-face"
+// Font-family order alone cannot route glyphs because most CJK fonts also
+// contain ASCII. Disjoint ranges make the visible Chinese and Latin slots own
+// their scripts; the code slot stays unrestricted on its separate CSS variable.
+const CHAT_FONT_UNICODE_RANGES = {
+  chinese: "U+1100-11FF, U+2E80-2FFF, U+3000-303F, U+3040-30FF, U+3100-318F, U+3190-319F, U+31C0-31FF, U+3200-33FF, U+3400-4DBF, U+4E00-9FFF, U+AC00-D7AF, U+F900-FAFF, U+FF00-FFEF, U+20000-323AF",
+  latin: "U+0000-024F, U+1E00-1EFF, U+2C60-2C7F, U+A720-A7FF",
+} as const
 
 interface SystemState {
   systemName: string
@@ -65,18 +72,7 @@ function applyChatFonts(fonts: ChatFonts) {
 
   const style = existing || document.createElement("style")
   style.id = CHAT_FONT_STYLE_ID
-  style.textContent = active.map(({ slot, font }) => {
-    if (!font) return ""
-    const family = fontFamilyName(slot, font)
-    return `
-@font-face {
-  font-family: "${family}";
-  src: url("${font.file_url}") format("${fontFormat(font)}");
-  font-weight: ${font.weight || 400};
-  font-style: ${font.style || "normal"};
-  font-display: swap;
-}`
-  }).join("\n")
+  style.textContent = active.map(({ slot, font }) => font ? chatFontFaceRule(slot, font) : "").join("\n")
   if (!existing) document.head.appendChild(style)
 
   const chineseFamily = fonts.chinese?.file_url ? `"${fontFamilyName("chinese", fonts.chinese)}"` : ""
@@ -93,6 +89,18 @@ function applyChatFonts(fonts: ChatFonts) {
   } else {
     root.style.removeProperty("--chat-code-font-family")
   }
+}
+
+export function chatFontFaceRule(slot: "chinese" | "latin" | "code", font: FontAsset) {
+  const unicodeRange = slot === "code" ? "" : `\n  unicode-range: ${CHAT_FONT_UNICODE_RANGES[slot]};`
+  return `
+@font-face {
+  font-family: "${fontFamilyName(slot, font)}";
+  src: url("${font.file_url}") format("${fontFormat(font)}");
+  font-weight: ${font.weight || 400};
+  font-style: ${font.style || "normal"};
+  font-display: swap;${unicodeRange}
+}`
 }
 
 function fontFamilyName(slot: "chinese" | "latin" | "code", font: FontAsset) {

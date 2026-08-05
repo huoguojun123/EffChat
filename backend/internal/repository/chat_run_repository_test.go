@@ -382,6 +382,43 @@ func TestSessionDeleteTransitionsRunningRunsAtomically(t *testing.T) {
 	}
 }
 
+func TestSessionDeleteHonorsContextCancellationWhileWaitingForRow(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "delete_context")
+	session := &model.Session{UserID: userID, Title: "delete context", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedID int64
+	if err := blocker.QueryRowContext(context.Background(), `SELECT id FROM sessions WHERE id = $1 FOR UPDATE`, session.ID).Scan(&lockedID); err != nil {
+		t.Fatalf("lock session row: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = NewSessionRepository(db).DeleteContext(ctx, session.ID, userID)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("session delete error = %v, want context deadline", err)
+	}
+	var deletedAt *time.Time
+	if err := db.QueryRow("SELECT deleted_at FROM sessions WHERE id = $1", session.ID).Scan(&deletedAt); err != nil {
+		t.Fatalf("read canceled session delete: %v", err)
+	}
+	if deletedAt != nil {
+		t.Fatal("canceled session delete committed deleted_at")
+	}
+}
+
 func TestAccountChangesTransitionRunningRunsAtomically(t *testing.T) {
 	db := setupTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })

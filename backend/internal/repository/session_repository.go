@@ -274,9 +274,13 @@ func (r *SessionRepository) UpdateAutomaticTitleAtAnswerRevision(ctx context.Con
 
 // Delete 软删除会话
 func (r *SessionRepository) Delete(id, userID int64) error {
-	tx, err := r.db.Begin()
+	return r.DeleteContext(context.Background(), id, userID)
+}
+
+func (r *SessionRepository) DeleteContext(ctx context.Context, id, userID int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to begin session delete: %w", err)
+		return fmt.Errorf("failed to begin session delete: %w", sessionContextError(ctx, err))
 	}
 	defer tx.Rollback()
 
@@ -286,27 +290,34 @@ func (r *SessionRepository) Delete(id, userID int64) error {
 		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
 	`
 
-	result, err := tx.Exec(query, id, userID)
+	result, err := tx.ExecContext(ctx, query, id, userID)
 	if err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+		return fmt.Errorf("failed to delete session: %w", sessionContextError(ctx, err))
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
+		return fmt.Errorf("failed to get rows affected: %w", sessionContextError(ctx, err))
 	}
 
 	if rowsAffected == 0 {
 		return fmt.Errorf("session not found or already deleted: %w", ErrNotFound)
 	}
-	if err := cancelRunningChatRuns(context.Background(), tx, userID, &id, "session_deleted", "session_deleted", "会话已删除", false); err != nil {
-		return fmt.Errorf("failed to cancel deleted session runs: %w", err)
+	if err := cancelRunningChatRuns(ctx, tx, userID, &id, "session_deleted", "session_deleted", "会话已删除", false); err != nil {
+		return fmt.Errorf("failed to cancel deleted session runs: %w", sessionContextError(ctx, err))
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit session delete: %w", err)
+		return fmt.Errorf("failed to commit session delete: %w", sessionContextError(ctx, err))
 	}
 
 	return nil
+}
+
+func sessionContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 // CountByUser 统计用户的会话数量

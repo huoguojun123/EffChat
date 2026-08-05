@@ -164,17 +164,21 @@ func CanReuseExternalServiceCredential(saved, candidate *model.ExternalService) 
 }
 
 func (s *ChannelService) ReorderExternalServices(kind string, keys []string) ([]*model.ExternalService, error) {
+	return s.ReorderExternalServicesContext(context.Background(), kind, keys)
+}
+
+func (s *ChannelService) ReorderExternalServicesContext(ctx context.Context, kind string, keys []string) ([]*model.ExternalService, error) {
 	kind = normalizeKey(kind)
 	if kind != ServiceKindSearch && kind != ServiceKindCrawler {
 		return nil, fmt.Errorf("%w: invalid service kind", ErrChannelInvalid)
 	}
-	if err := s.repo.ReorderExternalServices(kind, keys); err != nil {
+	if err := s.repo.ReorderExternalServicesContext(ctx, kind, keys); err != nil {
 		if errors.Is(err, repository.ErrExternalServiceOrderInvalid) {
 			return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
 		}
 		return nil, err
 	}
-	return s.repo.ListExternalServices(true)
+	return s.repo.ListExternalServicesContext(ctx, true)
 }
 
 func (s *ChannelService) DeleteExternalService(key string) error {

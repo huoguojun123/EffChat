@@ -93,7 +93,7 @@ func UpdateConfigBatchHandler(configRepo *repository.ConfigRepository, modelServ
 				return
 			}
 		}
-		if err := configRepo.UpdateAdminEditableBatch(req.Updates); err != nil {
+		if err := configRepo.UpdateAdminEditableBatchContext(c.Request.Context(), req.Updates); err != nil {
 			writeConfigError(c, "update", err)
 			return
 		}

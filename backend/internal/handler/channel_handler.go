@@ -101,7 +101,7 @@ func ReorderExternalServicesHandler(channelService *service.ChannelService) gin.
 			writeInvalidJSON(c)
 			return
 		}
-		services, err := channelService.ReorderExternalServices(req.Kind, req.Keys)
+		services, err := channelService.ReorderExternalServicesContext(c.Request.Context(), req.Kind, req.Keys)
 		if err != nil {
 			writeChannelError(c, "external_service", "reorder", err)
 			return

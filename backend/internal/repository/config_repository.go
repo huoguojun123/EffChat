@@ -802,6 +802,10 @@ func (r *ConfigRepository) UpdateAdminEditable(key string, value json.RawMessage
 }
 
 func (r *ConfigRepository) UpdateAdminEditableBatch(updates map[string]json.RawMessage) error {
+	return r.UpdateAdminEditableBatchContext(context.Background(), updates)
+}
+
+func (r *ConfigRepository) UpdateAdminEditableBatchContext(ctx context.Context, updates map[string]json.RawMessage) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -817,20 +821,44 @@ func (r *ConfigRepository) UpdateAdminEditableBatch(updates map[string]json.RawM
 	}
 	sort.Strings(keys)
 
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to begin config update: %w", err)
+		return fmt.Errorf("failed to begin config update: %w", configContextError(ctx, err))
 	}
 	defer tx.Rollback()
 	for _, key := range keys {
-		if err := updateConfigValue(tx, key, updates[key], metas[key].ConfigType); err != nil {
+		if err := updateConfigValueContext(ctx, tx, key, updates[key], metas[key].ConfigType); err != nil {
 			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit config update: %w", err)
+		return fmt.Errorf("failed to commit config update: %w", configContextError(ctx, err))
 	}
 	return nil
+}
+
+func updateConfigValueContext(ctx context.Context, tx *sql.Tx, key string, value json.RawMessage, configType string) error {
+	const query = `
+		INSERT INTO system_config (key, value, description, config_type, updated_at)
+		VALUES ($1, $2, NULL, $3, NOW())
+		ON CONFLICT (key) DO UPDATE SET
+			value = EXCLUDED.value,
+			config_type = EXCLUDED.config_type,
+			updated_at = NOW()
+	`
+	result, err := tx.ExecContext(ctx, query, key, value, configType)
+	if err != nil {
+		return fmt.Errorf("failed to update config: %w", configContextError(ctx, err))
+	}
+	_, _ = result.RowsAffected()
+	return nil
+}
+
+func configContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func validateAdminEditableValue(key string, value json.RawMessage) (AdminConfigMeta, error) {

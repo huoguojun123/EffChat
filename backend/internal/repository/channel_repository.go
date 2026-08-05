@@ -294,30 +294,34 @@ func (r *ChannelRepository) DeleteExternalService(key string) error {
 }
 
 func (r *ChannelRepository) ReorderExternalServices(kind string, keys []string) error {
+	return r.ReorderExternalServicesContext(context.Background(), kind, keys)
+}
+
+func (r *ChannelRepository) ReorderExternalServicesContext(ctx context.Context, kind string, keys []string) error {
 	kind = normalizeConfigKey(kind)
 	if len(keys) == 0 {
 		return fmt.Errorf("%w: service order cannot be empty", ErrExternalServiceOrderInvalid)
 	}
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin external service reorder: %w", err)
+		return fmt.Errorf("begin external service reorder: %w", channelContextError(ctx, err))
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.Query(`SELECT service_key FROM external_services WHERE kind = $1 AND deleted_at IS NULL AND service_key <> 'basic' FOR UPDATE`, kind)
+	rows, err := tx.QueryContext(ctx, `SELECT service_key FROM external_services WHERE kind = $1 AND deleted_at IS NULL AND service_key <> 'basic' FOR UPDATE`, kind)
 	if err != nil {
-		return fmt.Errorf("lock external services: %w", err)
+		return fmt.Errorf("lock external services: %w", channelContextError(ctx, err))
 	}
 	existing := make(map[string]struct{})
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan external service key: %w", err)
+			return fmt.Errorf("scan external service key: %w", channelContextError(ctx, err))
 		}
 		existing[normalizeConfigKey(key)] = struct{}{}
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close external service keys: %w", err)
+		return fmt.Errorf("close external service keys: %w", channelContextError(ctx, err))
 	}
 	if len(existing) != len(keys) {
 		return fmt.Errorf("%w: service order must include every configured %s service", ErrExternalServiceOrderInvalid, kind)
@@ -332,12 +336,12 @@ func (r *ChannelRepository) ReorderExternalServices(kind string, keys []string) 
 			return fmt.Errorf("%w: service order contains duplicate %q", ErrExternalServiceOrderInvalid, raw)
 		}
 		seen[key] = struct{}{}
-		if _, err := tx.Exec(`UPDATE external_services SET sort_order = $1, updated_at = NOW() WHERE service_key = $2 AND kind = $3 AND deleted_at IS NULL`, (index+1)*10, key, kind); err != nil {
-			return fmt.Errorf("update external service order: %w", err)
+		if _, err := tx.ExecContext(ctx, `UPDATE external_services SET sort_order = $1, updated_at = NOW() WHERE service_key = $2 AND kind = $3 AND deleted_at IS NULL`, (index+1)*10, key, kind); err != nil {
+			return fmt.Errorf("update external service order: %w", channelContextError(ctx, err))
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit external service reorder: %w", err)
+		return fmt.Errorf("commit external service reorder: %w", channelContextError(ctx, err))
 	}
 	return nil
 }

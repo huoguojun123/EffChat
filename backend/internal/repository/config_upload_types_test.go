@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -206,5 +207,40 @@ func TestUpdateAdminEditableBatchIsAtomic(t *testing.T) {
 	}
 	if got := repo.GetInt("title_generation_trigger", 0); got != 3 {
 		t.Fatalf("title_generation_trigger = %d, want 3", got)
+	}
+}
+
+func TestUpdateAdminEditableBatchHonorsContextCancellation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	repo := NewConfigRepository(db)
+	original, err := repo.Get("system_name")
+	if err != nil {
+		t.Fatalf("read system_name: %v", err)
+	}
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedKey string
+	if err := blocker.QueryRowContext(context.Background(), `SELECT key FROM system_config WHERE key = 'system_name' FOR UPDATE`).Scan(&lockedKey); err != nil {
+		t.Fatalf("lock system_name row: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = repo.UpdateAdminEditableBatchContext(ctx, map[string]json.RawMessage{"system_name": json.RawMessage(`"Canceled Config"`)})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("config update error = %v, want context deadline", err)
+	}
+	stored, err := repo.Get("system_name")
+	if err != nil {
+		t.Fatalf("read canceled system_name: %v", err)
+	}
+	if string(stored.Value) != string(original.Value) {
+		t.Fatalf("canceled config update committed %s, want %s", stored.Value, original.Value)
 	}
 }

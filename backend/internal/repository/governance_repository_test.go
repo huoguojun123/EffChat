@@ -133,6 +133,108 @@ func TestSkillImportRecordsRetainPackageVersions(t *testing.T) {
 	}
 }
 
+func TestSkillGovernedPackageRollbackRestoresRetainedVersion(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "skill_package_rollback")
+	skillID := fmt.Sprintf("fixture-skill-rollback-%d", time.Now().UnixNano())
+	defer db.Exec("DELETE FROM skills WHERE id = $1", skillID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+	repo := NewSkillRepository(db)
+	write := func(name, checksum, path, action string) (*model.GovernanceEvent, error) {
+		skill := &model.Skill{
+			ID: skillID, Name: name, Description: "fixture", SourceType: "manual",
+			Checksum: checksum, PackageChecksum: checksum, EntryPath: "SKILL.md",
+			Enabled: true, CreatedBy: &userID,
+		}
+		files := []model.SkillFile{{RelativePath: "SKILL.md", StoragePath: path, Kind: "entry", Size: 7, Checksum: checksum}}
+		record := &model.SkillImportRecord{Action: action, SourceType: "manual", PackageChecksum: checksum, CreatedBy: &userID}
+		return repo.UpsertPackageGoverned(context.Background(), skill, files, record, SkillGovernanceMutation{
+			Action: action, ActorType: "admin", ActorUserID: userID, Reason: action + " fixture package",
+		})
+	}
+	firstChecksum := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	secondChecksum := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, err := write("Fixture v1", firstChecksum, "/fixture/rollback/v1/SKILL.md", "create"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := write("Fixture v2", secondChecksum, "/fixture/rollback/v2/SKILL.md", "update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, reverse, err := repo.RollbackGoverned(context.Background(), second.ID, SkillGovernanceMutation{
+		Action: "rollback", ActorType: "admin", ActorUserID: userID, Reason: "restore v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == nil || restored.Name != "Fixture v1" || restored.PackageChecksum != firstChecksum || len(restored.Files) != 1 || restored.Files[0].StoragePath != "/fixture/rollback/v1/SKILL.md" {
+		t.Fatalf("restored=%+v", restored)
+	}
+	if reverse.RollbackOfEventID == nil || *reverse.RollbackOfEventID != second.ID || reverse.SkillImportRecordID == nil {
+		t.Fatalf("reverse=%+v", reverse)
+	}
+	if _, _, err := repo.RollbackGoverned(context.Background(), second.ID, SkillGovernanceMutation{
+		Action: "rollback", ActorType: "admin", ActorUserID: userID, Reason: "duplicate",
+	}); !errors.Is(err, ErrGovernanceConflict) {
+		t.Fatalf("duplicate rollback error=%v", err)
+	}
+}
+
+func TestSkillGovernedMetadataDeleteAndCAS(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "skill_metadata_rollback")
+	skillID := fmt.Sprintf("fixture-skill-metadata-%d", time.Now().UnixNano())
+	defer db.Exec("DELETE FROM skills WHERE id = $1", skillID)
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+	repo := NewSkillRepository(db)
+	checksum := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	skill := &model.Skill{
+		ID: skillID, Name: "Fixture", Description: "before", SourceType: "manual",
+		Checksum: checksum, PackageChecksum: checksum, EntryPath: "SKILL.md",
+		Enabled: true, CreatedBy: &userID,
+	}
+	files := []model.SkillFile{{RelativePath: "SKILL.md", StoragePath: "/fixture/metadata/SKILL.md", Kind: "entry", Size: 7, Checksum: checksum}}
+	record := &model.SkillImportRecord{Action: "create", SourceType: "manual", PackageChecksum: checksum, CreatedBy: &userID}
+	if err := repo.UpsertPackageWithRecord(skill, files, record); err != nil {
+		t.Fatal(err)
+	}
+	skill.Description = "first"
+	first, err := repo.UpdateMetadataGoverned(context.Background(), skill, SkillGovernanceMutation{
+		Action: "update", ActorType: "admin", ActorUserID: userID, Reason: "first metadata",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skill.Description = "later"
+	if _, err := repo.UpdateMetadataGoverned(context.Background(), skill, SkillGovernanceMutation{
+		Action: "update", ActorType: "admin", ActorUserID: userID, Reason: "later metadata",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RollbackGoverned(context.Background(), first.ID, SkillGovernanceMutation{
+		Action: "rollback", ActorType: "admin", ActorUserID: userID, Reason: "stale rollback",
+	}); !errors.Is(err, ErrGovernanceConflict) {
+		t.Fatalf("stale rollback error=%v", err)
+	}
+	deleted, err := repo.DeleteGoverned(context.Background(), skillID, SkillGovernanceMutation{
+		Action: "delete", ActorType: "admin", ActorUserID: userID, Reason: "delete fixture",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Get(skillID, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted Skill remained active: %v", err)
+	}
+	restored, _, err := repo.RollbackGoverned(context.Background(), deleted.ID, SkillGovernanceMutation{
+		Action: "rollback", ActorType: "admin", ActorUserID: userID, Reason: "restore delete",
+	})
+	if err != nil || restored == nil || restored.Description != "later" || !restored.Enabled {
+		t.Fatalf("restored=%+v err=%v", restored, err)
+	}
+}
+
 func TestToolConfigGovernedSaveAndRollback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

@@ -1,8 +1,10 @@
-import { Plus, Search, Trash2 } from "lucide-react"
+import { useState } from "react"
+import { History, Plus, Search, Trash2 } from "lucide-react"
 import type { SkillDefinition } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { sourceLabel } from "./AdminSkillsPanel.helpers"
+import { AdminSkillHistoryPanel } from "./AdminSkillHistoryPanel"
 
 interface AdminSkillsLibraryProps {
   skills: SkillDefinition[]
@@ -14,6 +16,8 @@ interface AdminSkillsLibraryProps {
   onEdit: (skill: SkillDefinition) => void
   onToggle: (skill: SkillDefinition) => void
   onDelete: (skill: SkillDefinition) => void
+  onRollback: (skillID: string, restored: SkillDefinition | null) => void
+  setError: (error: string) => void
 }
 
 export function AdminSkillsLibrary({
@@ -26,7 +30,11 @@ export function AdminSkillsLibrary({
   onEdit,
   onToggle,
   onDelete,
+  onRollback,
+  setError,
 }: AdminSkillsLibraryProps) {
+  const [historySkillID, setHistorySkillID] = useState("")
+
   return (
     <div className={`${mobileDetailOpen ? "hidden xl:flex" : "flex"} min-h-0 flex-col overflow-hidden border-b border-border/70 xl:border-b-0 xl:border-r`}>
       <div className="flex items-center justify-between border-b border-border/70 px-3 py-2.5">
@@ -68,10 +76,26 @@ export function AdminSkillsLibrary({
               >
                 <span className="h-[18px] w-[18px] rounded-full bg-background shadow-sm transition-transform motion-control group-data-[enabled=true]:translate-x-4" />
               </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setHistorySkillID((current) => current === skill.id ? "" : skill.id)}
+                aria-label={`查看 Skill 变更历史：${skill.name}`}
+                aria-expanded={historySkillID === skill.id}
+                title="变更历史"
+              >
+                <History className="h-3.5 w-3.5" aria-hidden="true" />
+              </Button>
               <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => onDelete(skill)} aria-label={`删除 Skill：${skill.name}`} title="删除">
                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>
+            {historySkillID === skill.id ? (
+              <div className="col-span-2 border-t border-border/60 bg-muted/20 px-1 py-2">
+                <AdminSkillHistoryPanel skill={skill} onRollback={onRollback} setError={setError} />
+              </div>
+            ) : null}
           </div>
         ))}
       </div>

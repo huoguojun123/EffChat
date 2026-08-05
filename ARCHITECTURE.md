@@ -114,7 +114,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。
 - 管理后台可启停现有工具并配置超时；运行时、Admin 和数据库共享固定 Tool catalog。未知 key 默认关闭，Agent 在把 Eino ToolInfo 交给模型前反向校验其名称属于治理目录；新增 Tool 若没有同步 catalog 与 migration，会在 setup 阶段失败而不是成为不可见的可调用能力。数据库约束拒绝目录外 key，增量 migration 会清理已废弃的历史配置。
-- Tool/Skill catalog mutation 使用追加式治理事件记录 actor、before/after、原因、包版本和回滚来源。事件只保存非正文状态；Skill 包正文继续位于受管存储，import record 的不可变文件引用保留未来版本。回滚必须确认当前状态仍等于原事件的 after，再提交目标状态与新的反向事件；不能改写历史，也不能重新依赖 Git/Zip 上游。
+- Tool/Skill catalog mutation 使用追加式治理事件记录 actor、before/after、原因、包版本和回滚来源；管理员的 metadata、package/import 与 delete 均在同一数据库事务中写入治理事件。事件只保存非正文状态；Skill 包正文继续位于受管存储，import record 的不可变文件引用保留未来版本。legacy active package（含 builtin）首次进入治理路径时会建立文件引用快照，删除保留 tombstone。回滚必须确认当前状态仍等于原事件的 after，并校验 retained files manifest 后恢复受管文件引用，再提交目标状态与新的反向事件；不能改写历史，也不能重新依赖 Git/Zip 上游。
 - 工具自身返回的受控业务失败保持结构化结果。repository、持久化或受管文件 I/O 等内部失败必须作为 wrapped Go error 交给 Tool governance，不能伪装成成功 envelope 内的 `error` 字段；治理边界也会把带显式公共 `message` 的结构化失败改写为该公共文案。模型、RunHub 和消息树只接收稳定失败，原始 repository、路径或 provider 原因仅进入受控内部诊断；已有 `error_code` 的网页 typed 失败继续由网页工具自己的分类器负责。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
 - 网页提取链路由管理员为 Firecrawl、Jina、Tavily 和 Exa 独立配置并排序；Basic 固定为最后兜底。

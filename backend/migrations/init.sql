@@ -607,7 +607,7 @@ CREATE TABLE IF NOT EXISTS skill_import_records (
     id               BIGSERIAL PRIMARY KEY,
     skill_id         VARCHAR(100) NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
     action           VARCHAR(20) NOT NULL CHECK (action IN ('create', 'update')),
-    source_type      VARCHAR(20) NOT NULL CHECK (source_type IN ('manual', 'git', 'zip')),
+    source_type      VARCHAR(20) NOT NULL CHECK (source_type IN ('builtin', 'manual', 'git', 'zip')),
     source_url       TEXT,
     source_ref       VARCHAR(160),
     source_path      TEXT NOT NULL DEFAULT '',

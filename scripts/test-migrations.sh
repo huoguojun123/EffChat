@@ -157,6 +157,12 @@ SELECT
           AND indexdef LIKE '%UNIQUE INDEX%'
     )
     AND EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'skill_import_records'::regclass
+          AND conname = 'skill_import_records_source_type_check'
+          AND pg_get_constraintdef(oid) LIKE '%builtin%'
+    )
+    AND EXISTS (
         SELECT 1
         FROM information_schema.columns
         WHERE table_schema = 'public'

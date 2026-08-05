@@ -697,6 +697,14 @@ export const adminApi = {
     return api.get<{ records: SkillImportRecord[] }>(`/admin/skills/${encodeURIComponent(id)}/import-records`)
   },
 
+  listSkillHistory(id: string) {
+    return api.get<{ events: GovernanceEvent[] }>(`/admin/skills/${encodeURIComponent(id)}/history`)
+  },
+
+  rollbackSkillEvent(eventId: number, reason?: string) {
+    return api.post<{ skill: SkillDefinition | null; event: GovernanceEvent }>(`/admin/skills/events/${eventId}/rollback`, { reason })
+  },
+
   previewSkillGitUpdate(id: string, ref?: string) {
     return api.post<SkillUpdatePreviewResult>(`/admin/skills/${encodeURIComponent(id)}/update/git/preview`, { ref })
   },

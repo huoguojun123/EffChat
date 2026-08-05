@@ -187,6 +187,16 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
     }
   }
 
+  function applyGovernanceRollback(skillID: string, restored: SkillDefinition | null) {
+    setSkills((current) => restored ? upsertSkill(current, restored) : current.filter((skill) => skill.id !== skillID))
+    if (!restored && draft?.originalId === skillID) {
+      setDraft(null)
+      setMobileDetailOpen(false)
+      setMobilePane("editor")
+    }
+    syncSkills()
+  }
+
   function updateGitUrl(value: string) {
     setGitUrl(value)
     setGitRef("")
@@ -535,6 +545,8 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
           onEdit={(skill) => void startEdit(skill)}
           onToggle={(skill) => void toggleSkill(skill)}
           onDelete={(skill) => void deleteSkill(skill)}
+          onRollback={applyGovernanceRollback}
+          setError={setError}
         />
 
         <AdminSkillEditor

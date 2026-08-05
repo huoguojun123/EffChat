@@ -28,14 +28,17 @@ type governanceEventScanner interface {
 
 func scanGovernanceEvent(row governanceEventScanner) (*model.GovernanceEvent, error) {
 	event := &model.GovernanceEvent{}
+	var beforeState, afterState []byte
 	if err := row.Scan(
 		&event.ID, &event.ResourceType, &event.ResourceKey, &event.Action,
-		&event.ActorType, &event.ActorUserID, &event.Reason, &event.BeforeState,
-		&event.AfterState, &event.SkillImportRecordID, &event.RollbackOfEventID,
+		&event.ActorType, &event.ActorUserID, &event.Reason, &beforeState,
+		&afterState, &event.SkillImportRecordID, &event.RollbackOfEventID,
 		&event.CreatedAt,
 	); err != nil {
 		return nil, err
 	}
+	event.BeforeState = beforeState
+	event.AfterState = afterState
 	return event, nil
 }
 

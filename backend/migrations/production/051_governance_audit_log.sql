@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS skill_import_record_files (
 CREATE INDEX IF NOT EXISTS idx_skill_import_record_files_storage_path
     ON skill_import_record_files(storage_path);
 
+-- Governance snapshots may need to retain a built-in package that was created
+-- before this audit table existed. The snapshot is still a package version;
+-- allowing the existing source type avoids silently making built-ins
+-- non-reversible without copying their Markdown into PostgreSQL.
+ALTER TABLE skill_import_records DROP CONSTRAINT IF EXISTS skill_import_records_source_type_check;
+ALTER TABLE skill_import_records ADD CONSTRAINT skill_import_records_source_type_check
+    CHECK (source_type IN ('builtin', 'manual', 'git', 'zip'));
+
 CREATE TABLE IF NOT EXISTS governance_events (
     id                       BIGSERIAL PRIMARY KEY,
     resource_type            VARCHAR(20) NOT NULL CHECK (resource_type IN ('tool', 'skill')),

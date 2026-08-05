@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 
 	"github.com/huoguojun123/EffChat/internal/model"
@@ -28,118 +27,8 @@ func (r *SkillRepository) UpsertPackageWithRecord(skill *model.Skill, files []mo
 		return fmt.Errorf("failed to begin skill tx: %w", err)
 	}
 	defer tx.Rollback()
-
-	if skill.EntryPath == "" {
-		skill.EntryPath = "SKILL.md"
-	}
-	query := `
-		INSERT INTO skills (
-			id, name, description, content, source_type, source_url, source_ref,
-			source_path, checksum, package_checksum, entry_path, min_group_level,
-			enabled, is_builtin, created_by
-		)
-		VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			description = EXCLUDED.description,
-			content = '',
-			source_type = EXCLUDED.source_type,
-			source_url = EXCLUDED.source_url,
-			source_ref = EXCLUDED.source_ref,
-			source_path = EXCLUDED.source_path,
-			checksum = EXCLUDED.checksum,
-			package_checksum = EXCLUDED.package_checksum,
-			entry_path = EXCLUDED.entry_path,
-			min_group_level = EXCLUDED.min_group_level,
-			enabled = EXCLUDED.enabled,
-			is_builtin = EXCLUDED.is_builtin,
-			created_by = COALESCE(skills.created_by, EXCLUDED.created_by),
-			deleted_at = NULL,
-			updated_at = NOW()
-		RETURNING created_at, updated_at
-	`
-	if err := tx.QueryRow(
-		query,
-		skill.ID,
-		skill.Name,
-		skill.Description,
-		skill.SourceType,
-		skill.SourceURL,
-		skill.SourceRef,
-		skill.SourcePath,
-		skill.Checksum,
-		skill.PackageChecksum,
-		skill.EntryPath,
-		skill.MinGroupLevel,
-		skill.Enabled,
-		skill.IsBuiltin,
-		skill.CreatedBy,
-	).Scan(&skill.CreatedAt, &skill.UpdatedAt); err != nil {
-		return fmt.Errorf("failed to upsert skill: %w", err)
-	}
-
-	if _, err := tx.Exec(`DELETE FROM skill_files WHERE skill_id = $1`, skill.ID); err != nil {
-		return fmt.Errorf("failed to clear skill files: %w", err)
-	}
-	for _, file := range files {
-		if _, err := tx.Exec(`
-			INSERT INTO skill_files (skill_id, relative_path, storage_path, kind, size, checksum)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, skill.ID, file.RelativePath, file.StoragePath, file.Kind, file.Size, file.Checksum); err != nil {
-			return fmt.Errorf("failed to insert skill file %s: %w", file.RelativePath, err)
-		}
-	}
-	if record != nil {
-		record.SkillID = skill.ID
-		if record.PackageChecksum == "" {
-			record.PackageChecksum = skill.PackageChecksum
-		}
-		if record.SourceType == "" {
-			record.SourceType = skill.SourceType
-		}
-		if len(record.SelectedFiles) == 0 {
-			record.SelectedFiles = json.RawMessage("[]")
-		}
-		if len(record.FileManifest) == 0 {
-			record.FileManifest = json.RawMessage("[]")
-		}
-		if len(record.ImportReport) == 0 {
-			record.ImportReport = json.RawMessage("{}")
-		}
-		if err := tx.QueryRow(`
-			INSERT INTO skill_import_records (
-				skill_id, action, source_type, source_url, source_ref, source_path,
-				upstream_skill_id, upstream_name, package_checksum,
-				selected_files, file_manifest, import_report, created_by
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13)
-			RETURNING id, created_at
-		`,
-			record.SkillID,
-			record.Action,
-			record.SourceType,
-			record.SourceURL,
-			record.SourceRef,
-			record.SourcePath,
-			record.UpstreamSkillID,
-			record.UpstreamName,
-			record.PackageChecksum,
-			string(record.SelectedFiles),
-			string(record.FileManifest),
-			string(record.ImportReport),
-			record.CreatedBy,
-		).Scan(&record.ID, &record.CreatedAt); err != nil {
-			return fmt.Errorf("failed to insert skill import record: %w", err)
-		}
-		for _, file := range files {
-			if _, err := tx.Exec(`
-				INSERT INTO skill_import_record_files (
-					import_record_id, relative_path, storage_path, kind, size, checksum
-				) VALUES ($1, $2, $3, $4, $5, $6)
-			`, record.ID, file.RelativePath, file.StoragePath, file.Kind, file.Size, file.Checksum); err != nil {
-				return fmt.Errorf("failed to retain skill import file %s: %w", file.RelativePath, err)
-			}
-		}
+	if err := upsertSkillPackageTx(context.Background(), tx, skill, files, record); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {

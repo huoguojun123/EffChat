@@ -43,6 +43,17 @@ func TestWriteFontErrorDoesNotExposeInternalCause(t *testing.T) {
 	}
 }
 
+func TestWriteFontErrorMapsUnavailableSelectionToConflict(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/fonts/selected", nil)
+
+	writeFontError(ctx, "selection_update", repository.ErrFontUnavailable)
+
+	assertFontResponse(t, recorder, http.StatusConflict, "font_not_available", false)
+}
+
 func TestFontHandlerPostgresAndStorageFailureClassification(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := testutil.OpenPostgresTestDB(t)
@@ -105,6 +116,59 @@ func TestFontHandlerPostgresAndStorageFailureClassification(t *testing.T) {
 	assertFontResponse(t, missingFile, http.StatusInternalServerError, "font_file_open_failed", true)
 }
 
+func TestDeleteFontHandlerKeepsFileWhenSelectionTransactionFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := testutil.OpenPostgresTestDB(t)
+	fontRepo := repository.NewFontRepository(db)
+	fontPath := filepath.Join(t.TempDir(), "transaction.woff2")
+	if err := os.WriteFile(fontPath, []byte("wOF2fictional-font-payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	font := &model.FontAsset{
+		DisplayName: "Transaction Sans",
+		FamilyName:  "Transaction Sans",
+		FileName:    "transaction.woff2",
+		FilePath:    fontPath,
+		MimeType:    "font/woff2",
+		FileSize:    28,
+		Checksum:    strings.Repeat("b", 64),
+		Weight:      400,
+		Style:       "normal",
+		Enabled:     true,
+	}
+	if err := fontRepo.Create(font); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fontRepo.SetSelectedSlot(repository.ChatFontSlotLatin, &font.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE OR REPLACE FUNCTION fail_font_delete_selection_clear() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.key = 'chat_font_latin_asset_id' AND NEW.value = 'null'::jsonb THEN
+				RAISE EXCEPTION 'fixture delete cleanup failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER fail_font_delete_selection_clear_trigger
+		BEFORE UPDATE ON system_config
+		FOR EACH ROW EXECUTE FUNCTION fail_font_delete_selection_clear();
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	response := invokeFontHandler(DeleteFontHandler(fontRepo), http.MethodDelete, "/fonts/1", fmt.Sprint(font.ID), "")
+	assertFontResponse(t, response, http.StatusInternalServerError, "font_delete_failed", true)
+	if _, err := os.Stat(fontPath); err != nil {
+		t.Fatalf("font file was removed after database rollback: %v", err)
+	}
+	stored, err := fontRepo.Get(font.ID)
+	if err != nil || !stored.Enabled {
+		t.Fatalf("font row changed after database rollback: font=%#v err=%v", stored, err)
+	}
+}
+
 func invokeFontHandler(handler gin.HandlerFunc, method, path, id, body string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -156,7 +220,7 @@ func TestFontHandlersDoNotMisclassifyClosedRepositoryAsClientFailure(t *testing.
 	}{
 		{name: "list", method: http.MethodGet, path: "/fonts", handler: ListAdminFontsHandler(fontRepo), wantCode: "font_list_failed"},
 		{name: "update lookup", method: http.MethodPatch, path: "/fonts/7", body: `{}`, handler: UpdateFontHandler(fontRepo), wantCode: "font_load_failed"},
-		{name: "select lookup", method: http.MethodPut, path: "/fonts/selected", body: `{"font_id":7}`, handler: SelectFontHandler(fontRepo), wantCode: "font_load_failed"},
+		{name: "select transaction", method: http.MethodPut, path: "/fonts/selected", body: `{"font_id":7}`, handler: SelectFontHandler(fontRepo), wantCode: "font_selection_update_failed"},
 		{name: "delete lookup", method: http.MethodDelete, path: "/fonts/7", handler: DeleteFontHandler(fontRepo), wantCode: "font_load_failed"},
 		{name: "download lookup", method: http.MethodGet, path: "/fonts/7/file", handler: DownloadFontFileHandler(fontRepo), wantCode: "font_load_failed"},
 	}

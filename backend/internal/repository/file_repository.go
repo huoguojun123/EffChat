@@ -932,15 +932,19 @@ func (r *FileRepository) RestartOCR(id, userID int64, now, sourceCutoff time.Tim
 }
 
 func (r *FileRepository) ExpireStaleOCROriginals(cutoff, now time.Time, limit int) ([]*model.File, error) {
+	return r.ExpireStaleOCROriginalsContext(context.Background(), cutoff, now, limit)
+}
+
+func (r *FileRepository) ExpireStaleOCROriginalsContext(ctx context.Context, cutoff, now time.Time, limit int) ([]*model.File, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("begin OCR source cleanup: %w", err)
+		return nil, fmt.Errorf("begin OCR source cleanup: %w", fileContextError(ctx, err))
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.Query(`
+	rows, err := tx.QueryContext(ctx, `
 		SELECT files.id, files.user_id, files.session_id, files.file_name, files.file_path, files.file_type, files.file_size, files.file_hash, files.status,
 		       files.extracted_text_path, files.extract_status, files.extract_error, files.token_estimate,
 		       files.ocr_provider, files.ocr_task_id, files.ocr_page_count, files.ocr_progress_pages, files.ocr_started_at, files.ocr_completed_at, files.ocr_error_type,
@@ -984,7 +988,7 @@ func (r *FileRepository) ExpireStaleOCROriginals(cutoff, now time.Time, limit in
 		LIMIT $3
 	`, cutoff, now, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list stale OCR sources: %w", err)
+		return nil, fmt.Errorf("list stale OCR sources: %w", fileContextError(ctx, err))
 	}
 	files, scanErr := scanOCRWorkRows(rows)
 	rows.Close()
@@ -992,7 +996,7 @@ func (r *FileRepository) ExpireStaleOCROriginals(cutoff, now time.Time, limit in
 		return nil, scanErr
 	}
 	for _, f := range files {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE files
 			SET extract_status = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN 'failed' ELSE extract_status END,
 			    extract_error = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN 'OCR 原文件已超过 24 小时暂存期，无法继续解析' ELSE extract_error END,
@@ -1004,13 +1008,20 @@ func (r *FileRepository) ExpireStaleOCROriginals(cutoff, now time.Time, limit in
 			    ocr_completed_at = CASE WHEN extract_status IN ('ocr_pending', 'ocr_running') THEN $2 ELSE ocr_completed_at END
 			WHERE id = $1
 		`, f.ID, now); err != nil {
-			return nil, fmt.Errorf("expire OCR source %d: %w", f.ID, err)
+			return nil, fmt.Errorf("expire OCR source %d: %w", f.ID, fileContextError(ctx, err))
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit OCR source cleanup: %w", err)
+		return nil, fmt.Errorf("commit OCR source cleanup: %w", fileContextError(ctx, err))
 	}
 	return files, nil
+}
+
+func fileContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func scanOCRWorkRows(rows *sql.Rows) ([]*model.File, error) {

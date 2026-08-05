@@ -788,7 +788,7 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 			writeServerError(c, http.StatusInternalServerError, "file_cleanup_reference_count_failed", "failed to count referenced files", err)
 			return
 		}
-		expiredOCR, err := fileRepo.ExpireStaleOCROriginals(cutoff, now, limit)
+		expiredOCR, err := fileRepo.ExpireStaleOCROriginalsContext(c.Request.Context(), cutoff, now, limit)
 		if err != nil {
 			writeServerError(c, http.StatusInternalServerError, "ocr_source_expire_failed", "failed to expire OCR source files", err)
 			return

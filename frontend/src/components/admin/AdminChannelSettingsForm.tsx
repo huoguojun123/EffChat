@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type SetStateAction } from "react"
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react"
 import { adminApi, type AIChannel, type AIChannelInput } from "@/api/admin"
 import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
@@ -8,6 +8,7 @@ import { Save, Trash2 } from "lucide-react"
 import { adapterOptions } from "./AdminChannelsPanel.constants"
 import { Field, Select, Toggle } from "./AdminModelsPanel.controls"
 import { useChatStore } from "@/stores/chat"
+import { EditorOwnership } from "./editorOwnership"
 
 interface Props {
   channel: AIChannel | null
@@ -17,6 +18,7 @@ interface Props {
   setError: (error: string) => void
   onSaved: (key: string) => void
   onDeleted: () => void
+  onDirtyChange: (dirty: boolean) => void
 }
 
 const channelDefaults: Record<AIChannelInput["adapter"], { key: string; displayName: string; baseURL: string; sortOrder: number }> = {
@@ -80,15 +82,27 @@ function channelDraftFrom(item: AIChannel | null): AIChannelInput {
   }
 }
 
-export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, setError, onSaved, onDeleted }: Props) {
+export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, setError, onSaved, onDeleted, onDirtyChange }: Props) {
   const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
   const [fallbackKey] = useState(() => `custom-${Date.now().toString(36)}`)
   const [draft, setDraft] = useState<AIChannelInput>(() => channelDraftFrom(channel))
   const [saving, setSaving] = useState("")
+  const [owner] = useState(() => new EditorOwnership())
   const loadModels = useModelStore((s) => s.loadModels)
 
+  useEffect(() => {
+    owner.activate(channel?.key || "new-channel")
+    return () => owner.invalidate()
+  }, [channel?.key, owner])
+
+  function changeDraft(update: SetStateAction<AIChannelInput>) {
+    owner.change()
+    onDirtyChange(true)
+    setDraft(update)
+  }
+
   function updateDisplayName(displayName: string) {
-    setDraft((prev) => ({
+    changeDraft((prev) => ({
       ...prev,
       display_name: displayName,
       key: isNew ? channelKeyFromName(displayName, fallbackKey) : prev.key,
@@ -96,7 +110,7 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
   }
 
   function updateAdapter(adapter: AIChannelInput["adapter"]) {
-    setDraft((prev) => {
+    changeDraft((prev) => {
       const currentDefaults = channelDefaults[prev.adapter]
       const nextDefaults = channelDefaults[adapter]
       const baseURL = !prev.base_url.trim() || prev.base_url === currentDefaults.baseURL ? nextDefaults.baseURL : prev.base_url
@@ -119,23 +133,38 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
   }
 
   async function saveChannel() {
+    const currentDraft = draft
+    const operation = owner.beginOperation()
     setSaving("save")
     setError("")
     try {
-      const saved = await adminApi.saveChannel({ ...draft, api_key: draft.api_key?.trim() || undefined })
+      const saved = await adminApi.saveChannel({ ...currentDraft, api_key: currentDraft.api_key?.trim() || undefined })
       setChannels((prev) => {
         const exists = prev.some((item) => item.key === saved.key)
         const next = exists ? prev.map((item) => (item.key === saved.key ? saved : item)) : [...prev, saved]
         return next.sort((a, b) => a.sort_order - b.sort_order || a.key.localeCompare(b.key))
       })
-      setDraft(channelDraftFrom(saved))
       await loadModels(true)
       void loadSessionCreateReadiness(true)
-      onSaved(saved.key)
+      if (owner.owns(operation, false)) {
+        const unchanged = owner.owns(operation)
+        setSaving("")
+        owner.rekey(saved.key)
+        owner.acknowledge(operation.revision)
+        if (unchanged) {
+          setDraft(channelDraftFrom(saved))
+          onDirtyChange(false)
+          onSaved(saved.key)
+        } else {
+          setError("已保存较早版本，当前修改仍未保存")
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "渠道保存失败")
+      if (owner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "渠道保存失败")
+      }
     } finally {
-      setSaving("")
+      if (owner.owns(operation, false)) setSaving("")
     }
   }
 
@@ -147,17 +176,24 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
       : `删除渠道 ${channel.key} 后，新请求将不能再使用这个渠道。`
     if (!window.confirm(`${detail}\n\n确定继续？`)) return
 
+    const operation = owner.beginOperation()
     setSaving("delete")
     setError("")
     try {
       await adminApi.deleteChannel(channel.key)
       setChannels((prev) => prev.filter((item) => item.key !== channel.key))
       void loadSessionCreateReadiness(true)
-      onDeleted()
+      if (owner.owns(operation, false)) {
+        owner.invalidate()
+        onDirtyChange(false)
+        onDeleted()
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "渠道删除失败")
+      if (owner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "渠道删除失败")
+      }
     } finally {
-      setSaving("")
+      if (owner.owns(operation, false)) setSaving("")
     }
   }
 
@@ -191,12 +227,12 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
           </Select>
         </Field>
         <Field label="Base URL">
-          <Input value={draft.base_url} onChange={(e) => setDraft((prev) => ({ ...prev, base_url: e.target.value }))} />
+          <Input value={draft.base_url} onChange={(e) => changeDraft((prev) => ({ ...prev, base_url: e.target.value }))} />
         </Field>
         <Field label="API key">
-          <Input type="password" value={draft.api_key || ""} placeholder={isNew ? "" : "留空保留已保存 Key"} onChange={(e) => setDraft((prev) => ({ ...prev, api_key: e.target.value }))} />
+          <Input type="password" value={draft.api_key || ""} placeholder={isNew ? "" : "留空保留已保存 Key"} onChange={(e) => changeDraft((prev) => ({ ...prev, api_key: e.target.value }))} />
         </Field>
-        <Toggle label="启用" checked={draft.enabled} onChange={(enabled) => setDraft((prev) => ({ ...prev, enabled }))} />
+        <Toggle label="启用" checked={draft.enabled} onChange={(enabled) => changeDraft((prev) => ({ ...prev, enabled }))} />
       </div>
     </div>
   )

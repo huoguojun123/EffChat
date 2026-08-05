@@ -9,6 +9,7 @@ export interface AdminModelsPanelProps {
   channels?: AIChannel[]
   setChannels?: Dispatch<SetStateAction<AIChannel[]>>
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 export type ModelDraft = CreateModelInput

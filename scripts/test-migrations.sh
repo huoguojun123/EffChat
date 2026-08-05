@@ -49,6 +49,19 @@ run_migrations() {
         "$ROOT/backend/migrations/build_migration_script.sh" | psql_db "$database"
 }
 
+# 001 executes init.sql and is the immutable production baseline. Fresh-schema
+# tests alone cannot detect an accidental edit because they would simply record
+# the new checksum; pinning the deployed checksum catches that drift before an
+# existing installation reaches the migration runner.
+BASELINE_CHECKSUM="$(
+    "$ROOT/backend/migrations/build_migration_script.sh" |
+        awk '/^SET checksum = / && checksum == "" { checksum=$4; gsub(/'\''/, "", checksum) } END { print checksum }'
+)"
+[ "$BASELINE_CHECKSUM" = "d8ec8e907836f21bbea686e084b1eecc0081e1989c8ff063b3c4f7bb77739f7a" ] || {
+    echo "immutable 001/init baseline checksum changed: $BASELINE_CHECKSUM" >&2
+    exit 1
+}
+
 ln -s "$ROOT/backend/migrations/testdata/997_nested_transaction.sql" \
     "$VALIDATION_DIR/997_nested_transaction.sql"
 if MIGRATIONS_PRODUCTION_DIR="$VALIDATION_DIR" \

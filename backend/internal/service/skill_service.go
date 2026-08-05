@@ -117,10 +117,11 @@ type SkillFileInput struct {
 }
 
 type SkillGitImportRequest struct {
-	URL           string              `json:"url" binding:"required"`
-	Ref           string              `json:"ref"`
-	SelectedPaths []string            `json:"selected_paths"`
-	SelectedFiles map[string][]string `json:"selected_files"`
+	URL            string              `json:"url" binding:"required"`
+	Ref            string              `json:"ref"`
+	SelectedPaths  []string            `json:"selected_paths"`
+	SelectedFiles  map[string][]string `json:"selected_files"`
+	TargetSkillIDs map[string]string   `json:"target_skill_ids"`
 }
 
 type SkillGitPreviewRequest struct {
@@ -156,8 +157,18 @@ type SkillZipPreviewResult struct {
 }
 
 type SkillImportResult struct {
-	Skills []*SkillResponse         `json:"skills"`
-	Report skillparser.ImportReport `json:"report"`
+	Skills    []*SkillResponse         `json:"skills"`
+	Created   []string                 `json:"created"`
+	Updated   []string                 `json:"updated"`
+	Unchanged []string                 `json:"unchanged"`
+	Report    skillparser.ImportReport `json:"report"`
+}
+
+type preparedSkillPackage struct {
+	skill       *model.Skill
+	parsedFiles []skillparser.ParsedSkillFile
+	record      *model.SkillImportRecord
+	mutation    repository.SkillGovernanceMutation
 }
 
 type SkillUpdateGitPreviewRequest struct {
@@ -645,6 +656,57 @@ func (s *SkillService) persistSkillPackage(skill *model.Skill, parsedFiles []ski
 		return err
 	}
 	markSkillPackageRootsForDelayedCleanup(oldPaths, packageRoot)
+	s.scheduleSkillPackageCleanup()
+	return nil
+}
+
+// persistSkillPackages prepares immutable package roots before opening the
+// database transaction. The batch becomes active only after every package,
+// import record, and governance event commits together; failed roots remain
+// unreferenced and are reclaimed by the existing delayed cleanup.
+func (s *SkillService) persistSkillPackages(packages []preparedSkillPackage) error {
+	if len(packages) == 0 {
+		return nil
+	}
+	s.packageMu.Lock()
+	defer s.packageMu.Unlock()
+
+	type preparedWrite struct {
+		oldPaths    []string
+		packageRoot string
+		upsert      repository.GovernedSkillPackage
+	}
+	writes := make([]preparedWrite, 0, len(packages))
+	for _, item := range packages {
+		oldPaths, err := s.skillRepo.FilePathsForSkill(item.skill.ID)
+		if err != nil {
+			return err
+		}
+		files, packageRoot, err := writeSkillPackage(item.skill.ID, item.skill.PackageChecksum, item.parsedFiles)
+		if err != nil {
+			s.scheduleSkillPackageCleanup()
+			return err
+		}
+		item.record.SelectedFiles = marshalSelectedSkillFiles(item.parsedFiles)
+		item.record.FileManifest = marshalSkillFileManifest(files)
+		writes = append(writes, preparedWrite{
+			oldPaths: oldPaths, packageRoot: packageRoot,
+			upsert: repository.GovernedSkillPackage{
+				Skill: item.skill, Files: files, Record: item.record, Mutation: item.mutation,
+			},
+		})
+	}
+	upserts := make([]repository.GovernedSkillPackage, 0, len(writes))
+	for _, write := range writes {
+		upserts = append(upserts, write.upsert)
+	}
+	if err := s.skillRepo.UpsertPackagesGoverned(context.Background(), upserts); err != nil {
+		s.scheduleSkillPackageCleanup()
+		return err
+	}
+	for _, write := range writes {
+		markSkillPackageRootsForDelayedCleanup(write.oldPaths, write.packageRoot)
+	}
 	s.scheduleSkillPackageCleanup()
 	return nil
 }

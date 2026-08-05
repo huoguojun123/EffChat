@@ -25,12 +25,12 @@ func (s *SkillService) PreviewZip(data []byte) (*SkillZipPreviewResult, error) {
 	return &SkillZipPreviewResult{Skills: previews, Report: report}, nil
 }
 
-func (s *SkillService) ImportZip(userID int64, data []byte, selectedPaths []string, selectedFiles map[string][]string) (*SkillImportResult, error) {
+func (s *SkillService) ImportZip(userID int64, data []byte, selectedPaths []string, selectedFiles map[string][]string, targetSkillIDs map[string]string) (*SkillImportResult, error) {
 	parsed, report, err := skillparser.ImportZipSelectedFiles(data, selectedPaths, selectedFiles)
 	if err != nil {
 		return nil, newSkillError(SkillErrorInvalid, "invalid Skill archive selection", err)
 	}
-	return s.persistParsed(userID, parsed, report, SkillSourceZip, nil, nil)
+	return s.persistParsed(userID, parsed, report, SkillSourceZip, nil, nil, targetSkillIDs)
 }
 
 func (s *SkillService) PreviewGit(ctx context.Context, req *SkillGitPreviewRequest) (*SkillGitPreviewResult, error) {
@@ -94,29 +94,46 @@ func (s *SkillService) ImportGit(ctx context.Context, userID int64, req *SkillGi
 	if ref != "" {
 		sourceRef = &ref
 	}
-	return s.persistParsed(userID, parsed, report, SkillSourceGit, &sourceURL, sourceRef)
+	return s.persistParsed(userID, parsed, report, SkillSourceGit, &sourceURL, sourceRef, req.TargetSkillIDs)
 }
 
-func (s *SkillService) persistParsed(userID int64, parsed []skillparser.ParsedSkill, report skillparser.ImportReport, sourceType string, sourceURL, sourceRef *string) (*SkillImportResult, error) {
+func (s *SkillService) persistParsed(userID int64, parsed []skillparser.ParsedSkill, report skillparser.ImportReport, sourceType string, sourceURL, sourceRef *string, targetSkillIDs map[string]string) (*SkillImportResult, error) {
 	parsed = dedupeParsedSkills(parsed, &report)
 	report.Imported = len(parsed)
 	resp := &SkillImportResult{Skills: []*SkillResponse{}, Report: report}
+	packages := make([]preparedSkillPackage, 0, len(parsed))
+	seenTargets := make(map[string]struct{}, len(parsed))
 	for _, item := range parsed {
 		sourcePath := item.SourcePath
+		targetID := strings.TrimSpace(targetSkillIDs[sourcePath])
+		if targetID == "" {
+			targetID = item.ID
+		}
+		if _, duplicate := seenTargets[targetID]; duplicate {
+			return nil, newSkillError(SkillErrorInvalid, "multiple imported Skills target the same Skill", nil)
+		}
+		seenTargets[targetID] = struct{}{}
 		action := "create"
 		enabled := true
 		minGroupLevel := 0
 		var createdBy *int64 = &userID
-		if existing, err := s.skillRepo.Get(item.ID, true); err == nil {
+		if existing, err := s.skillRepo.Get(targetID, true); err == nil {
 			action = "update"
 			enabled = existing.Enabled
 			minGroupLevel = existing.MinGroupLevel
 			createdBy = existing.CreatedBy
+			if existing.PackageChecksum == item.PackageChecksum {
+				resp.Skills = append(resp.Skills, toSkillResponse(existing, true))
+				resp.Unchanged = append(resp.Unchanged, existing.ID)
+				continue
+			}
 		} else if !errors.Is(err, repository.ErrNotFound) {
 			return nil, err
+		} else if _, explicitTarget := targetSkillIDs[sourcePath]; explicitTarget {
+			return nil, newSkillError(SkillErrorNotFound, "target Skill does not exist", err)
 		}
 		skill := &model.Skill{
-			ID:              item.ID,
+			ID:              targetID,
 			Name:            item.Name,
 			Description:     item.Description,
 			SourceType:      sourceType,
@@ -132,13 +149,24 @@ func (s *SkillService) persistParsed(userID int64, parsed []skillparser.ParsedSk
 			CreatedBy:       createdBy,
 		}
 		record := s.buildImportRecord(action, skill, item, item.Files, report, &userID)
-		if err := s.persistSkillPackage(skill, item.Files, record, repository.SkillGovernanceMutation{
-			Action: "import", ActorType: "import", ActorUserID: userID,
-			Reason: "admin imported Skill package",
-		}); err != nil {
-			return nil, err
+		packages = append(packages, preparedSkillPackage{
+			skill: skill, parsedFiles: item.Files, record: record,
+			mutation: repository.SkillGovernanceMutation{
+				Action: "import", ActorType: "import", ActorUserID: userID,
+				Reason: "admin imported Skill package",
+			},
+		})
+	}
+	if err := s.persistSkillPackages(packages); err != nil {
+		return nil, err
+	}
+	for _, item := range packages {
+		resp.Skills = append(resp.Skills, toSkillResponse(item.skill, true))
+		if item.record.Action == "create" {
+			resp.Created = append(resp.Created, item.skill.ID)
+		} else {
+			resp.Updated = append(resp.Updated, item.skill.ID)
 		}
-		resp.Skills = append(resp.Skills, toSkillResponse(skill, true))
 	}
 	return resp, nil
 }

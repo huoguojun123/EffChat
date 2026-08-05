@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { adminApi, type SkillImportPreview, type SkillInput } from "@/api/admin"
+import { adminApi, type SkillImportPreview, type SkillImportResult, type SkillInput } from "@/api/admin"
 import type { SkillDefinition, UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,7 +15,7 @@ import {
   upsertSkill,
 } from "./AdminSkillsPanel.helpers"
 import { SkillImportDialog, SkillUpdateDialog } from "./AdminSkillsDialogs"
-import type { ImportDialogState, ImportReport, SkillDraft, UpdateDialogState } from "./AdminSkillsPanel.types"
+import type { ImportDialogState, SkillDraft, UpdateDialogState } from "./AdminSkillsPanel.types"
 import { AdminSkillsLibrary } from "./AdminSkillsLibrary"
 import { AdminSkillEditor } from "./AdminSkillEditor"
 import { AdminSkillFilesPanel } from "./AdminSkillFilesPanel"
@@ -463,32 +463,32 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
     const busy = beginBusy("skill-update", "update-dialog")
     setError("")
     try {
-      const updated: SkillDefinition[] = []
-      let lastReport: ImportReport | undefined
-      for (const candidate of updates) {
+      let result: SkillImportResult
+      if (importDialog && updateDialog.pendingUpdates?.length) {
+        const selectedPaths = [...updates.map((candidate) => candidate.source_path), ...(updateDialog.pendingCreates || [])]
+        const targetSkillIds = Object.fromEntries(updates.map((candidate) => [
+          candidate.source_path,
+          (candidate.existing_skill || updateDialog.preview.current).id,
+        ]))
+        result = importDialog.source === "git"
+          ? await adminApi.importSkillsFromGit(importDialog.url, importDialog.ref, selectedPaths, importDialog.selectedFiles, targetSkillIds)
+          : await adminApi.importSkillsFromZip(importDialog.file, selectedPaths, importDialog.selectedFiles, targetSkillIds)
+      } else {
+        const candidate = updates[0]
         const current = candidate.existing_skill || updateDialog.preview.current
         const selected = updateDialog.selectedFiles[candidate.source_path] || []
-        const result = updateDialog.source === "git"
-          ? await adminApi.applySkillGitUpdate(current.id, candidate.source_path, selected, updateDialog.ref, importDialog?.source === "git" ? importDialog.url : undefined)
+        const single = updateDialog.source === "git"
+          ? await adminApi.applySkillGitUpdate(current.id, candidate.source_path, selected, updateDialog.ref)
           : updateDialog.file
             ? await adminApi.applySkillZipUpdate(current.id, updateDialog.file, candidate.source_path, selected)
             : undefined
-        if (!result) throw new Error("缺少 Zip 文件")
-        updated.push(...(result.skills || []))
-        lastReport = result.report
+        if (!single) throw new Error("缺少 Zip 文件")
+        result = single
       }
-      let created: SkillDefinition[] = []
-      if (updateDialog.pendingCreates?.length && importDialog) {
-        const createResult = importDialog.source === "git"
-          ? await adminApi.importSkillsFromGit(importDialog.url, importDialog.ref, updateDialog.pendingCreates, importDialog.selectedFiles)
-          : await adminApi.importSkillsFromZip(importDialog.file, updateDialog.pendingCreates, importDialog.selectedFiles)
-        created = createResult.skills || []
-        lastReport = createResult.report || lastReport
-      }
-      setSkills((prev) => mergeSkills(prev, [...updated, ...created]))
+      setSkills((prev) => mergeSkills(prev, result.skills || []))
       syncSkills()
       if (updateOwner.owns(operation, false)) {
-        setImportLog(importReportLines(lastReport))
+        setImportLog(importReportLines(result.report))
         setImportDialog(null)
         setUpdateDialog(null)
         updateOwner.invalidate()

@@ -66,6 +66,9 @@ export interface SkillInput {
 
 export interface SkillImportResult {
   skills: SkillDefinition[]
+  created?: string[]
+  updated?: string[]
+  unchanged?: string[]
   report: {
     imported: number
     skipped?: string[]
@@ -732,8 +735,14 @@ export const adminApi = {
     return api.upload<SkillImportResult>(`/admin/skills/${encodeURIComponent(id)}/update/zip`, form)
   },
 
-  importSkillsFromGit(url: string, ref?: string, selectedPaths?: string[], selectedFiles?: Record<string, string[]>) {
-    return api.post<SkillImportResult>("/admin/skills/import/git", { url, ref, selected_paths: selectedPaths, selected_files: selectedFiles })
+  importSkillsFromGit(url: string, ref?: string, selectedPaths?: string[], selectedFiles?: Record<string, string[]>, targetSkillIds?: Record<string, string>) {
+    return api.post<SkillImportResult>("/admin/skills/import/git", {
+      url,
+      ref,
+      selected_paths: selectedPaths,
+      selected_files: selectedFiles,
+      target_skill_ids: targetSkillIds,
+    })
   },
 
   previewSkillsFromGit(url: string, ref?: string) {
@@ -746,11 +755,12 @@ export const adminApi = {
     return api.upload<SkillZipPreviewResult>("/admin/skills/import/zip/preview", form)
   },
 
-  importSkillsFromZip(file: File, selectedPaths?: string[], selectedFiles?: Record<string, string[]>) {
+  importSkillsFromZip(file: File, selectedPaths?: string[], selectedFiles?: Record<string, string[]>, targetSkillIds?: Record<string, string>) {
     const form = new FormData()
     form.append("file", file)
     if (selectedPaths) form.append("selected_paths", JSON.stringify(selectedPaths))
     if (selectedFiles) form.append("selected_files", JSON.stringify(selectedFiles))
+    if (targetSkillIds) form.append("target_skill_ids", JSON.stringify(targetSkillIds))
     return api.upload<SkillImportResult>("/admin/skills/import/zip", form)
   },
 

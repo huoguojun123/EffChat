@@ -61,6 +61,7 @@ interface Props {
   services: ExternalService[];
   setServices: Dispatch<SetStateAction<ExternalService[]>>;
   setError: (error: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 type ChainKind = Exclude<ExternalServiceKind, "ocr">;
@@ -112,6 +113,7 @@ export function AdminExternalServiceChain({
   services,
   setServices,
   setError,
+  onDirtyChange,
 }: Props) {
   const [draft, setDraft] = useState<ExternalServiceInput>(() =>
     emptyServiceDraft("tavily_search", 10),
@@ -128,6 +130,10 @@ export function AdminExternalServiceChain({
   const [editorOwner] = useState(() => new EditorOwnership());
   const [deleteOwner] = useState(() => new EditorOwnership());
   const mountedRef = useRef(true);
+  const panelDirty = editorOwner.isDirty();
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, {

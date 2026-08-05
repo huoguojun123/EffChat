@@ -11,6 +11,7 @@ interface Props {
   groups: UserGroup[]
   setGroups: Dispatch<SetStateAction<UserGroup[]>>
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type GroupDraft = CreateGroupInput & { id?: number }
@@ -30,13 +31,17 @@ const emptyGroup: GroupDraft = {
   daily_ocr_page_limit: 0,
 }
 
-export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
+export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }: Props) {
   const [draft, setDraft] = useState<GroupDraft | null>(null)
   const [saving, setSaving] = useState("")
   const [editorOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
   const mountedRef = useRef(true)
   const activeId = draft?.id
+  const panelDirty = editorOwner.isDirty()
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   useEffect(() => {
     mountedRef.current = true

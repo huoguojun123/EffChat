@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { adminApi, type SkillImportPreview, type SkillInput } from "@/api/admin"
 import type { SkillDefinition, UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
@@ -26,6 +26,7 @@ interface Props {
   setSkills: React.Dispatch<React.SetStateAction<SkillDefinition[]>>
   groups: UserGroup[]
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 const emptyDraft: SkillDraft = {
@@ -38,7 +39,7 @@ const emptyDraft: SkillDraft = {
   min_group_level: 0,
 }
 
-export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props) {
+export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyChange }: Props) {
   const [query, setQuery] = useState("")
   const [draft, setDraft] = useState<SkillDraft | null>(null)
   const [activePath, setActivePath] = useState("SKILL.md")
@@ -55,7 +56,7 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
   const [importQuery, setImportQuery] = useState("")
   const zipInputRef = useRef<HTMLInputElement>(null)
   const updateZipInputRef = useRef<HTMLInputElement>(null)
-  const editorOwner = useRef(new EditorOwnership()).current
+  const [editorOwner] = useState(() => new EditorOwnership())
   const sourceOwner = useRef(new EditorOwnership()).current
   const updateOwner = useRef(new EditorOwnership()).current
   const busyOwner = useRef(new BusyOwnership()).current
@@ -77,6 +78,10 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
   const importLines = importReportLines(importReport)
   const visibleImportLines = importLogExpanded ? importLog : importLog.slice(0, 2)
   const editingSkill = draft?.originalId ? skills.find((skill) => skill.id === draft.originalId) : undefined
+  const panelDirty = Boolean(draft && editorOwner.isDirty())
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   function syncSkills() {
     void refreshUserSkills().catch(() => {})

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { adminApi, type ModelTestResponse, type UpdateModelInput } from "@/api/admin"
 import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
@@ -26,7 +26,7 @@ import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 const unconfiguredProviderKey = "__unconfigured__"
 const newChannelKey = "__new_channel__"
 
-export function AdminModelsPanel({ models, setModels, groups, channels = [], setChannels, setError }: AdminModelsPanelProps) {
+export function AdminModelsPanel({ models, setModels, groups, channels = [], setChannels, setError, onDirtyChange }: AdminModelsPanelProps) {
   const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
   const {
     query,
@@ -53,6 +53,10 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   const [editorOwner] = useState(() => new EditorOwnership())
   const [importOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
+  const panelDirty = editorOwner.isDirty() || channelDirty
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
   const configuredChannelKeys = useMemo(() => new Set(channels.map((channel) => channel.key)), [channels])
   const channelLabels = useMemo(() => {
     const labels: Record<string, string> = { [unconfiguredProviderKey]: "未配置渠道" }

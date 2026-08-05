@@ -14,6 +14,7 @@ interface Props {
   setUsers: React.Dispatch<React.SetStateAction<AdminUser[]>>
   groups: UserGroup[]
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type UserDraft = CreateAdminUserInput & { id?: number }
@@ -27,7 +28,7 @@ const emptyUser: UserDraft = {
   is_active: true,
 }
 
-export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
+export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChange }: Props) {
   const [draft, setDraft] = useState<UserDraft | null>(null)
   const [saving, setSaving] = useState("")
   const [resetPassword, setResetPassword] = useState("")
@@ -49,6 +50,10 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
   const visibleEffectiveGroup = assignedGroup || defaultGroup || editedUser?.effective_group
   const visibleGroupID = assignedGroup?.id ?? ""
   const canResetPassword = resetPasswordOpen && resetPasswordDirty && resetPassword.length >= 6
+  const panelDirty = editorOwner.isDirty() || passwordOwner.isDirty()
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   useEffect(() => {
     mountedRef.current = true

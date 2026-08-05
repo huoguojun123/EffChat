@@ -10,6 +10,7 @@ import { BusyOwnership, EditorOwnership } from "@/components/admin/editorOwnersh
 
 interface Props {
   scope: "user" | "admin"
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 const defaultGroupName = "默认分组"
@@ -24,7 +25,7 @@ const emptyDraft: PromptInput = {
   is_public: false,
 }
 
-export function PromptManager({ scope }: Props) {
+export function PromptManager({ scope, onDirtyChange }: Props) {
   const user = useAuthStore((s) => s.user)
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [groups, setGroups] = useState<PromptGroup[]>([])
@@ -38,6 +39,10 @@ export function PromptManager({ scope }: Props) {
   const [loadOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
   const mountedRef = useRef(true)
+  const panelDirty = editorOwner.isDirty()
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   const selected = useMemo(
     () => prompts.find((item) => item.id === selectedId),

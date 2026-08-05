@@ -48,6 +48,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   const [saving, setSaving] = useState("")
   const [testingModel, setTestingModel] = useState(false)
   const [testResult, setTestResult] = useState<ModelTestResponse | null>(null)
+  const [channelDirty, setChannelDirty] = useState(false)
   const testRequestSeq = useRef(0)
   const [editorOwner] = useState(() => new EditorOwnership())
   const [importOwner] = useState(() => new EditorOwnership())
@@ -196,11 +197,13 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     setMobileDetailOpen(true)
   }
 
-  function changeProvider(provider: string) {
+  function changeProvider(provider: string, allowDirty = false) {
     if (modelManagementOpen && !canLeaveModelEditor(`provider:${provider}`)) return
+    if (!modelManagementOpen && channelDirty && provider !== selectedProvider && !allowDirty && !window.confirm("放弃当前渠道的未保存修改？")) return
     invalidateBusy("model-editor")
     invalidateCatalogRequests()
     editorOwner.invalidate()
+    setChannelDirty(false)
     setActiveProvider(provider)
     setMobileWorkspaceOpen(true)
     setModelManagementOpen(false)
@@ -378,6 +381,8 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function openModelManager(model?: Model) {
+    if (channelDirty && !window.confirm("放弃当前渠道的未保存修改？")) return
+    setChannelDirty(false)
     setMobileWorkspaceOpen(true)
     setModelManagementOpen(true)
     if (model) {
@@ -495,8 +500,9 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
             testResult={testResult}
             setChannels={setChannels}
             setError={setError}
-            onSaved={changeProvider}
-            onDeleted={() => changeProvider(channels.find((channel) => channel.key !== selectedProvider)?.key || unconfiguredProviderKey)}
+            onSaved={(key) => changeProvider(key, true)}
+            onDeleted={() => changeProvider(channels.find((channel) => channel.key !== selectedProvider)?.key || unconfiguredProviderKey, true)}
+            onDirtyChange={setChannelDirty}
             onFetchAvailableModels={fetchAvailableModels}
             onOpenModelManager={() => openModelManager()}
             onStartEdit={(model) => openModelManager(model)}

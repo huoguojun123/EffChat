@@ -42,7 +42,7 @@ async function installRoutes(page: Page) {
     if (path === "/api/v1/system/info") return fulfillJSON(route, { system_name: "EffChat" })
     if (path === "/api/v1/models") return fulfillJSON(route, { models: [modelA, modelB], total: 2 })
     if (path === "/api/v1/admin/groups") return fulfillJSON(route, { groups: [], total: 0 })
-    if (path === "/api/v1/admin/channels") {
+    if (path === "/api/v1/admin/channels" && request.method() === "GET") {
       return fulfillJSON(route, { channels: [{
         id: 1,
         key: "fixture-channel",
@@ -54,7 +54,28 @@ async function installRoutes(page: Page) {
         sort_order: 1,
         created_at: "2026-08-05T00:00:00Z",
         updated_at: "2026-08-05T00:00:00Z",
+      }, {
+        id: 2,
+        key: "fixture-channel-b",
+        display_name: "Fixture Channel B",
+        adapter: "openai_compatible",
+        base_url: "https://b.example.invalid/v1",
+        api_key_set: true,
+        enabled: true,
+        sort_order: 2,
+        created_at: "2026-08-05T00:00:00Z",
+        updated_at: "2026-08-05T00:00:00Z",
       }] })
+    }
+    if (path === "/api/v1/admin/channels" && request.method() === "POST") {
+      const payload = request.postDataJSON()
+      return fulfillJSON(route, {
+        id: 1,
+        ...payload,
+        api_key_set: true,
+        created_at: "2026-08-05T00:00:00Z",
+        updated_at: "2026-08-05T00:00:00Z",
+      }, 300)
     }
     if (path === "/api/v1/admin/models/catalog/model-a") {
       return fulfillJSON(route, { model: { ...modelA, context_window: 999, catalog_source: "models_dev" } }, 350)
@@ -91,4 +112,22 @@ test("catalog metadata and save responses stay with their model draft", async ({
   page.once("dialog", (dialog) => dialog.accept())
   await page.getByText("Model A", { exact: true }).click()
   await expect(page.getByLabel("显示名称")).toHaveValue("Model A")
+})
+
+test("channel saves preserve newer input and cannot navigate after unmount", async ({ page }) => {
+  await installRoutes(page)
+  await page.goto("/admin/models")
+
+  await page.getByLabel("Base URL").fill("https://saved.example.invalid/v1")
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  await page.getByLabel("Base URL").fill("https://newer.example.invalid/v1")
+  await expect(page.getByText("已保存较早版本，当前修改仍未保存")).toBeVisible()
+  await expect(page.getByLabel("Base URL")).toHaveValue("https://newer.example.invalid/v1")
+
+  await page.getByRole("button", { name: "保存", exact: true }).click()
+  page.once("dialog", (dialog) => dialog.accept())
+  await page.getByRole("button", { name: /Fixture Channel B/ }).click()
+  await expect(page.getByLabel("Base URL")).toHaveValue("https://b.example.invalid/v1")
+  await page.waitForTimeout(400)
+  await expect(page.getByLabel("Base URL")).toHaveValue("https://b.example.invalid/v1")
 })

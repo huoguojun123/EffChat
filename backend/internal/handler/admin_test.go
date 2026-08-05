@@ -392,8 +392,10 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 		t.Fatalf("got %d", w.Code)
 	}
 	var resp struct {
-		Users []*model.User `json:"users"`
-		Total int           `json:"total"`
+		Users      []*model.User `json:"users"`
+		Total      int           `json:"total"`
+		HasMore    bool          `json:"has_more"`
+		NextOffset int           `json:"next_offset"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if len(resp.Users) != 1 {
@@ -401,5 +403,8 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 	}
 	if resp.Total < 2 {
 		t.Errorf("total should reflect all users (>= 2), got %d", resp.Total)
+	}
+	if !resp.HasMore || resp.NextOffset != 1 {
+		t.Errorf("first page metadata = has_more:%v next_offset:%d, want true/1", resp.HasMore, resp.NextOffset)
 	}
 }

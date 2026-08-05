@@ -1,6 +1,7 @@
 import { api } from "./client"
 import type { FontAsset, Model, Prompt, SkillDefinition, SkillFileSummary, UserGroup } from "@/types"
 import type { PromptInput, PromptUpdate } from "./prompts"
+import { collectOffsetPages, type OffsetPage } from "./pagination"
 
 export interface AdminUser {
   id: number
@@ -502,7 +503,14 @@ export interface UpdateGroupInput {
 
 export const adminApi = {
   listUsers(limit = 100, offset = 0) {
-    return api.get<{ users: AdminUser[]; total: number }>(`/admin/users?limit=${limit}&offset=${offset}`)
+    return api.get<{ users: AdminUser[]; total: number; has_more: boolean; next_offset: number }>(`/admin/users?limit=${limit}&offset=${offset}`)
+  },
+
+  listAllUsers() {
+    return collectOffsetPages<AdminUser>(async (limit, offset): Promise<OffsetPage<AdminUser>> => {
+      const page = await adminApi.listUsers(limit, offset)
+      return { items: page.users || [], total: page.total, has_more: page.has_more, next_offset: page.next_offset }
+    })
   },
 
   updateUser(id: number, data: UpdateAdminUserInput) {
@@ -655,7 +663,14 @@ export const adminApi = {
   },
 
   listPrompts(limit = 100, offset = 0) {
-    return api.get<{ prompts: Prompt[]; total: number }>(`/admin/prompts?limit=${limit}&offset=${offset}`)
+    return api.get<{ prompts: Prompt[]; total: number; has_more: boolean; next_offset: number }>(`/admin/prompts?limit=${limit}&offset=${offset}`)
+  },
+
+  listAllPrompts() {
+    return collectOffsetPages<Prompt>(async (limit, offset): Promise<OffsetPage<Prompt>> => {
+      const page = await adminApi.listPrompts(limit, offset)
+      return { items: page.prompts || [], total: page.total, has_more: page.has_more, next_offset: page.next_offset }
+    })
   },
 
   createPrompt(data: PromptInput) {

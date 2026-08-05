@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { promptsApi } from "@/api/prompts"
 import * as sessionsApi from "@/api/sessions"
 import { useChatStore } from "@/stores/chat"
+import { useAuthStore } from "@/stores/auth"
 import type { Prompt } from "@/types"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
@@ -17,10 +18,14 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const sessions = useChatStore((s) => s.sessions)
   const updateSessionLocal = useChatStore((s) => s.updateSessionLocal)
+  const userID = useAuthStore((s) => s.user?.id)
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [selected, setSelected] = useState<Prompt | null>(null)
   const [query, setQuery] = useState("")
   const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+  const loadRequestRef = useRef(0)
 
   const activeSession = sessions.find((item) => item.id === activeSessionId)
   const filtered = useMemo(() => {
@@ -39,24 +44,40 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
     return Array.from(map.entries()).map(([groupName, items]) => ({ groupName, items }))
   }, [filtered])
 
-  const loadPrompts = useCallback(async () => {
-    const [mine, pub] = await Promise.all([
-      promptsApi.listMine(),
-      promptsApi.listPublic(),
-    ])
-    const map = new Map<number, Prompt>()
-    for (const item of [...(mine.prompts || []), ...(pub.prompts || [])]) {
-      map.set(item.id, item)
-    }
-    const list = Array.from(map.values())
-    setPrompts(list)
-    setSelected(list[0] || null)
-  }, [])
-
   useEffect(() => {
+    // Each open/account pair owns both catalog sources. Cleanup advances the
+    // generation so a late source cannot replace a later window's state.
+    const requestID = loadRequestRef.current + 1
+    loadRequestRef.current = requestID
     if (!open) return
-    void Promise.resolve().then(loadPrompts)
-  }, [open, loadPrompts])
+    void Promise.resolve().then(() => {
+      if (requestID !== loadRequestRef.current) return
+      setPrompts([])
+      setSelected(null)
+      setLoading(true)
+      setError("")
+      void Promise.all([promptsApi.listAllMine(), promptsApi.listAllPublic()])
+        .then(([mine, pub]) => {
+          if (requestID !== loadRequestRef.current) return
+          const map = new Map<number, Prompt>()
+          for (const item of [...mine, ...pub]) map.set(item.id, item)
+          const list = Array.from(map.values())
+          setPrompts(list)
+          setSelected(list[0] || null)
+        })
+        .catch((err) => {
+          if (requestID === loadRequestRef.current) {
+            setError(err instanceof Error ? err.message : "加载提示词失败")
+          }
+        })
+        .finally(() => {
+          if (requestID === loadRequestRef.current) setLoading(false)
+        })
+    })
+    return () => {
+      if (requestID === loadRequestRef.current) loadRequestRef.current += 1
+    }
+  }, [open, userID])
 
   async function applyPrompt(content: string | null) {
     if (!activeSessionId) return
@@ -90,6 +111,8 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
               </div>
             </div>
             <div className="max-h-[498px] overflow-y-auto p-2">
+              {loading && <div className="px-2 py-2 text-xs text-muted-foreground">正在加载完整提示词列表…</div>}
+              {error && <div role="alert" className="px-2 py-2 text-xs text-destructive">{error}</div>}
               <div className="space-y-2">
                 {grouped.map((group) => (
                   <section key={group.groupName} className="border-b border-border/60 pb-1 last:border-b-0">

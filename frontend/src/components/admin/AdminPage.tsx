@@ -82,8 +82,8 @@ export function AdminPage() {
     try {
       await Promise.all(required.map(async (resource) => {
         if (resource === "users") {
-          const result = await adminApi.listUsers()
-          if (requestId === loadRequestRef.current) setUsers(result.users || [])
+          const result = await adminApi.listAllUsers()
+          if (requestId === loadRequestRef.current) setUsers(result)
         }
         if (resource === "models") {
           const result = await adminApi.listModels()

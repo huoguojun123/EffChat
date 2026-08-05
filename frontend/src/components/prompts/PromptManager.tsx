@@ -150,36 +150,44 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
   }
 
   const loadData = useCallback(async () => {
-    loadOwner.activate(scope)
+    // Scope and account jointly own the complete catalog; clearing first keeps
+    // a previous account's bounded result out of the next editor generation.
+    loadOwner.activate(`${scope}:${user?.id ?? "anonymous"}`)
     const operation = loadOwner.beginOperation()
     setLoading(true)
     setFeedback("")
+    setPrompts([])
+    setGroups([])
     try {
       if (scope === "admin") {
-        const promptRes = await adminApi.listPrompts()
+        const promptRes = await adminApi.listAllPrompts()
         if (loadOwner.owns(operation)) {
-          setPrompts(promptRes.prompts || [])
+          setPrompts(promptRes)
           setGroups([])
         }
         return
       }
       const [mine, pub, groupRes] = await Promise.all([
-        promptsApi.listMine(),
-        promptsApi.listPublic(),
+        promptsApi.listAllMine(),
+        promptsApi.listAllPublic(),
         promptsApi.listGroups(),
       ])
       const map = new Map<number, Prompt>()
-      for (const item of [...(mine.prompts || []), ...(pub.prompts || [])]) {
+      for (const item of [...mine, ...pub]) {
         map.set(item.id, item)
       }
       if (loadOwner.owns(operation)) {
         setPrompts(Array.from(map.values()))
         setGroups(sortGroups(groupRes.groups || []))
       }
+    } catch (err) {
+      if (loadOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "加载提示词失败")
+      }
     } finally {
       if (mountedRef.current && loadOwner.owns(operation, false)) setLoading(false)
     }
-  }, [loadOwner, scope])
+  }, [loadOwner, scope, user?.id])
 
   useEffect(() => {
     mountedRef.current = true

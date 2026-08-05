@@ -82,10 +82,18 @@ func (r *PromptRepository) ListByUser(userID int64, limit, offset int) ([]*model
 		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
 		FROM prompts
 		WHERE user_id = $1
-		ORDER BY updated_at DESC
+		ORDER BY updated_at DESC, id DESC
 		LIMIT $2 OFFSET $3
 	`
 	return r.scanPrompts(query, userID, limit, offset)
+}
+
+func (r *PromptRepository) CountByUser(userID int64) (int, error) {
+	var total int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM prompts WHERE user_id = $1`, userID).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to count user prompts: %w", err)
+	}
+	return total, nil
 }
 
 func (r *PromptRepository) ListPublic(limit, offset int) ([]*model.Prompt, error) {
@@ -93,10 +101,18 @@ func (r *PromptRepository) ListPublic(limit, offset int) ([]*model.Prompt, error
 		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
 		FROM prompts
 		WHERE is_public = true
-		ORDER BY use_count DESC, updated_at DESC
+		ORDER BY use_count DESC, updated_at DESC, id DESC
 		LIMIT $1 OFFSET $2
 	`
 	return r.scanPrompts(query, limit, offset)
+}
+
+func (r *PromptRepository) CountPublic() (int, error) {
+	var total int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM prompts WHERE is_public = true`).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to count public prompts: %w", err)
+	}
+	return total, nil
 }
 
 func (r *PromptRepository) ListShared(limit, offset int) ([]*model.Prompt, error) {
@@ -104,10 +120,14 @@ func (r *PromptRepository) ListShared(limit, offset int) ([]*model.Prompt, error
 		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
 		FROM prompts
 		WHERE is_public = true
-		ORDER BY updated_at DESC
+		ORDER BY updated_at DESC, id DESC
 		LIMIT $1 OFFSET $2
 	`
 	return r.scanPrompts(query, limit, offset)
+}
+
+func (r *PromptRepository) CountShared() (int, error) {
+	return r.CountPublic()
 }
 
 func (r *PromptRepository) GetSharedByID(id int64) (*model.Prompt, error) {

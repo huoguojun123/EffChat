@@ -145,54 +145,61 @@ type fontSelectionQueryer interface {
 }
 
 func getSelectedIDs(queryer fontSelectionQueryer) (ChatFontSelection, error) {
-	legacyID, err := getSelectedIDByKey(queryer, selectedChatFontConfigKey)
+	legacyID, _, err := getSelectedFontValue(queryer, selectedChatFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	chineseID, err := getSelectedIDByKey(queryer, selectedChatChineseFontConfigKey)
+	chineseID, chinesePresent, err := getSelectedFontValue(queryer, selectedChatChineseFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	latinID, err := getSelectedIDByKey(queryer, selectedChatLatinFontConfigKey)
+	latinID, latinPresent, err := getSelectedFontValue(queryer, selectedChatLatinFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	codeID, err := getSelectedIDByKey(queryer, selectedChatCodeFontConfigKey)
+	codeID, codePresent, err := getSelectedFontValue(queryer, selectedChatCodeFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	if chineseID == nil {
+	// A missing slot key is the only legacy-upgrade case. A present JSON null is
+	// an intentional system-default selection and must survive every read.
+	if !chinesePresent {
 		chineseID = legacyID
 	}
-	if latinID == nil {
+	if !latinPresent {
 		latinID = legacyID
 	}
-	if codeID == nil {
+	if !codePresent {
 		codeID = legacyID
 	}
 	return ChatFontSelection{Chinese: chineseID, Latin: latinID, Code: codeID}, nil
 }
 
 func getSelectedIDByKey(queryer fontSelectionQueryer, key string) (*int64, error) {
+	id, _, err := getSelectedFontValue(queryer, key)
+	return id, err
+}
+
+func getSelectedFontValue(queryer fontSelectionQueryer, key string) (*int64, bool, error) {
 	var raw json.RawMessage
 	err := queryer.QueryRow(`SELECT value FROM system_config WHERE key = $1`, key).Scan(&raw)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to get selected font: %w", err)
+		return nil, false, fmt.Errorf("failed to get selected font: %w", err)
 	}
 	if string(raw) == "null" {
-		return nil, nil
+		return nil, true, nil
 	}
 	var id int64
 	if err := json.Unmarshal(raw, &id); err != nil {
-		return nil, fmt.Errorf("decode selected font: %w", err)
+		return nil, true, fmt.Errorf("decode selected font: %w", err)
 	}
 	if id > 0 {
-		return &id, nil
+		return &id, true, nil
 	}
-	return nil, fmt.Errorf("decode selected font: invalid font id %d", id)
+	return nil, true, fmt.Errorf("decode selected font: invalid font id %d", id)
 }
 
 func selectedFontConfigKey(slot ChatFontSlot) (string, bool) {

@@ -105,6 +105,43 @@ func TestChineseSelectionRollsBackWithLegacyMirror(t *testing.T) {
 	assertSelectedFontID(t, "legacy", legacy, baseline.ID)
 }
 
+func TestFontSelectionDistinguishesMissingSlotsFromExplicitDefaults(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	repo := NewFontRepository(db)
+	legacy := createFontFixture(t, repo, "Legacy")
+	if _, err := repo.SetSelectedSlot(ChatFontSlotChinese, &legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetSelectedSlot(ChatFontSlotLatin, &legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE system_config SET value = 'null'::jsonb WHERE key = $1`, selectedChatLatinFontConfigKey); err != nil {
+		t.Fatal(err)
+	}
+
+	selection, err := repo.GetSelectedIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSelectedFontID(t, "chinese", selection.Chinese, legacy.ID)
+	if selection.Latin != nil {
+		t.Fatalf("explicit latin default was restored from legacy: %v", *selection.Latin)
+	}
+	// The code slot key was never written, so legacy compatibility still applies.
+	assertSelectedFontID(t, "missing code", selection.Code, legacy.ID)
+
+	if _, err := db.Exec(`DELETE FROM system_config WHERE key IN ($1, $2, $3)`, selectedChatChineseFontConfigKey, selectedChatLatinFontConfigKey, selectedChatCodeFontConfigKey); err != nil {
+		t.Fatal(err)
+	}
+	selection, err = repo.GetSelectedIDs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSelectedFontID(t, "legacy-only chinese", selection.Chinese, legacy.ID)
+	assertSelectedFontID(t, "legacy-only latin", selection.Latin, legacy.ID)
+	assertSelectedFontID(t, "legacy-only code", selection.Code, legacy.ID)
+}
+
 func TestDisableAndDeleteClearOnlyOwnedSlotsAtomically(t *testing.T) {
 	db := testutil.OpenPostgresTestDB(t)
 	repo := NewFontRepository(db)

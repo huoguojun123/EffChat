@@ -49,6 +49,19 @@ run_migrations() {
         "$ROOT/backend/migrations/build_migration_script.sh" | psql_db "$database"
 }
 
+# 001 executes init.sql and is the immutable production baseline. Fresh-schema
+# tests alone cannot detect an accidental edit because they would simply record
+# the new checksum; pinning the deployed checksum catches that drift before an
+# existing installation reaches the migration runner.
+BASELINE_CHECKSUM="$(
+    "$ROOT/backend/migrations/build_migration_script.sh" |
+        awk '/^SET checksum = / && checksum == "" { checksum=$4; gsub(/'\''/, "", checksum) } END { print checksum }'
+)"
+[ "$BASELINE_CHECKSUM" = "d8ec8e907836f21bbea686e084b1eecc0081e1989c8ff063b3c4f7bb77739f7a" ] || {
+    echo "immutable 001/init baseline checksum changed: $BASELINE_CHECKSUM" >&2
+    exit 1
+}
+
 ln -s "$ROOT/backend/migrations/testdata/997_nested_transaction.sql" \
     "$VALIDATION_DIR/997_nested_transaction.sql"
 if MIGRATIONS_PRODUCTION_DIR="$VALIDATION_DIR" \
@@ -139,6 +152,29 @@ SELECT
         WHERE conrelid = 'tool_configs'::regclass
           AND conname = 'tool_configs_tool_key_check'
     )
+    AND (
+        SELECT count(*) FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN ('governance_events', 'skill_import_record_files')
+    ) = 2
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'governance_events'::regclass
+          AND pg_get_constraintdef(oid) LIKE '%actor_type%system%actor_user_id%'
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'governance_events'
+          AND indexname = 'idx_governance_events_rollback_of'
+          AND indexdef LIKE '%UNIQUE INDEX%'
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'skill_import_records'::regclass
+          AND conname = 'skill_import_records_source_type_check'
+          AND pg_get_constraintdef(oid) LIKE '%builtin%'
+    )
     AND EXISTS (
         SELECT 1
         FROM information_schema.columns
@@ -160,6 +196,20 @@ if psql_db "$ATOMIC_DB" -c \
     "INSERT INTO tool_configs (tool_key, display_name) VALUES ('unregistered_tool', 'Unregistered');" \
     >/dev/null 2>&1; then
     echo "tool catalog constraint accepted an unregistered key" >&2
+    exit 1
+fi
+
+if psql_db "$ATOMIC_DB" -c \
+    "INSERT INTO governance_events (resource_type, resource_key, action, actor_type, reason, after_state) VALUES ('tool', 'memory', 'update', 'admin', 'missing actor', '{}'::jsonb);" \
+    >/dev/null 2>&1; then
+    echo "governance audit accepted an admin event without an actor" >&2
+    exit 1
+fi
+
+if psql_db "$ATOMIC_DB" -c \
+    "INSERT INTO governance_events (resource_type, resource_key, action, actor_type, reason, after_state) VALUES ('tool', 'memory', 'rollback', 'system', 'missing source', '{}'::jsonb);" \
+    >/dev/null 2>&1; then
+    echo "governance audit accepted a rollback without a source event" >&2
     exit 1
 fi
 

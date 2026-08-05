@@ -79,6 +79,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 	channelRepo := repository.NewChannelRepository(db)
 	quotaRepo := repository.NewQuotaRepository(db)
 	toolConfigRepo := repository.NewToolConfigRepository(db)
+	governanceRepo := repository.NewGovernanceRepository(db)
 	usageRepo := usage.NewRepository(db)
 
 	// 从数据库加载模型能力表作为运行时唯一事实来源。
@@ -108,10 +109,12 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 	userAdminService.SetRunHub(runHub)
 	userGroupService := service.NewUserGroupService(userGroupRepo)
 	skillService := service.NewSkillService(skillRepo, userRepo, sessionRepo)
+	skillService.SetGovernanceRepository(governanceRepo)
 	usageService := usage.NewService(usageRepo)
 	stopDiagnosticRetention := startDiagnosticRetention(usageRepo, taskRunRepo)
 	quotaService := service.NewQuotaService(quotaRepo)
 	toolConfigService := service.NewToolConfigService(toolConfigRepo)
+	toolConfigService.SetGovernanceRepository(governanceRepo)
 
 	titleService := service.NewTitleService(sessionRepo, messageRepo, configRepo, channelService, usageService)
 	titleService.SetTaskRunRepository(taskRunRepo)
@@ -260,6 +263,8 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				admin.DELETE("/external-services/:key", DeleteExternalServiceHandler(channelService))
 				admin.GET("/tools", ListToolConfigsHandler(toolConfigService))
 				admin.POST("/tools", SaveToolConfigHandler(toolConfigService))
+				admin.GET("/tools/:key/history", ListToolConfigHistoryHandler(toolConfigService))
+				admin.POST("/tools/events/:id/rollback", RollbackToolConfigHandler(toolConfigService))
 				admin.POST("/files/cleanup-orphans", CleanupOrphanFilesHandler(fileRepo))
 
 				admin.GET("/users", ListUsersHandler(userAdminService))
@@ -296,6 +301,8 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				admin.GET("/skills/:id/files", ListAdminSkillFilesHandler(skillService))
 				admin.GET("/skills/:id/files/content", ReadAdminSkillFileHandler(skillService))
 				admin.GET("/skills/:id/import-records", ListSkillImportRecordsHandler(skillService))
+				admin.GET("/skills/:id/history", ListSkillHistoryHandler(skillService))
+				admin.POST("/skills/events/:id/rollback", RollbackSkillEventHandler(skillService))
 				admin.POST("/skills/:id/update/git/preview", PreviewSkillGitUpdateHandler(skillService))
 				admin.POST("/skills/:id/update/git", ApplySkillGitUpdateHandler(skillService))
 				admin.POST("/skills/:id/update/zip/preview", PreviewSkillZipUpdateHandler(skillService))

@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/huoguojun123/EffChat/internal/repository"
@@ -62,5 +63,15 @@ func TestToolConfigService_RuntimeConfigFailsClosedWhenRepositoryReadFails(t *te
 		if runtime.IsEnabled(key) {
 			t.Fatalf("%s should be disabled when tool configuration cannot be read", key)
 		}
+	}
+}
+
+func TestNormalizeGovernanceReason(t *testing.T) {
+	if got := normalizeGovernanceReason("  ", "fallback"); got != "fallback" {
+		t.Fatalf("empty reason = %q", got)
+	}
+	long := strings.Repeat("治", 501)
+	if got := []rune(normalizeGovernanceReason(long, "fallback")); len(got) != 500 || got[499] != '治' {
+		t.Fatalf("unicode reason length=%d", len(got))
 	}
 }

@@ -132,7 +132,10 @@ func (s *SkillService) persistParsed(userID int64, parsed []skillparser.ParsedSk
 			CreatedBy:       createdBy,
 		}
 		record := s.buildImportRecord(action, skill, item, item.Files, report, &userID)
-		if err := s.persistSkillPackage(skill, item.Files, record); err != nil {
+		if err := s.persistSkillPackage(skill, item.Files, record, repository.SkillGovernanceMutation{
+			Action: "import", ActorType: "import", ActorUserID: userID,
+			Reason: "admin imported Skill package",
+		}); err != nil {
 			return nil, err
 		}
 		resp.Skills = append(resp.Skills, toSkillResponse(skill, true))

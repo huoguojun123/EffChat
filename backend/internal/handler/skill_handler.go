@@ -81,7 +81,7 @@ func UpdateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
-		skill, err := skillService.Update(c.Param("id"), &req)
+		skill, err := skillService.Update(middleware.GetUserID(c), c.Param("id"), &req)
 		if err != nil {
 			writeSkillError(c, "update", err)
 			return
@@ -92,11 +92,47 @@ func UpdateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 
 func DeleteSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := skillService.Delete(c.Param("id")); err != nil {
+		if err := skillService.Delete(middleware.GetUserID(c), c.Param("id")); err != nil {
 			writeSkillError(c, "delete", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "skill deleted"})
+	}
+}
+
+func ListSkillHistoryHandler(skillService *service.SkillService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		events, err := skillService.ListHistory(c.Param("id"))
+		if err != nil {
+			writeSkillError(c, "list_history", err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"events": events})
+	}
+}
+
+func RollbackSkillEventHandler(skillService *service.SkillService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		eventID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || eventID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "governance_event_invalid", "invalid governance event id", false)
+			return
+		}
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		if c.Request.ContentLength > 0 {
+			if err := c.ShouldBindJSON(&req); err != nil {
+				writeInvalidJSON(c)
+				return
+			}
+		}
+		skill, event, err := skillService.Rollback(middleware.GetUserID(c), eventID, req.Reason)
+		if err != nil {
+			writeSkillError(c, "rollback", err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"skill": skill, "event": event})
 	}
 }
 

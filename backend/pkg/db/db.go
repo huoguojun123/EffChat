@@ -11,7 +11,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const RequiredSchemaVersion = "050_tool_registry_governance.sql"
+const RequiredSchemaVersion = "051_governance_audit_log.sql"
 
 func VerifySchemaVersion(ctx context.Context, database *sql.DB) (string, error) {
 	var compatible bool

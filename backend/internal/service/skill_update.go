@@ -174,7 +174,10 @@ func (s *SkillService) persistSkillUpdate(userID int64, current *model.Skill, it
 		CreatedBy:       current.CreatedBy,
 	}
 	record := s.buildImportRecord("update", skill, item, item.Files, report, &userID)
-	if err := s.persistSkillPackage(skill, item.Files, record); err != nil {
+	if err := s.persistSkillPackage(skill, item.Files, record, repository.SkillGovernanceMutation{
+		Action: "import", ActorType: "import", ActorUserID: userID,
+		Reason: "admin updated Skill from imported package",
+	}); err != nil {
 		return nil, err
 	}
 	return &SkillImportResult{Skills: []*SkillResponse{toSkillResponse(skill, true)}, Report: report}, nil

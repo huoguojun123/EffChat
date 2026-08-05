@@ -72,6 +72,7 @@ func TestSkillCRUDSuccessWithManagedPackage(t *testing.T) {
 	t.Cleanup(func() { skillUploadDir = previousRoot })
 
 	service := NewSkillService(repository.NewSkillRepository(db), repository.NewUserRepository(db), repository.NewSessionRepository(db))
+	service.SetGovernanceRepository(repository.NewGovernanceRepository(db))
 	t.Cleanup(func() {
 		service.cleanupMu.Lock()
 		defer service.cleanupMu.Unlock()
@@ -96,14 +97,25 @@ func TestSkillCRUDSuccessWithManagedPackage(t *testing.T) {
 		t.Fatalf("read Skill entry: content=%q err=%v", content, err)
 	}
 	name := "Updated Contract Fixture"
-	updated, err := service.Update(created.ID, &SkillUpdateInput{Name: &name})
+	updated, err := service.Update(userID, created.ID, &SkillUpdateInput{Name: &name})
 	if err != nil || updated.Name != name || len(updated.Files) != 1 {
 		t.Fatalf("update Skill=%+v err=%v", updated, err)
 	}
-	if err := service.Delete(created.ID); err != nil {
+	if err := service.Delete(userID, created.ID); err != nil {
 		t.Fatalf("delete Skill: %v", err)
 	}
 	if _, _, err := service.ReadFileAdmin(created.ID, "SKILL.md"); err == nil {
 		t.Fatal("deleted Skill remained readable")
+	}
+	history, err := service.ListHistory(created.ID)
+	if err != nil || len(history) != 3 || history[0].Action != "delete" {
+		t.Fatalf("governance history=%+v err=%v", history, err)
+	}
+	restored, reverse, err := service.Rollback(userID, history[0].ID, "restore fixture deletion")
+	if err != nil || restored == nil || restored.Name != name || reverse.RollbackOfEventID == nil || *reverse.RollbackOfEventID != history[0].ID {
+		t.Fatalf("rollback restored=%+v reverse=%+v err=%v", restored, reverse, err)
+	}
+	if content, _, err := service.ReadFileAdmin(created.ID, "SKILL.md"); err != nil || content == "" {
+		t.Fatalf("restored Skill content=%q err=%v", content, err)
 	}
 }

@@ -26,6 +26,8 @@ func TestConfigErrorClassificationHidesInternalDetails(t *testing.T) {
 		{name: "model invalid", write: func(c *gin.Context, err error) { writeConfigError(c, "update", err) }, err: fmt.Errorf("%w: default model is unavailable", service.ErrModelInvalid), wantStatus: http.StatusBadRequest, wantCode: "config_invalid"},
 		{name: "config internal", write: func(c *gin.Context, err error) { writeConfigError(c, "update", err) }, err: errors.New("postgres://secret@internal/private/config"), wantStatus: http.StatusInternalServerError, wantCode: "config_update_failed"},
 		{name: "tool invalid", write: func(c *gin.Context, err error) { writeToolConfigError(c, "save", err) }, err: fmt.Errorf("%w: unknown tool", service.ErrToolConfigInvalid), wantStatus: http.StatusBadRequest, wantCode: "tool_config_invalid"},
+		{name: "tool rollback missing", write: func(c *gin.Context, err error) { writeToolConfigError(c, "rollback", err) }, err: fmt.Errorf("%w: event", repository.ErrNotFound), wantStatus: http.StatusNotFound, wantCode: "governance_event_not_found"},
+		{name: "tool rollback conflict", write: func(c *gin.Context, err error) { writeToolConfigError(c, "rollback", err) }, err: fmt.Errorf("%w: stale", repository.ErrGovernanceConflict), wantStatus: http.StatusConflict, wantCode: "governance_rollback_conflict"},
 		{name: "tool internal", write: func(c *gin.Context, err error) { writeToolConfigError(c, "save", err) }, err: errors.New("postgres://secret@internal/private/tool"), wantStatus: http.StatusInternalServerError, wantCode: "tool_config_save_failed"},
 	}
 

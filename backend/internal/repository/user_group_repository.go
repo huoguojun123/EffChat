@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -24,9 +25,9 @@ func NewUserGroupRepository(db *sql.DB) *UserGroupRepository {
 	return &UserGroupRepository{db: db}
 }
 
-func lockUserGroupDefaultInvariant(tx *sql.Tx) error {
-	if _, err := tx.Exec("SELECT pg_advisory_xact_lock($1)", userGroupDefaultInvariantLock); err != nil {
-		return fmt.Errorf("lock default user group invariant: %w", err)
+func lockUserGroupDefaultInvariant(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", userGroupDefaultInvariantLock); err != nil {
+		return fmt.Errorf("lock default user group invariant: %w", userGroupContextError(ctx, err))
 	}
 	return nil
 }
@@ -74,29 +75,37 @@ func (r *UserGroupRepository) List() ([]*model.UserGroup, error) {
 
 // Get 按 ID 获取分级组，不存在返回 (nil, nil)。
 func (r *UserGroupRepository) Get(id int64) (*model.UserGroup, error) {
-	g, err := scanUserGroup(r.db.QueryRow(`SELECT `+userGroupColumns+` FROM user_groups WHERE id = $1`, id))
+	return r.GetContext(context.Background(), id)
+}
+
+func (r *UserGroupRepository) GetContext(ctx context.Context, id int64) (*model.UserGroup, error) {
+	g, err := scanUserGroup(r.db.QueryRowContext(ctx, `SELECT `+userGroupColumns+` FROM user_groups WHERE id = $1`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user group: %w", err)
+		return nil, fmt.Errorf("failed to get user group: %w", userGroupContextError(ctx, err))
 	}
 	return g, nil
 }
 
 // Create 新建分级组。
 func (r *UserGroupRepository) Create(g *model.UserGroup) error {
-	tx, err := r.db.Begin()
+	return r.CreateContext(context.Background(), g)
+}
+
+func (r *UserGroupRepository) CreateContext(ctx context.Context, g *model.UserGroup) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin create user group transaction: %w", err)
+		return fmt.Errorf("begin create user group transaction: %w", userGroupContextError(ctx, err))
 	}
 	defer tx.Rollback()
-	if err := lockUserGroupDefaultInvariant(tx); err != nil {
+	if err := lockUserGroupDefaultInvariant(ctx, tx); err != nil {
 		return err
 	}
 	if g.IsDefault {
-		if _, err := tx.Exec(`UPDATE user_groups SET is_default = false WHERE is_default = true`); err != nil {
-			return fmt.Errorf("clear existing default user group: %w", err)
+		if _, err := tx.ExecContext(ctx, `UPDATE user_groups SET is_default = false WHERE is_default = true`); err != nil {
+			return fmt.Errorf("clear existing default user group: %w", userGroupContextError(ctx, err))
 		}
 	}
 	query := `INSERT INTO user_groups (
@@ -107,7 +116,8 @@ func (r *UserGroupRepository) Create(g *model.UserGroup) error {
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at`
-	err = tx.QueryRow(
+	err = tx.QueryRowContext(
+		ctx,
 		query,
 		g.Name,
 		g.Level,
@@ -127,43 +137,47 @@ func (r *UserGroupRepository) Create(g *model.UserGroup) error {
 		if IsUniqueViolation(err) {
 			return fmt.Errorf("%w: user group name already exists", ErrUserGroupConflict)
 		}
-		return fmt.Errorf("failed to create user group: %w", err)
+		return fmt.Errorf("failed to create user group: %w", userGroupContextError(ctx, err))
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit create user group: %w", err)
+		return fmt.Errorf("commit create user group: %w", userGroupContextError(ctx, err))
 	}
 	return nil
 }
 
 // Update 全量更新分级组字段。
 func (r *UserGroupRepository) Update(g *model.UserGroup) error {
-	tx, err := r.db.Begin()
+	return r.UpdateContext(context.Background(), g)
+}
+
+func (r *UserGroupRepository) UpdateContext(ctx context.Context, g *model.UserGroup) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin update user group transaction: %w", err)
+		return fmt.Errorf("begin update user group transaction: %w", userGroupContextError(ctx, err))
 	}
 	defer tx.Rollback()
-	if err := lockUserGroupDefaultInvariant(tx); err != nil {
+	if err := lockUserGroupDefaultInvariant(ctx, tx); err != nil {
 		return err
 	}
 	var currentDefault bool
-	if err := tx.QueryRow(`SELECT is_default FROM user_groups WHERE id = $1 FOR UPDATE`, g.ID).Scan(&currentDefault); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT is_default FROM user_groups WHERE id = $1 FOR UPDATE`, g.ID).Scan(&currentDefault); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("user group not found: %w", ErrNotFound)
 		}
-		return fmt.Errorf("load user group for update: %w", err)
+		return fmt.Errorf("load user group for update: %w", userGroupContextError(ctx, err))
 	}
 	if currentDefault && !g.IsDefault {
 		var hasReplacement bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_groups WHERE is_default = true AND id <> $1)`, g.ID).Scan(&hasReplacement); err != nil {
-			return fmt.Errorf("check replacement default user group: %w", err)
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_groups WHERE is_default = true AND id <> $1)`, g.ID).Scan(&hasReplacement); err != nil {
+			return fmt.Errorf("check replacement default user group: %w", userGroupContextError(ctx, err))
 		}
 		if !hasReplacement {
 			return ErrDefaultUserGroupRequired
 		}
 	}
 	if g.IsDefault {
-		if _, err := tx.Exec(`UPDATE user_groups SET is_default = false WHERE is_default = true AND id <> $1`, g.ID); err != nil {
-			return fmt.Errorf("clear existing default user group: %w", err)
+		if _, err := tx.ExecContext(ctx, `UPDATE user_groups SET is_default = false WHERE is_default = true AND id <> $1`, g.ID); err != nil {
+			return fmt.Errorf("clear existing default user group: %w", userGroupContextError(ctx, err))
 		}
 	}
 	query := `UPDATE user_groups
@@ -173,7 +187,8 @@ func (r *UserGroupRepository) Update(g *model.UserGroup) error {
 			daily_web_extract_limit = $10,
 			daily_ocr_file_limit = $11, daily_ocr_page_limit = $12
 		WHERE id = $13`
-	result, err := tx.Exec(
+	result, err := tx.ExecContext(
+		ctx,
 		query,
 		g.Name,
 		g.Level,
@@ -193,60 +208,71 @@ func (r *UserGroupRepository) Update(g *model.UserGroup) error {
 		if IsUniqueViolation(err) {
 			return fmt.Errorf("%w: user group name already exists", ErrUserGroupConflict)
 		}
-		return fmt.Errorf("failed to update user group: %w", err)
+		return fmt.Errorf("failed to update user group: %w", userGroupContextError(ctx, err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get updated user group count: %w", err)
+		return fmt.Errorf("failed to get updated user group count: %w", userGroupContextError(ctx, err))
 	}
 	if rows == 0 {
 		return fmt.Errorf("user group not found: %w", ErrNotFound)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit update user group: %w", err)
+		return fmt.Errorf("commit update user group: %w", userGroupContextError(ctx, err))
 	}
 	return nil
 }
 
 // Delete 删除分级组。默认组必须先由另一个组接替，避免用户无声回退到无限额配置。
 func (r *UserGroupRepository) Delete(id int64) error {
-	tx, err := r.db.Begin()
+	return r.DeleteContext(context.Background(), id)
+}
+
+func (r *UserGroupRepository) DeleteContext(ctx context.Context, id int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin delete user group transaction: %w", err)
+		return fmt.Errorf("begin delete user group transaction: %w", userGroupContextError(ctx, err))
 	}
 	defer tx.Rollback()
-	if err := lockUserGroupDefaultInvariant(tx); err != nil {
+	if err := lockUserGroupDefaultInvariant(ctx, tx); err != nil {
 		return err
 	}
 	var currentDefault bool
-	if err := tx.QueryRow(`SELECT is_default FROM user_groups WHERE id = $1 FOR UPDATE`, id).Scan(&currentDefault); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT is_default FROM user_groups WHERE id = $1 FOR UPDATE`, id).Scan(&currentDefault); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("user group not found: %w", ErrNotFound)
 		}
-		return fmt.Errorf("load user group for delete: %w", err)
+		return fmt.Errorf("load user group for delete: %w", userGroupContextError(ctx, err))
 	}
 	if currentDefault {
 		var hasReplacement bool
-		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_groups WHERE is_default = true AND id <> $1)`, id).Scan(&hasReplacement); err != nil {
-			return fmt.Errorf("check replacement default user group: %w", err)
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_groups WHERE is_default = true AND id <> $1)`, id).Scan(&hasReplacement); err != nil {
+			return fmt.Errorf("check replacement default user group: %w", userGroupContextError(ctx, err))
 		}
 		if !hasReplacement {
 			return ErrDefaultUserGroupRequired
 		}
 	}
-	result, err := tx.Exec(`DELETE FROM user_groups WHERE id = $1`, id)
+	result, err := tx.ExecContext(ctx, `DELETE FROM user_groups WHERE id = $1`, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete user group: %w", err)
+		return fmt.Errorf("failed to delete user group: %w", userGroupContextError(ctx, err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get deleted user group count: %w", err)
+		return fmt.Errorf("failed to get deleted user group count: %w", userGroupContextError(ctx, err))
 	}
 	if rows == 0 {
 		return fmt.Errorf("user group not found: %w", ErrNotFound)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete user group: %w", err)
+		return fmt.Errorf("commit delete user group: %w", userGroupContextError(ctx, err))
 	}
 	return nil
+}
+
+func userGroupContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }

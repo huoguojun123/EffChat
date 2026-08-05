@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -106,6 +107,70 @@ func TestUserGroupHandlersClassifyFailures(t *testing.T) {
 		recorder := serveUserGroupHandler(http.MethodGet, "/groups", "/groups", nil, ListUserGroupsHandler(svc))
 		assertUserGroupError(t, recorder, http.StatusInternalServerError, "user_group_list_failed", true, true)
 	})
+}
+
+func TestUpdateUserGroupHandlerHonorsRequestCancellationWhileWaitingForLock(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	repo := repository.NewUserGroupRepository(db)
+	svc := service.NewUserGroupService(repo)
+	name := fmt.Sprintf("context_group_%d", time.Now().UnixNano())
+	group, err := svc.Create(&service.CreateGroupRequest{Name: name})
+	if err != nil {
+		t.Fatalf("seed user group: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM user_groups WHERE id = $1", group.ID) })
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedID int64
+	if err := blocker.QueryRowContext(context.Background(), `SELECT id FROM user_groups WHERE id = $1 FOR UPDATE`, group.ID).Scan(&lockedID); err != nil {
+		t.Fatalf("lock user group row: %v", err)
+	}
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("request_id", "req-user-group-handler")
+		c.Next()
+	})
+	router.PATCH("/groups/:id", UpdateUserGroupHandler(svc))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/groups/%d", group.ID), strings.NewReader(`{"name":"canceled update"}`)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(recorder, request)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("canceled request returned after %v", elapsed)
+	}
+	assertUserGroupError(t, recorder, http.StatusInternalServerError, "user_group_update_failed", true, true)
+
+	stored, err := repo.Get(group.ID)
+	if err != nil {
+		t.Fatalf("reload canceled user group update: %v", err)
+	}
+	if stored.Name != name {
+		t.Fatalf("canceled update committed name %q, want %q", stored.Name, name)
+	}
+
+	if err := blocker.Rollback(); err != nil {
+		t.Fatalf("release user group row lock: %v", err)
+	}
+	recorder = serveUserGroupHandler(
+		http.MethodPatch,
+		"/groups/:id",
+		fmt.Sprintf("/groups/%d", group.ID),
+		[]byte(`{"name":"completed update"}`),
+		UpdateUserGroupHandler(svc),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("normal update after cancellation returned %d: %s", recorder.Code, recorder.Body.String())
+	}
 }
 
 func serveUserGroupHandler(method, route, path string, body []byte, handler gin.HandlerFunc) *httptest.ResponseRecorder {

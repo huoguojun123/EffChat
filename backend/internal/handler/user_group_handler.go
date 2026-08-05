@@ -27,7 +27,7 @@ func CreateUserGroupHandler(groupService *service.UserGroupService) gin.HandlerF
 			writeInvalidJSON(c)
 			return
 		}
-		g, err := groupService.Create(&req)
+		g, err := groupService.CreateContext(c.Request.Context(), &req)
 		if err != nil {
 			writeUserGroupError(c, "create", err)
 			return
@@ -48,7 +48,7 @@ func UpdateUserGroupHandler(groupService *service.UserGroupService) gin.HandlerF
 			writeInvalidJSON(c)
 			return
 		}
-		g, err := groupService.Update(id, &req)
+		g, err := groupService.UpdateContext(c.Request.Context(), id, &req)
 		if err != nil {
 			writeUserGroupError(c, "update", err)
 			return
@@ -64,7 +64,7 @@ func DeleteUserGroupHandler(groupService *service.UserGroupService) gin.HandlerF
 		if !ok {
 			return
 		}
-		if err := groupService.Delete(id); err != nil {
+		if err := groupService.DeleteContext(c.Request.Context(), id); err != nil {
 			writeUserGroupError(c, "delete", err)
 			return
 		}

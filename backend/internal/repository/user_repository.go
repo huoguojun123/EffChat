@@ -24,9 +24,9 @@ type UserRepository struct {
 	db *sql.DB
 }
 
-func lockUserAdminInvariant(tx *sql.Tx) error {
-	if _, err := tx.Exec("SELECT pg_advisory_xact_lock($1)", userAdminInvariantLock); err != nil {
-		return fmt.Errorf("lock user admin invariant: %w", err)
+func lockUserAdminInvariant(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", userAdminInvariantLock); err != nil {
+		return fmt.Errorf("lock user admin invariant: %w", userContextError(ctx, err))
 	}
 	return nil
 }
@@ -66,18 +66,22 @@ func (r *UserRepository) Create(user *model.User) error {
 }
 
 func (r *UserRepository) CreateRegistrationUser(user *model.User) error {
-	tx, err := r.db.Begin()
+	return r.CreateRegistrationUserContext(context.Background(), user)
+}
+
+func (r *UserRepository) CreateRegistrationUserContext(ctx context.Context, user *model.User) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin registration user transaction: %w", err)
+		return fmt.Errorf("begin registration user transaction: %w", userContextError(ctx, err))
 	}
 	defer tx.Rollback()
-	if err := lockUserAdminInvariant(tx); err != nil {
+	if err := lockUserAdminInvariant(ctx, tx); err != nil {
 		return err
 	}
 
 	var count int
-	if err := tx.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
-		return fmt.Errorf("count users: %w", err)
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		return fmt.Errorf("count users: %w", userContextError(ctx, err))
 	}
 	user.Role = "user"
 	user.IsActive = false
@@ -90,14 +94,14 @@ func (r *UserRepository) CreateRegistrationUser(user *model.User) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, auth_version, created_at, updated_at
 	`
-	if err := tx.QueryRow(query, user.Username, user.Email, user.PasswordHash, user.Nickname, user.Role, user.Permissions, user.Preferences, user.IsActive).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, user.Username, user.Email, user.PasswordHash, user.Nickname, user.Role, user.Permissions, user.Preferences, user.IsActive).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		if IsUniqueViolation(err) {
 			return fmt.Errorf("%w: username or email already exists", ErrUserConflict)
 		}
-		return fmt.Errorf("create registration user: %w", err)
+		return fmt.Errorf("create registration user: %w", userContextError(ctx, err))
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit registration user transaction: %w", err)
+		return fmt.Errorf("commit registration user transaction: %w", userContextError(ctx, err))
 	}
 	return nil
 }
@@ -145,6 +149,10 @@ func (r *UserRepository) GetByIDContext(ctx context.Context, id int64) (*model.U
 
 // GetByUsername 根据用户名获取用户
 func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
+	return r.GetByUsernameContext(context.Background(), username)
+}
+
+func (r *UserRepository) GetByUsernameContext(ctx context.Context, username string) (*model.User, error) {
 	user := &model.User{}
 	query := `
 		SELECT id, username, email, password_hash, nickname, avatar_url, role,
@@ -153,7 +161,7 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 		WHERE username = $1
 	`
 
-	err := r.db.QueryRow(query, username).Scan(
+	err := r.db.QueryRowContext(ctx, query, username).Scan(
 		&user.ID,
 		&user.Username,
 		&user.Email,
@@ -174,7 +182,7 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 		return nil, fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user by username: %w", err)
+		return nil, fmt.Errorf("failed to get user by username: %w", userContextError(ctx, err))
 	}
 
 	return user, nil
@@ -237,26 +245,30 @@ func (r *UserRepository) Update(user *model.User) error {
 
 // UpdateAdminFields 更新管理员可维护的用户资料、角色、状态和权限。
 func (r *UserRepository) UpdateAdminFields(user *model.User) error {
-	tx, err := r.db.Begin()
+	return r.UpdateAdminFieldsContext(context.Background(), user)
+}
+
+func (r *UserRepository) UpdateAdminFieldsContext(ctx context.Context, user *model.User) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin admin user update transaction: %w", err)
+		return fmt.Errorf("begin admin user update transaction: %w", userContextError(ctx, err))
 	}
 	defer tx.Rollback()
-	if err := lockUserAdminInvariant(tx); err != nil {
+	if err := lockUserAdminInvariant(ctx, tx); err != nil {
 		return err
 	}
 
 	var currentRole string
 	var currentActive bool
-	if err := tx.QueryRow(`SELECT role, is_active FROM users WHERE id = $1 FOR UPDATE`, user.ID).Scan(&currentRole, &currentActive); err == sql.ErrNoRows {
+	if err := tx.QueryRowContext(ctx, `SELECT role, is_active FROM users WHERE id = $1 FOR UPDATE`, user.ID).Scan(&currentRole, &currentActive); err == sql.ErrNoRows {
 		return fmt.Errorf("user not found: %w", ErrNotFound)
 	} else if err != nil {
-		return fmt.Errorf("load user for admin update: %w", err)
+		return fmt.Errorf("load user for admin update: %w", userContextError(ctx, err))
 	}
 	if currentRole == "admin" && currentActive && (user.Role != "admin" || !user.IsActive) {
 		var activeAdmins int
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = true`).Scan(&activeAdmins); err != nil {
-			return fmt.Errorf("count active admins: %w", err)
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = true`).Scan(&activeAdmins); err != nil {
+			return fmt.Errorf("count active admins: %w", userContextError(ctx, err))
 		}
 		if activeAdmins <= 1 {
 			return ErrLastActiveAdmin
@@ -272,7 +284,8 @@ func (r *UserRepository) UpdateAdminFields(user *model.User) error {
 		    updated_at = NOW()
 		WHERE id = $9
 	`
-	result, err := tx.Exec(
+	result, err := tx.ExecContext(
+		ctx,
 		query,
 		user.Email,
 		user.Nickname,
@@ -288,50 +301,54 @@ func (r *UserRepository) UpdateAdminFields(user *model.User) error {
 		if IsUniqueViolation(err) {
 			return fmt.Errorf("%w: email already exists", ErrUserConflict)
 		}
-		return fmt.Errorf("failed to update user: %w", err)
+		return fmt.Errorf("failed to update user: %w", userContextError(ctx, err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read updated administrator user rows: %w", err)
+		return fmt.Errorf("read updated administrator user rows: %w", userContextError(ctx, err))
 	}
 	if rows == 0 {
 		return fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 	if invalidateRuns {
-		if err := cancelRunningChatRuns(context.Background(), tx, user.ID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
-			return fmt.Errorf("cancel runs after account change: %w", err)
+		if err := cancelRunningChatRuns(ctx, tx, user.ID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
+			return fmt.Errorf("cancel runs after account change: %w", userContextError(ctx, err))
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit admin user update transaction: %w", err)
+		return fmt.Errorf("commit admin user update transaction: %w", userContextError(ctx, err))
 	}
 	return nil
 }
 
 // UpdatePassword 更新用户密码
 func (r *UserRepository) UpdatePassword(userID int64, hashedPassword string) error {
-	tx, err := r.db.Begin()
+	return r.UpdatePasswordContext(context.Background(), userID, hashedPassword)
+}
+
+func (r *UserRepository) UpdatePasswordContext(ctx context.Context, userID int64, hashedPassword string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin password update transaction: %w", err)
+		return fmt.Errorf("begin password update transaction: %w", userContextError(ctx, err))
 	}
 	defer tx.Rollback()
 	query := `UPDATE users SET password_hash = $1, auth_version = auth_version + 1, updated_at = NOW() WHERE id = $2`
-	result, err := tx.Exec(query, hashedPassword, userID)
+	result, err := tx.ExecContext(ctx, query, hashedPassword, userID)
 	if err != nil {
-		return fmt.Errorf("failed to update password: %w", err)
+		return fmt.Errorf("failed to update password: %w", userContextError(ctx, err))
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("read updated password rows: %w", err)
+		return fmt.Errorf("read updated password rows: %w", userContextError(ctx, err))
 	}
 	if rows != 1 {
 		return fmt.Errorf("user not found: %w", ErrNotFound)
 	}
-	if err := cancelRunningChatRuns(context.Background(), tx, userID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
-		return fmt.Errorf("cancel runs after password update: %w", err)
+	if err := cancelRunningChatRuns(ctx, tx, userID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
+		return fmt.Errorf("cancel runs after password update: %w", userContextError(ctx, err))
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit password update transaction: %w", err)
+		return fmt.Errorf("commit password update transaction: %w", userContextError(ctx, err))
 	}
 	return nil
 }
@@ -438,6 +455,10 @@ func (r *UserRepository) CountAll() (int, error) {
 
 // GetByIDIncludeInactive 根据 ID 获取用户（含禁用账户，管理员用）
 func (r *UserRepository) GetByIDIncludeInactive(id int64) (*model.User, error) {
+	return r.GetByIDIncludeInactiveContext(context.Background(), id)
+}
+
+func (r *UserRepository) GetByIDIncludeInactiveContext(ctx context.Context, id int64) (*model.User, error) {
 	user := &model.User{}
 	effectiveGroup := &model.EffectiveUserGroup{}
 	query := `
@@ -447,7 +468,7 @@ func (r *UserRepository) GetByIDIncludeInactive(id int64) (*model.User, error) {
 		FROM users u` + effectiveUserGroupJoinSQL + `
 		WHERE u.id = $1
 	`
-	err := r.db.QueryRow(query, id).Scan(
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&user.ID,
 		&user.Username,
 		&user.Email,
@@ -471,8 +492,15 @@ func (r *UserRepository) GetByIDIncludeInactive(id int64) (*model.User, error) {
 		return nil, fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user: %w", err)
+		return nil, fmt.Errorf("failed to get user: %w", userContextError(ctx, err))
 	}
 	user.EffectiveGroup = effectiveGroup
 	return user, nil
+}
+
+func userContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }

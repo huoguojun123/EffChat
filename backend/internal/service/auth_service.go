@@ -70,6 +70,10 @@ type RegisterResponse struct {
 
 // Register 用户注册
 func (s *AuthService) Register(req *RegisterRequest) (*RegisterResponse, error) {
+	return s.RegisterContext(context.Background(), req)
+}
+
+func (s *AuthService) RegisterContext(ctx context.Context, req *RegisterRequest) (*RegisterResponse, error) {
 	if err := validateUsername(req.Username); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserRegistrationInvalid, err)
 	}
@@ -93,7 +97,7 @@ func (s *AuthService) Register(req *RegisterRequest) (*RegisterResponse, error) 
 	}
 
 	// 检查用户名是否已存在（区分"不存在"和真实 DB 错误）
-	existing, err := s.userRepo.GetByUsername(req.Username)
+	existing, err := s.userRepo.GetByUsernameContext(ctx, req.Username)
 	if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return nil, err
 	}
@@ -123,7 +127,7 @@ func (s *AuthService) Register(req *RegisterRequest) (*RegisterResponse, error) 
 		user.Nickname = &nickname
 	}
 
-	if err := s.userRepo.CreateRegistrationUser(user); err != nil {
+	if err := s.userRepo.CreateRegistrationUserContext(ctx, user); err != nil {
 		return nil, err
 	}
 
@@ -379,11 +383,15 @@ type ChangePasswordRequest struct {
 
 // ChangePassword 修改密码
 func (s *AuthService) ChangePassword(userID int64, req *ChangePasswordRequest) error {
+	return s.ChangePasswordContext(context.Background(), userID, req)
+}
+
+func (s *AuthService) ChangePasswordContext(ctx context.Context, userID int64, req *ChangePasswordRequest) error {
 	if err := validateUserPassword(req.NewPassword); err != nil {
 		return fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
 	}
 
-	user, err := s.userRepo.GetByID(userID)
+	user, err := s.userRepo.GetByIDContext(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -397,7 +405,7 @@ func (s *AuthService) ChangePassword(userID int64, req *ChangePasswordRequest) e
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	if err := s.userRepo.UpdatePassword(userID, string(hashedPassword)); err != nil {
+	if err := s.userRepo.UpdatePasswordContext(ctx, userID, string(hashedPassword)); err != nil {
 		return err
 	}
 	if s.runHub != nil {

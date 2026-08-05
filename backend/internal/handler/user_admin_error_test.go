@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -155,6 +156,112 @@ func TestAdminUserHandlersClassifyFailures(t *testing.T) {
 		recorder := serveAdminUserHandler(http.MethodGet, "/users", "/users", nil, ListUsersHandler(svc))
 		assertAdminUserError(t, recorder, http.StatusInternalServerError, "admin_user_list_failed", true, true)
 	})
+}
+
+func TestUpdateUserHandlerHonorsRequestCancellationWhileWaitingForUserRow(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	repo := repository.NewUserRepository(db)
+	svc := service.NewUserAdminService(repo)
+	username := fmt.Sprintf("context_admin_user_%d", time.Now().UnixNano())
+	user, err := svc.Create(&service.CreateUserRequest{Username: username, Password: "fixture-pass"})
+	if err != nil {
+		t.Fatalf("seed administrator user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM users WHERE id = $1", user.ID) })
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedID int64
+	if err := blocker.QueryRowContext(context.Background(), `SELECT id FROM users WHERE id = $1 FOR UPDATE`, user.ID).Scan(&lockedID); err != nil {
+		t.Fatalf("lock user row: %v", err)
+	}
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("request_id", "req-admin-user-handler")
+		c.Next()
+	})
+	router.PATCH("/users/:id", UpdateUserHandler(svc))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("/users/%d", user.ID), strings.NewReader(`{"nickname":"canceled update"}`)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	started := time.Now()
+	router.ServeHTTP(recorder, request)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("canceled request returned after %v", elapsed)
+	}
+	assertAdminUserError(t, recorder, http.StatusInternalServerError, "admin_user_update_failed", true, true)
+
+	stored, err := repo.GetByIDIncludeInactive(user.ID)
+	if err != nil {
+		t.Fatalf("reload canceled user update: %v", err)
+	}
+	if stored.Nickname != nil {
+		t.Fatalf("canceled update committed nickname %q", *stored.Nickname)
+	}
+
+	if err := blocker.Rollback(); err != nil {
+		t.Fatalf("release user row lock: %v", err)
+	}
+	recorder = serveAdminUserHandler(
+		http.MethodPatch,
+		"/users/:id",
+		fmt.Sprintf("/users/%d", user.ID),
+		[]byte(`{"nickname":"completed update"}`),
+		UpdateUserHandler(svc),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("normal update after cancellation returned %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUserPasswordTransactionHonorsContextCancellation(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	repo := repository.NewUserRepository(db)
+	svc := service.NewUserAdminService(repo)
+	username := fmt.Sprintf("context_password_user_%d", time.Now().UnixNano())
+	user, err := svc.Create(&service.CreateUserRequest{Username: username, Password: "fixture-pass"})
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM users WHERE id = $1", user.ID) })
+
+	var originalHash string
+	if err := db.QueryRow("SELECT password_hash FROM users WHERE id = $1", user.ID).Scan(&originalHash); err != nil {
+		t.Fatalf("read original password hash: %v", err)
+	}
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedID int64
+	if err := blocker.QueryRowContext(context.Background(), `SELECT id FROM users WHERE id = $1 FOR UPDATE`, user.ID).Scan(&lockedID); err != nil {
+		t.Fatalf("lock user row: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = repo.UpdatePasswordContext(ctx, user.ID, "fixture-new-hash")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("password update error = %v, want context deadline", err)
+	}
+	var storedHash string
+	if err := db.QueryRow("SELECT password_hash FROM users WHERE id = $1", user.ID).Scan(&storedHash); err != nil {
+		t.Fatalf("read canceled password hash: %v", err)
+	}
+	if storedHash != originalHash {
+		t.Fatalf("canceled password update committed hash %q", storedHash)
+	}
 }
 
 func serveAdminUserHandler(method, route, path string, body []byte, handler gin.HandlerFunc) *httptest.ResponseRecorder {

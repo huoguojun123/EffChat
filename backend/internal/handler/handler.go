@@ -353,7 +353,7 @@ func RegisterHandler(authService *service.AuthService, limiters ...*AuthRateLimi
 			return
 		}
 
-		resp, err := authService.Register(&req)
+		resp, err := authService.RegisterContext(c.Request.Context(), &req)
 		if err != nil {
 			limiter.RecordFailure(requestClientIP(c), req.Username)
 			writeAuthError(c, "register", err)

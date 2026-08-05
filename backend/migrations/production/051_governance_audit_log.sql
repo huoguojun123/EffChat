@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_governance_events_resource
     ON governance_events(resource_type, resource_key, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_governance_events_actor
     ON governance_events(actor_user_id, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_governance_events_rollback_of
+CREATE UNIQUE INDEX IF NOT EXISTS idx_governance_events_rollback_of
     ON governance_events(rollback_of_event_id) WHERE rollback_of_event_id IS NOT NULL;
 
 COMMENT ON TABLE governance_events IS 'Tool/Skill 管理变更的追加式审计事件；回滚新增反向事件，不改写历史';

@@ -655,7 +655,7 @@ CREATE TABLE IF NOT EXISTS governance_events (
 );
 CREATE INDEX IF NOT EXISTS idx_governance_events_resource ON governance_events(resource_type, resource_key, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_governance_events_actor ON governance_events(actor_user_id, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_governance_events_rollback_of ON governance_events(rollback_of_event_id) WHERE rollback_of_event_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_governance_events_rollback_of ON governance_events(rollback_of_event_id) WHERE rollback_of_event_id IS NOT NULL;
 
 DROP TRIGGER IF EXISTS update_skills_updated_at ON skills;
 CREATE TRIGGER update_skills_updated_at

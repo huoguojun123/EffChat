@@ -395,6 +395,22 @@ export interface ToolConfigInput {
   enabled: boolean
   timeout_seconds: number
   sort_order: number
+  reason?: string
+}
+
+export interface GovernanceEvent {
+  id: number
+  resource_type: "tool" | "skill"
+  resource_key: string
+  action: "create" | "update" | "delete" | "import" | "rollback"
+  actor_type: "admin" | "import" | "system"
+  actor_user_id?: number
+  reason: string
+  before_state?: Record<string, unknown>
+  after_state?: Record<string, unknown>
+  skill_import_record_id?: number
+  rollback_of_event_id?: number
+  created_at: string
 }
 
 export interface CleanupOrphanFilesResponse {
@@ -590,7 +606,15 @@ export const adminApi = {
   },
 
   saveToolConfig(data: ToolConfigInput) {
-    return api.post<ToolConfig>("/admin/tools", data)
+    return api.post<{ tool: ToolConfig; event: GovernanceEvent }>("/admin/tools", data)
+  },
+
+  listToolConfigHistory(key: string) {
+    return api.get<{ events: GovernanceEvent[] }>(`/admin/tools/${encodeURIComponent(key)}/history`)
+  },
+
+  rollbackToolConfigEvent(eventId: number, reason?: string) {
+    return api.post<{ tool: ToolConfig | null; event: GovernanceEvent }>(`/admin/tools/events/${eventId}/rollback`, { reason })
   },
 
   cleanupOrphanFiles(params?: { older_than_hours?: number; limit?: number }) {

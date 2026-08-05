@@ -16,11 +16,16 @@ const defaultToolTimeoutSeconds = 20
 var ErrToolConfigInvalid = errors.New("invalid tool configuration")
 
 type ToolConfigService struct {
-	repo *repository.ToolConfigRepository
+	repo           *repository.ToolConfigRepository
+	governanceRepo *repository.GovernanceRepository
 }
 
 func NewToolConfigService(repo *repository.ToolConfigRepository) *ToolConfigService {
 	return &ToolConfigService{repo: repo}
+}
+
+func (s *ToolConfigService) SetGovernanceRepository(repo *repository.GovernanceRepository) {
+	s.governanceRepo = repo
 }
 
 type ToolConfigInput struct {
@@ -29,6 +34,7 @@ type ToolConfigInput struct {
 	Enabled        *bool  `json:"enabled"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	SortOrder      int    `json:"sort_order"`
+	Reason         string `json:"reason"`
 }
 
 type ToolRuntimeConfig struct {
@@ -70,15 +76,52 @@ func (s *ToolConfigService) ListContext(ctx context.Context) ([]*model.ToolConfi
 	return mergeToolConfigDefaults(rows), nil
 }
 
-func (s *ToolConfigService) Save(input *ToolConfigInput) (*model.ToolConfig, error) {
+func (s *ToolConfigService) Save(actorUserID int64, input *ToolConfigInput) (*model.ToolConfig, *model.GovernanceEvent, error) {
 	item, err := toolConfigFromInput(input)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if s == nil || s.repo == nil {
-		return nil, fmt.Errorf("tool config repository is not available")
+	if actorUserID <= 0 {
+		return nil, nil, fmt.Errorf("%w: admin actor is required", ErrToolConfigInvalid)
 	}
-	return s.repo.Upsert(item)
+	if s == nil || s.repo == nil || s.governanceRepo == nil {
+		return nil, nil, fmt.Errorf("tool governance repositories are not available")
+	}
+	reason := normalizeGovernanceReason(input.Reason, "admin tool update")
+	return s.repo.SaveGoverned(context.Background(), item, actorUserID, reason)
+}
+
+func (s *ToolConfigService) ListHistory(key string) ([]*model.GovernanceEvent, error) {
+	key = normalizeToolKey(key)
+	if !knownToolKey(key) {
+		return nil, fmt.Errorf("%w: unknown tool key: %s", ErrToolConfigInvalid, key)
+	}
+	if s == nil || s.governanceRepo == nil {
+		return nil, fmt.Errorf("tool governance repository is not available")
+	}
+	return s.governanceRepo.List(context.Background(), "tool", key, 50)
+}
+
+func (s *ToolConfigService) Rollback(actorUserID, eventID int64, reason string) (*model.ToolConfig, *model.GovernanceEvent, error) {
+	if actorUserID <= 0 || eventID <= 0 {
+		return nil, nil, fmt.Errorf("%w: actor and event id are required", ErrToolConfigInvalid)
+	}
+	if s == nil || s.repo == nil || s.governanceRepo == nil {
+		return nil, nil, fmt.Errorf("tool governance repositories are not available")
+	}
+	return s.repo.RollbackGoverned(context.Background(), eventID, actorUserID, normalizeGovernanceReason(reason, "admin tool rollback"))
+}
+
+func normalizeGovernanceReason(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	runes := []rune(value)
+	if len(runes) > 500 {
+		return string(runes[:500])
+	}
+	return value
 }
 
 func (s *ToolConfigService) RuntimeConfigSet() ToolRuntimeConfigSet {

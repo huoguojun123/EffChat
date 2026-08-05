@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -129,5 +130,69 @@ func TestSkillImportRecordsRetainPackageVersions(t *testing.T) {
 	}
 	if !want["/fixture/v1/SKILL.md"] || !want["/fixture/v2/SKILL.md"] || second.ID == first.ID {
 		t.Fatalf("retained paths=%v records=%d/%d", want, first.ID, second.ID)
+	}
+}
+
+func TestToolConfigGovernedSaveAndRollback(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "tool_rollback")
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+	if _, err := db.Exec(`
+		INSERT INTO tool_configs (tool_key, display_name, enabled, timeout_seconds, sort_order)
+		VALUES ('memory', 'Fixture memory', true, 20, 10)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewToolConfigRepository(db)
+	saved, event, err := repo.SaveGoverned(context.Background(), &model.ToolConfig{
+		Key: "memory", DisplayName: "Fixture memory", Enabled: false, TimeoutSeconds: 25, SortOrder: 11,
+	}, userID, "disable fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Enabled || event.Action != "update" || event.ID == 0 {
+		t.Fatalf("saved=%+v event=%+v", saved, event)
+	}
+	restored, reverse, err := repo.RollbackGoverned(context.Background(), event.ID, userID, "restore fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored == nil || !restored.Enabled || restored.TimeoutSeconds != 20 || restored.SortOrder != 10 {
+		t.Fatalf("restored=%+v", restored)
+	}
+	if reverse.Action != "rollback" || reverse.RollbackOfEventID == nil || *reverse.RollbackOfEventID != event.ID {
+		t.Fatalf("reverse=%+v", reverse)
+	}
+	if _, _, err := repo.RollbackGoverned(context.Background(), event.ID, userID, "duplicate"); !errors.Is(err, ErrGovernanceConflict) {
+		t.Fatalf("duplicate rollback error=%v", err)
+	}
+}
+
+func TestToolConfigRollbackRejectsLaterState(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "tool_cas")
+	defer db.Exec("DELETE FROM users WHERE id = $1", userID)
+	if _, err := db.Exec(`
+		INSERT INTO tool_configs (tool_key, display_name, enabled, timeout_seconds, sort_order)
+		VALUES ('web_search', 'Fixture search', true, 20, 80)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewToolConfigRepository(db)
+	_, first, err := repo.SaveGoverned(context.Background(), &model.ToolConfig{
+		Key: "web_search", DisplayName: "Fixture search", Enabled: false, TimeoutSeconds: 20, SortOrder: 80,
+	}, userID, "first change")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.SaveGoverned(context.Background(), &model.ToolConfig{
+		Key: "web_search", DisplayName: "Fixture search", Enabled: true, TimeoutSeconds: 30, SortOrder: 80,
+	}, userID, "later change"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RollbackGoverned(context.Background(), first.ID, userID, "stale rollback"); !errors.Is(err, ErrGovernanceConflict) {
+		t.Fatalf("stale rollback error=%v", err)
 	}
 }

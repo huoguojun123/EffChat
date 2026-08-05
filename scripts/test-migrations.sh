@@ -150,9 +150,11 @@ SELECT
           AND pg_get_constraintdef(oid) LIKE '%actor_type%system%actor_user_id%'
     )
     AND EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'governance_events'::regclass
-          AND pg_get_constraintdef(oid) LIKE '%rollback_of_event_id%'
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'governance_events'
+          AND indexname = 'idx_governance_events_rollback_of'
+          AND indexdef LIKE '%UNIQUE INDEX%'
     )
     AND EXISTS (
         SELECT 1

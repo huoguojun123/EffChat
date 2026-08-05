@@ -3,10 +3,13 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 )
+
+var ErrGovernanceConflict = errors.New("governance state conflict")
 
 type GovernanceRepository struct {
 	db *sql.DB

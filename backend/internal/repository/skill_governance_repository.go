@@ -17,6 +17,16 @@ type SkillGovernanceMutation struct {
 	Reason      string
 }
 
+// GovernedSkillPackage is one member of an atomic package import. The service
+// prepares immutable package files before this repository transaction starts;
+// this boundary owns only the active database state and its audit history.
+type GovernedSkillPackage struct {
+	Skill    *model.Skill
+	Files    []model.SkillFile
+	Record   *model.SkillImportRecord
+	Mutation SkillGovernanceMutation
+}
+
 type skillGovernanceState struct {
 	ID              string  `json:"id"`
 	Name            string  `json:"name"`
@@ -59,6 +69,52 @@ func (r *SkillRepository) UpsertPackageGoverned(ctx context.Context, skill *mode
 	}
 	defer tx.Rollback()
 
+	event, err := upsertPackageGovernedTx(ctx, tx, skill, files, record, mutation)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit governed Skill package save: %w", err)
+	}
+	skill.Files = files
+	return event, nil
+}
+
+// UpsertPackagesGoverned makes one administrator import visible atomically.
+// Every active package, immutable import record, and governance event commits
+// in the same transaction; callers may safely retry after any returned error.
+func (r *SkillRepository) UpsertPackagesGoverned(ctx context.Context, packages []GovernedSkillPackage) error {
+	if len(packages) == 0 {
+		return nil
+	}
+	for _, item := range packages {
+		if item.Skill == nil || item.Record == nil {
+			return fmt.Errorf("governed Skill package batch requires skill and import record")
+		}
+		if err := validateSkillGovernanceMutation(item.Mutation); err != nil {
+			return err
+		}
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin governed Skill package batch: %w", err)
+	}
+	defer tx.Rollback()
+	for _, item := range packages {
+		if _, err := upsertPackageGovernedTx(ctx, tx, item.Skill, item.Files, item.Record, item.Mutation); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit governed Skill package batch: %w", err)
+	}
+	for _, item := range packages {
+		item.Skill.Files = item.Files
+	}
+	return nil
+}
+
+func upsertPackageGovernedTx(ctx context.Context, tx *sql.Tx, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord, mutation SkillGovernanceMutation) (*model.GovernanceEvent, error) {
 	before, err := skillGovernanceStateForUpdateTx(ctx, tx, skill.ID, mutation.ActorUserID, true)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
@@ -78,10 +134,6 @@ func (r *SkillRepository) UpsertPackageGoverned(ctx context.Context, skill *mode
 	if err := InsertGovernanceEventTx(ctx, tx, event); err != nil {
 		return nil, fmt.Errorf("audit governed Skill package save: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit governed Skill package save: %w", err)
-	}
-	skill.Files = files
 	return event, nil
 }
 

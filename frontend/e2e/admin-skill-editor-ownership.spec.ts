@@ -27,7 +27,7 @@ async function fulfillJSON(route: Route, json: unknown, delay = 0) {
   await route.fulfill({ json })
 }
 
-async function installRoutes(page: Page) {
+async function installRoutes(page: Page, batchRequests?: unknown[]) {
   await page.addInitScript(() => localStorage.setItem("token", "fixture-token"))
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request()
@@ -49,12 +49,48 @@ async function installRoutes(page: Page) {
       return fulfillJSON(route, { ...skillB, ...payload, name: "Skill B (saved)" }, 300)
     }
     if (path === "/api/v1/admin/skills/import/git/preview") {
+      if (batchRequests) {
+        return fulfillJSON(route, {
+          branches: ["main"],
+          selected_ref: "main",
+          skills: [
+            {
+              id: "upstream-a",
+              name: "Skill A Updated",
+              description: "updated",
+              source_path: "upstream/a/SKILL.md",
+              checksum: "updated-a",
+              files: [{ path: "SKILL.md", kind: "entry", size: 30, checksum: "updated-a-file" }],
+              existing_skill: skillA,
+              match_type: "name",
+              default_action: "update",
+            },
+            {
+              id: "skill-new",
+              name: "Skill New",
+              description: "new",
+              source_path: "upstream/new/SKILL.md",
+              checksum: "new",
+              files: [{ path: "SKILL.md", kind: "entry", size: 24, checksum: "new-file" }],
+              default_action: "create",
+            },
+          ],
+          report: { imported: 2 },
+        })
+      }
       return fulfillJSON(route, {
         branches: ["main"],
         selected_ref: "main",
         skills: [{ id: "git-candidate", name: "Git Candidate", description: "", source_path: "git", checksum: "git" }],
         report: { imported: 1 },
       }, 350)
+    }
+    if (path === "/api/v1/admin/skills/import/git" && request.method() === "POST") {
+      batchRequests?.push(request.postDataJSON())
+      return fulfillJSON(route, {
+        skills: [{ ...skillA, name: "Skill A Updated" }, skill("skill-new", "Skill New")],
+        report: { imported: 2 },
+      })
     }
     if (path === "/api/v1/admin/skills/import/zip/preview") {
       return fulfillJSON(route, {
@@ -126,4 +162,26 @@ test("a committed save still refreshes the catalog after the editor changes", as
   await page.getByText("Skill A", { exact: true }).click()
   await expect(page.getByText("Skill B (saved)", { exact: true })).toBeVisible()
   await expect(page.getByLabel("名称")).toHaveValue("Skill A")
+})
+
+test("mixed duplicate updates and creates use one atomic import request", async ({ page }) => {
+  const requests: unknown[] = []
+  await installRoutes(page, requests)
+  await page.goto("/admin/skills")
+  await page.waitForLoadState("networkidle")
+
+  await page.getByPlaceholder("Git 仓库地址").fill("https://example.invalid/skills.git")
+  await page.getByRole("button", { name: "扫描 Git" }).click()
+  await expect(page.getByText("选择 Git Skills", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "导入选中项" }).click()
+  await expect(page.getByText("确认重复导入", { exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "确认覆盖" }).click()
+
+  await expect.poll(() => requests.length).toBe(1)
+  expect(requests[0]).toEqual(expect.objectContaining({
+    selected_paths: ["upstream/a/SKILL.md", "upstream/new/SKILL.md"],
+    target_skill_ids: { "upstream/a/SKILL.md": "skill-a" },
+  }))
+  await expect(page.getByText("Skill A Updated", { exact: true })).toBeVisible()
+  await expect(page.getByText("Skill New", { exact: true })).toBeVisible()
 })

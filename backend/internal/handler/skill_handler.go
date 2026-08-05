@@ -319,7 +319,11 @@ func ImportSkillsFromZipHandler(skillService *service.SkillService) gin.HandlerF
 		if !ok {
 			return
 		}
-		result, err := skillService.ImportZip(userID, data, selectedPaths, selectedFiles)
+		targetSkillIDs, ok := targetSkillIDsFromForm(c)
+		if !ok {
+			return
+		}
+		result, err := skillService.ImportZip(userID, data, selectedPaths, selectedFiles, targetSkillIDs)
 		if err != nil {
 			writeSkillError(c, "import", err)
 			return
@@ -399,6 +403,19 @@ func selectedFilesFromForm(c *gin.Context) (map[string][]string, bool) {
 		return nil, false
 	}
 	return selected, true
+}
+
+func targetSkillIDsFromForm(c *gin.Context) (map[string]string, bool) {
+	raw, exists := c.GetPostForm("target_skill_ids")
+	if !exists {
+		return nil, true
+	}
+	var targets map[string]string
+	if err := json.Unmarshal([]byte(raw), &targets); err != nil {
+		writePublicError(c, http.StatusBadRequest, "skill_selection_invalid", "invalid target_skill_ids", false)
+		return nil, false
+	}
+	return targets, true
 }
 
 func selectedFileListFromForm(c *gin.Context) ([]string, bool) {

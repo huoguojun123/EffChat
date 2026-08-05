@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { adminApi } from "@/api/admin"
 import type { Model } from "@/types"
 import { catalogModelPatch, catalogSelectionKey } from "./AdminModelsPanel.helpers"
 import type { ModelDraft } from "./AdminModelsPanel.types"
+import type { EditorOwnership } from "./editorOwnership"
 
 interface UseAdminModelCatalogOptions {
   currentDraft: ModelDraft
@@ -11,6 +12,7 @@ interface UseAdminModelCatalogOptions {
   models: Model[]
   setError: (error: string) => void
   updateCurrentDraft: (patch: Partial<ModelDraft>) => void
+  editorOwner: EditorOwnership
 }
 
 export function useAdminModelCatalog({
@@ -20,6 +22,7 @@ export function useAdminModelCatalog({
   models,
   setError,
   updateCurrentDraft,
+  editorOwner,
 }: UseAdminModelCatalogOptions) {
   const [fetching, setFetching] = useState<"" | "gateway">("")
   const [loadingMeta, setLoadingMeta] = useState(false)
@@ -29,6 +32,25 @@ export function useAdminModelCatalog({
   const [catalogQuery, setCatalogQuery] = useState("")
   const [selectedCatalogKey, setSelectedCatalogKey] = useState("")
   const [availableModels, setAvailableModels] = useState<Model[]>([])
+  const requestSequence = useRef({ available: 0, meta: 0, catalog: 0 })
+
+  function nextRequest(kind: keyof typeof requestSequence.current) {
+    requestSequence.current[kind] += 1
+    return requestSequence.current[kind]
+  }
+
+  function isCurrentRequest(kind: keyof typeof requestSequence.current, request: number) {
+    return requestSequence.current[kind] === request
+  }
+
+  function invalidateCatalogRequests() {
+    requestSequence.current.available += 1
+    requestSequence.current.meta += 1
+    requestSequence.current.catalog += 1
+    setFetching("")
+    setLoadingMeta(false)
+    setCatalogLoading(false)
+  }
 
   const importableItems = useMemo(() => {
     return availableModels.filter((model) => {
@@ -52,6 +74,8 @@ export function useAdminModelCatalog({
   }, [catalogModels, selectedCatalogKey])
 
   function clearCatalogMatcher() {
+    requestSequence.current.catalog += 1
+    setCatalogLoading(false)
     setCatalogOpen(false)
     setCatalogQuery("")
     setSelectedCatalogKey("")
@@ -62,16 +86,18 @@ export function useAdminModelCatalog({
       setError("请先选择一个已配置渠道，再拉取模型")
       return
     }
+    const request = nextRequest("available")
+    const provider = selectedProvider
     setFetching("gateway")
     setError("")
     setAvailableModels([])
     try {
-      const res = await adminApi.listAvailableModels(selectedProvider)
-      setAvailableModels(res.models || [])
+      const res = await adminApi.listAvailableModels(provider)
+      if (isCurrentRequest("available", request)) setAvailableModels(res.models || [])
     } catch (err) {
-      setError(err instanceof Error ? err.message : "模型拉取失败")
+      if (isCurrentRequest("available", request)) setError(err instanceof Error ? err.message : "模型拉取失败")
     } finally {
-      setFetching("")
+      if (isCurrentRequest("available", request)) setFetching("")
     }
   }
 
@@ -81,15 +107,21 @@ export function useAdminModelCatalog({
       setError("请先填写模型 ID 再从 models.dev 加载")
       return
     }
+    const request = nextRequest("meta")
+    const operation = editorOwner.beginOperation()
     setLoadingMeta(true)
     setError("")
     try {
       const { model } = await adminApi.getCatalogModel(id)
-      updateCurrentDraft(catalogModelPatch(model))
+      if (isCurrentRequest("meta", request) && editorOwner.owns(operation)) {
+        updateCurrentDraft(catalogModelPatch(model))
+      }
     } catch (err) {
-      setError(err instanceof Error ? `models.dev 目录未找到或加载失败：${err.message}` : "models.dev 目录未找到或加载失败")
+      if (isCurrentRequest("meta", request) && editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? `models.dev 目录未找到或加载失败：${err.message}` : "models.dev 目录未找到或加载失败")
+      }
     } finally {
-      setLoadingMeta(false)
+      if (isCurrentRequest("meta", request)) setLoadingMeta(false)
     }
   }
 
@@ -97,30 +129,43 @@ export function useAdminModelCatalog({
     const nextOpen = !catalogOpen
     setCatalogOpen(nextOpen)
     setError("")
-    if (!nextOpen || catalogModels.length > 0 || catalogLoading) return
+    if (!nextOpen) {
+      requestSequence.current.catalog += 1
+      setCatalogLoading(false)
+      return
+    }
+    if (catalogModels.length > 0 || catalogLoading) return
+    const request = nextRequest("catalog")
     setCatalogLoading(true)
     try {
       const res = await adminApi.listCatalogModels()
-      setCatalogModels(res.models || [])
+      if (isCurrentRequest("catalog", request)) setCatalogModels(res.models || [])
     } catch (err) {
-      setError(err instanceof Error ? `models.dev 目录加载失败：${err.message}` : "models.dev 目录加载失败")
+      if (isCurrentRequest("catalog", request)) setError(err instanceof Error ? `models.dev 目录加载失败：${err.message}` : "models.dev 目录加载失败")
     } finally {
-      setCatalogLoading(false)
+      if (isCurrentRequest("catalog", request)) setCatalogLoading(false)
     }
   }
 
   async function applySelectedCatalogModel() {
     if (!selectedCatalogModel) return
+    const request = nextRequest("meta")
+    const operation = editorOwner.beginOperation()
+    const selected = selectedCatalogModel
     setLoadingMeta(true)
     setError("")
     try {
-      const { model } = await adminApi.getCatalogModel(selectedCatalogModel.id, selectedCatalogModel.provider)
-      updateCurrentDraft(catalogModelPatch(model))
-      clearCatalogMatcher()
+      const { model } = await adminApi.getCatalogModel(selected.id, selected.provider)
+      if (isCurrentRequest("meta", request) && editorOwner.owns(operation)) {
+        updateCurrentDraft(catalogModelPatch(model))
+        clearCatalogMatcher()
+      }
     } catch (err) {
-      setError(err instanceof Error ? `models.dev 匹配项加载失败：${err.message}` : "models.dev 匹配项加载失败")
+      if (isCurrentRequest("meta", request) && editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? `models.dev 匹配项加载失败：${err.message}` : "models.dev 匹配项加载失败")
+      }
     } finally {
-      setLoadingMeta(false)
+      if (isCurrentRequest("meta", request)) setLoadingMeta(false)
     }
   }
 
@@ -143,5 +188,6 @@ export function useAdminModelCatalog({
     loadCatalogMeta,
     openCatalogMatcher,
     applySelectedCatalogModel,
+    invalidateCatalogRequests,
   }
 }

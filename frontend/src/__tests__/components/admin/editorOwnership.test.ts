@@ -35,6 +35,20 @@ describe("EditorOwnership", () => {
     owner.acknowledge(save.revision)
     expect(owner.isDirty()).toBe(false)
   })
+
+  it("keeps newer draft revisions when a created entity receives its id", () => {
+    const owner = new EditorOwnership()
+    owner.activate("new:provider-a")
+    owner.change()
+    const create = owner.beginOperation()
+    owner.change()
+
+    owner.rekey("model-a")
+    owner.acknowledge(create.revision)
+
+    expect(owner.currentEntityKey()).toBe("model-a")
+    expect(owner.isDirty()).toBe(true)
+  })
 })
 
 describe("BusyOwnership", () => {

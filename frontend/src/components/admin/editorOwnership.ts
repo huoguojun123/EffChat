@@ -20,6 +20,12 @@ export class EditorOwnership {
     this.baselineRevision = 0
   }
 
+  // Rekey keeps the same logical draft and revision history when a successful
+  // create assigns its persisted identity. It must not be used for navigation.
+  rekey(entityKey: string) {
+    this.entityKey = entityKey
+  }
+
   invalidate() {
     this.activate("")
   }

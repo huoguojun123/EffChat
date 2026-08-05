@@ -21,6 +21,7 @@ import {
 } from "./AdminModelsPanel.helpers"
 import type { AdminModelsPanelProps, ModelDraft } from "./AdminModelsPanel.types"
 import { useChatStore } from "@/stores/chat"
+import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 
 const unconfiguredProviderKey = "__unconfigured__"
 const newChannelKey = "__new_channel__"
@@ -48,6 +49,9 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   const [testingModel, setTestingModel] = useState(false)
   const [testResult, setTestResult] = useState<ModelTestResponse | null>(null)
   const testRequestSeq = useRef(0)
+  const [editorOwner] = useState(() => new EditorOwnership())
+  const [importOwner] = useState(() => new EditorOwnership())
+  const [busyOwner] = useState(() => new BusyOwnership())
   const configuredChannelKeys = useMemo(() => new Set(channels.map((channel) => channel.key)), [channels])
   const channelLabels = useMemo(() => {
     const labels: Record<string, string> = { [unconfiguredProviderKey]: "未配置渠道" }
@@ -118,6 +122,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     loadCatalogMeta,
     openCatalogMatcher,
     applySelectedCatalogModel,
+    invalidateCatalogRequests,
   } = useAdminModelCatalog({
     currentDraft,
     selectedProvider,
@@ -125,7 +130,29 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     models,
     setError,
     updateCurrentDraft,
+    editorOwner,
   })
+
+  function beginBusy(label: string, scope: string) {
+    const operationId = busyOwner.begin(label, scope)
+    setSaving(label)
+    return operationId
+  }
+
+  function finishBusy(operationId: number) {
+    const remainingLabel = busyOwner.release(operationId)
+    if (remainingLabel !== null) setSaving(remainingLabel)
+  }
+
+  function invalidateBusy(scope: string) {
+    setSaving(busyOwner.invalidate(scope))
+  }
+
+  function canLeaveModelEditor(nextEntityKey: string) {
+    if (!editorOwner.isDirty()) return true
+    if (editorOwner.currentEntityKey() === nextEntityKey) return false
+    return window.confirm("放弃当前模型的未保存修改？")
+  }
 
   function invalidateModelTest() {
     testRequestSeq.current += 1
@@ -143,6 +170,10 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
       setError("请先添加一个模型渠道，再添加模型")
       return
     }
+    if (!canLeaveModelEditor(`new:${targetProvider}`)) return
+    invalidateBusy("model-editor")
+    invalidateCatalogRequests()
+    editorOwner.activate(`new:${targetProvider}`)
     setCreating(true)
     setEditingId("")
     setDraft(makeEmptyModel(targetProvider))
@@ -152,6 +183,11 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function startEdit(model: Model) {
+    if (editorOwner.currentEntityKey() === model.id && editingId === model.id && !creating) return
+    if (!canLeaveModelEditor(model.id)) return
+    invalidateBusy("model-editor")
+    invalidateCatalogRequests()
+    editorOwner.activate(model.id)
     setCreating(false)
     setEditingId(model.id)
     setDraft(toModelDraft(model))
@@ -161,6 +197,10 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function changeProvider(provider: string) {
+    if (modelManagementOpen && !canLeaveModelEditor(`provider:${provider}`)) return
+    invalidateBusy("model-editor")
+    invalidateCatalogRequests()
+    editorOwner.invalidate()
     setActiveProvider(provider)
     setMobileWorkspaceOpen(true)
     setModelManagementOpen(false)
@@ -179,6 +219,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
         setMobileDetailOpen(false)
         return
       }
+      editorOwner.activate(`new:${provider}`)
       setDraft((prev) => ({
         ...prev,
         provider,
@@ -188,6 +229,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     }
     const nextItems = models.filter((model) => model.provider === provider)
     if (nextItems[0]) {
+      editorOwner.activate(nextItems[0].id)
       setEditingId(nextItems[0].id)
       setDraft(toModelDraft(nextItems[0]))
     }
@@ -200,55 +242,85 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
       invalidateModelTest()
     }
     if (!creating && currentModel && editingId !== currentModel.id) {
+      editorOwner.activate(currentModel.id)
+      editorOwner.change()
       setEditingId(currentModel.id)
       setDraft({ ...toModelDraft(currentModel), ...patch })
       return
     }
+    if (!editorOwner.currentEntityKey()) {
+      editorOwner.activate(creating ? `new:${currentDraft.provider}` : currentModel?.id || editingId)
+    }
+    editorOwner.change()
     setDraft((prev) => ({ ...prev, ...patch }))
   }
 
   async function toggleEnabled(model: Model) {
-    startEdit(model)
     await savePatch(model.id, { enabled: !model.enabled })
   }
 
   async function savePatch(id: string, patch: UpdateModelInput) {
-    setSaving(`model-${id}`)
+    const busy = beginBusy(`model-${id}`, `model-patch:${id}`)
     setError("")
     try {
       const updated = await adminApi.updateModel(id, patch)
       setModels((prev) => sortModels(prev.map((item) => (item.id === id ? updated : item))))
       void loadSessionCreateReadiness(true)
-      if (currentModel?.id === id) setDraft(toModelDraft(updated))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "模型保存失败")
-    } finally {
-      setSaving("")
-    }
-  }
-
-  async function saveDraft() {
-    setSaving(creating ? "create" : `model-${editingId}`)
-    setError("")
-    try {
-      if (creating) {
-        const created = await adminApi.createModel(draft)
-        setModels((prev) => sortModels([...prev, created]))
-        setCreating(false)
-        setEditingId(created.id)
-        setActiveProvider(created.provider)
-        setDraft(toModelDraft(created))
-        void loadSessionCreateReadiness(true)
-      } else if (currentModel) {
-        const updated = await adminApi.updateModel(currentModel.id, toModelPatch(currentDraft))
-        setModels((prev) => sortModels(prev.map((item) => (item.id === currentModel.id ? updated : item))))
+      if (editorOwner.currentEntityKey() === id && !editorOwner.isDirty()) {
         setDraft(toModelDraft(updated))
-        void loadSessionCreateReadiness(true)
+        editorOwner.activate(id)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "模型保存失败")
     } finally {
-      setSaving("")
+      finishBusy(busy)
+    }
+  }
+
+  async function saveDraft() {
+    const currentCreating = creating
+    const current = currentDraft
+    const currentID = currentModel?.id || editingId
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(currentCreating ? "create" : `model-${currentID}`, "model-editor")
+    setError("")
+    try {
+      if (currentCreating) {
+        const created = await adminApi.createModel(current)
+        setModels((prev) => sortModels([...prev, created]))
+        void loadSessionCreateReadiness(true)
+        if (editorOwner.owns(operation, false)) {
+          const unchanged = editorOwner.owns(operation)
+          setCreating(false)
+          setEditingId(created.id)
+          setActiveProvider(created.provider)
+          editorOwner.rekey(created.id)
+          editorOwner.acknowledge(operation.revision)
+          if (unchanged) {
+            setDraft(toModelDraft(created))
+          } else {
+            setError("已保存较早版本，当前修改仍未保存")
+          }
+        }
+      } else if (currentID) {
+        const updated = await adminApi.updateModel(currentID, toModelPatch(current))
+        setModels((prev) => sortModels(prev.map((item) => (item.id === currentID ? updated : item))))
+        void loadSessionCreateReadiness(true)
+        if (editorOwner.owns(operation, false)) {
+          editorOwner.acknowledge(operation.revision)
+          if (editorOwner.owns(operation)) {
+            setDraft(toModelDraft(updated))
+          } else {
+            setError("已保存较早版本，当前修改仍未保存")
+          }
+        }
+      }
+    } catch (err) {
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "模型保存失败")
+      }
+    } finally {
+      finishBusy(busy)
     }
   }
 
@@ -314,6 +386,10 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function prepareImportModel(model: Model) {
+    if (!canLeaveModelEditor(`new:${model.provider}`)) return
+    invalidateBusy("model-editor")
+    invalidateCatalogRequests()
+    editorOwner.activate(`new:${model.provider}`)
     setCreating(true)
     setEditingId("")
     setDraft({ ...toModelDraft(model), enabled: true, sort_order: nextSortOrder(models) })
@@ -321,7 +397,10 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   async function importModel(model: Model) {
-    setSaving(`import-${model.id}`)
+    importOwner.activate(`import:${model.provider}:${model.id}`)
+    const operation = importOwner.beginOperation()
+    const editorOperation = editorOwner.beginOperation()
+    const busy = beginBusy(`import-${model.id}`, "model-import")
     setError("")
     try {
       const created = await adminApi.createModel({
@@ -330,35 +409,53 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
         sort_order: nextSortOrder(models),
       })
       setModels((prev) => sortModels([...prev, created]))
-      setEditingId(created.id)
-      setDraft(toModelDraft(created))
-      setCreating(false)
-      setMobileDetailOpen(true)
       void loadSessionCreateReadiness(true)
+      if (importOwner.owns(operation) && editorOwner.owns(editorOperation) && !editorOwner.isDirty()) {
+        editorOwner.activate(created.id)
+        setEditingId(created.id)
+        setDraft(toModelDraft(created))
+        setCreating(false)
+        setMobileDetailOpen(true)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "模型导入失败")
+      if (importOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "模型导入失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function deleteModel(model: Model) {
-    setSaving(`delete-${model.id}`)
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(`delete-${model.id}`, "model-editor")
     setError("")
     try {
       await adminApi.deleteModel(model.id)
       setModels((prev) => prev.filter((item) => item.id !== model.id))
       void loadSessionCreateReadiness(true)
-      if (currentModel?.id === model.id) {
+      if (editorOwner.owns(operation, false) && editorOwner.currentEntityKey() === model.id) {
+        editorOwner.invalidate()
         setEditingId("")
         setCreating(false)
         setMobileDetailOpen(false)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "模型删除失败")
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "模型删除失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
+  }
+
+  function leaveModelManager() {
+    if (!canLeaveModelEditor("channel-overview")) return
+    invalidateBusy("model-editor")
+    invalidateCatalogRequests()
+    editorOwner.invalidate()
+    setModelManagementOpen(false)
+    setMobileDetailOpen(false)
   }
 
   return (
@@ -409,7 +506,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
         ) : (
           <>
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-3 py-2">
-              <Button variant="ghost" size="sm" onClick={() => setModelManagementOpen(false)}>
+              <Button variant="ghost" size="sm" onClick={leaveModelManager}>
                 <ArrowLeft className="h-3.5 w-3.5" />
                 返回渠道
               </Button>

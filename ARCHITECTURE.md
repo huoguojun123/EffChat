@@ -181,6 +181,8 @@ Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导
 
 Skill 管理编辑器为实体选择维护单调 generation，为当前草稿维护 revision 与已确认 baseline；加载、保存、Git/Zip 预览和候选正文读取只有在实体、generation 及所需 revision 仍匹配时才能更新对应编辑器或弹窗。A→B→A 不能恢复旧 owner，旧请求的 `finally` 也不能清除新请求的 busy 状态。保存期间产生的新编辑继续保持 dirty，较早 revision 的成功只推进其 baseline；切换或关闭 dirty 草稿必须显式确认。服务端已经提交的保存、导入或更新仍必须汇入共享 Skill catalog，但迟到响应不得关闭、报错或覆盖后来打开的编辑器与弹窗。
 
+模型管理复用同一局部 editor ownership 契约：对象、渠道、新建和离开模型管理都会失效旧 generation；models.dev 单项能力、目录匹配、渠道模型发现、保存、导入、启停和删除分别只提交仍拥有对应 editor/request 的局部 UI。服务端已经完成的模型 mutation 始终收敛共享目录；保存期间继续修改只确认已提交 revision，不覆盖新草稿。模型创建从临时 key 过渡到持久 model id 时保留同一 revision 历史，而不是把新输入误判为已保存。dirty 模型切换、换渠道或返回渠道概览必须确认放弃。
+
 Prompt Group list/create/update/delete 复用独立的资源错误边界：ID 与名称校验为稳定 400，同一用户内大小写不敏感的重名为 409，缺失或跨用户访问为 404，repository/transaction 故障为带 request ID 的 retryable 5xx。rename 继续在同一 Context-aware 事务中同步 `prompts.group_name`，delete 继续把所属 Prompt 移回默认分组；本公共错误契约不改变 Prompt catalog 分页或前端编辑器所有权。
 
 个人与共享 Prompt CRUD 复用同一领域错误出口：ID、分页、标题、正文与分组字段的本地约束为稳定 400，缺失 Prompt 或不可访问分组为 404，个人入口修改可见共享 Prompt 为 403，repository、transaction、rows iteration 与 rows-affected 故障为带 request ID 的 retryable 5xx。共享 Prompt 仍只能由管理员入口创建、更新和删除；个人私有 Prompt 与共享库的可见性隔离不变。本契约不把有界 page 当完整 catalog，不改变前端 editor owner，也不改变 partial PATCH 的完整对象写回语义；这些分别继续由 P2-27、P2-23 与 P2-47 收口。

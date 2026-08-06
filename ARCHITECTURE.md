@@ -118,7 +118,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 工具自身返回的受控业务失败保持结构化结果。repository、持久化或受管文件 I/O 等内部失败必须作为 wrapped Go error 交给 Tool governance，不能伪装成成功 envelope 内的 `error` 字段；治理边界也会把带显式公共 `message` 的结构化失败改写为该公共文案。模型、RunHub 和消息树只接收稳定失败，原始 repository、路径或 provider 原因仅进入受控内部诊断；已有 `error_code` 的网页 typed 失败继续由网页工具自己的分类器负责。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
 - 网页提取链路由管理员为 Firecrawl、Jina、Tavily 和 Exa 独立配置并排序；Basic 固定为最后兜底。
-- 网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。
+- 网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。前端工具树把 clean、degraded/truncated 和 hard error 分别呈现为成功、安静 warning 和错误；warning 通过稳定中文文案说明提炼或截断原因，同时保留 fallback 正文和来源链接，流式、RunHub 恢复与历史消息共享同一 renderer。
 - 网页提炼开关与模型 ID 属于内容外发 policy：成功解析的值成为进程内 last-known-good snapshot；短暂查询/解析故障只复用该快照，冷启动无可信值时保守关闭二次提炼，不构造 utility model，也不把 crawler 正文发给模型。accepted runtime snapshot v4 固定实际生效策略、`ready` / `disabled` / `unavailable` 状态和已解析的模型/渠道依赖，执行阶段不重新读取 live config。
 - 工具调用日志不做持久化后台页面；排障依靠容器日志和用量统计。
 

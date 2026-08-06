@@ -65,7 +65,7 @@ func TestAvatarUploadClassifiesAccountFailuresAndCleansNewFile(t *testing.T) {
 				return service.NewAuthService(repository.NewUserRepository(db), "fixture-secret")
 			},
 			wantStatus: http.StatusInternalServerError,
-			wantCode:   "avatar_profile_failed",
+			wantCode:   "avatar_update_failed",
 		},
 	}
 

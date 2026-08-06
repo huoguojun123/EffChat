@@ -1,21 +1,26 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/huoguojun123/EffChat/internal/avatar"
 	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 const avatarURLPrefix = "/api/v1/avatars/"
+const avatarCleanupTimeout = 2 * time.Second
 
 type AvatarHandler struct {
 	authService *service.AuthService
@@ -76,36 +81,36 @@ func (h *AvatarHandler) Upload(c *gin.Context) {
 	}
 
 	userID := middleware.GetUserID(c)
-	oldUser, err := h.authService.GetProfile(userID)
-	if err != nil {
-		_ = os.Remove(storedPath)
-		writeAvatarAccountError(c, "profile", err)
-		return
-	}
 	avatarURL := avatarURLPrefix + filename
-	user, err := h.authService.UpdateAvatar(userID, &avatarURL)
+	user, replacedURL, err := h.authService.SwapAvatarContext(c.Request.Context(), userID, &avatarURL)
 	if err != nil {
-		_ = os.Remove(storedPath)
+		// All pre-commit failures are rolled back, so this request still owns its
+		// staged file. A commit error is different: the database may own either
+		// URL, and both candidates must be reference-checked before deletion.
+		if errors.Is(err, repository.ErrUserCommitUnknown) {
+			h.removeManagedIfUnreferenced(&avatarURL)
+			h.removeManagedIfUnreferenced(replacedURL)
+		} else {
+			_ = os.Remove(storedPath)
+		}
 		writeAvatarAccountError(c, "update", err)
 		return
 	}
-	h.removeManaged(oldUser.AvatarURL)
+	h.removeManagedIfUnreferenced(replacedURL)
 	c.JSON(http.StatusOK, user)
 }
 
 func (h *AvatarHandler) Delete(c *gin.Context) {
 	userID := middleware.GetUserID(c)
-	oldUser, err := h.authService.GetProfile(userID)
+	user, replacedURL, err := h.authService.SwapAvatarContext(c.Request.Context(), userID, nil)
 	if err != nil {
-		writeAvatarAccountError(c, "profile", err)
-		return
-	}
-	user, err := h.authService.UpdateAvatar(userID, nil)
-	if err != nil {
+		if errors.Is(err, repository.ErrUserCommitUnknown) {
+			h.removeManagedIfUnreferenced(replacedURL)
+		}
 		writeAvatarAccountError(c, "delete", err)
 		return
 	}
-	h.removeManaged(oldUser.AvatarURL)
+	h.removeManagedIfUnreferenced(replacedURL)
 	c.JSON(http.StatusOK, user)
 }
 
@@ -150,13 +155,27 @@ func (h *AvatarHandler) Serve(c *gin.Context) {
 	}
 }
 
-func (h *AvatarHandler) removeManaged(avatarURL *string) {
+func (h *AvatarHandler) removeManagedIfUnreferenced(avatarURL *string) {
 	if avatarURL == nil || !strings.HasPrefix(*avatarURL, avatarURLPrefix) {
 		return
 	}
 	filename := strings.TrimPrefix(*avatarURL, avatarURLPrefix)
-	if validAvatarFilename(filename) {
-		_ = os.Remove(filepath.Join(h.storageDir, filename))
+	if !validAvatarFilename(filename) {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), avatarCleanupTimeout)
+	defer cancel()
+	referenced, err := h.authService.IsAvatarURLReferencedContext(ctx, *avatarURL)
+	if err != nil {
+		logger.Error("check avatar reference before cleanup failed: url=%q err=%v", *avatarURL, err)
+		return
+	}
+	if referenced {
+		return
+	}
+	if err := os.Remove(filepath.Join(h.storageDir, filename)); err != nil && !os.IsNotExist(err) {
+		logger.Error("remove unreferenced avatar failed: url=%q err=%v", *avatarURL, err)
 	}
 }
 

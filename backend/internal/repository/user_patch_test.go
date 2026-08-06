@@ -30,22 +30,24 @@ func TestUserRepositoryUpdateFieldsPreservesConcurrentProfileAndAdminPatches(t *
 
 	nickname := "patched nickname"
 	role := "admin"
-	results := make(chan error, 2)
+	avatarURL := "/api/v1/avatars/11111111-1111-4111-8111-111111111111.png"
+	results := make(chan error, 3)
 	var wg sync.WaitGroup
 	for _, patch := range []UserPatch{
 		{NicknameSet: true, Nickname: &nickname},
 		{Role: &role},
+		{AvatarURLSet: true, AvatarURL: &avatarURL},
 	} {
 		patch := patch
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, updateErr := repo.UpdateFieldsContext(context.Background(), user.ID, patch)
+			_, updateErr := repo.UpdateFieldsContext(context.Background(), user.ID, patch)
 			results <- updateErr
 		}()
 	}
 
-	waitForUserPatchWaiters(t, db, 2)
+	waitForUserPatchWaiters(t, db, 3)
 	if err := blocker.Commit(); err != nil {
 		t.Fatalf("release blocker: %v", err)
 	}
@@ -61,8 +63,56 @@ func TestUserRepositoryUpdateFieldsPreservesConcurrentProfileAndAdminPatches(t *
 	if err != nil {
 		t.Fatalf("reload user: %v", err)
 	}
-	if updated.Nickname == nil || *updated.Nickname != nickname || updated.Role != role {
-		t.Fatalf("concurrent partial updates lost a field: nickname=%v role=%q", updated.Nickname, updated.Role)
+	if updated.Nickname == nil || *updated.Nickname != nickname || updated.Role != role || updated.AvatarURL == nil || *updated.AvatarURL != avatarURL {
+		t.Fatalf("concurrent partial updates lost a field: nickname=%v role=%q avatar=%v", updated.Nickname, updated.Role, updated.AvatarURL)
+	}
+}
+
+func TestUserRepositoryAvatarSwapReturnsOldOwnerAndTracksReferences(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewUserRepository(db)
+	first := seedPatchUser(t, db, repo, "avatar-first")
+	second := seedPatchUser(t, db, repo, "avatar-second")
+	oldURL := "/api/v1/avatars/22222222-2222-4222-8222-222222222222.png"
+	newURL := "/api/v1/avatars/33333333-3333-4333-8333-333333333333.png"
+	for _, userID := range []int64{first.ID, second.ID} {
+		if _, err := repo.UpdateFieldsContext(context.Background(), userID, UserPatch{AvatarURLSet: true, AvatarURL: &oldURL}); err != nil {
+			t.Fatalf("seed shared avatar: %v", err)
+		}
+	}
+
+	result, err := repo.UpdateFieldsContext(context.Background(), first.ID, UserPatch{AvatarURLSet: true, AvatarURL: &newURL})
+	if err != nil {
+		t.Fatalf("swap first avatar: %v", err)
+	}
+	if result.ReplacedAvatarURL == nil || *result.ReplacedAvatarURL != oldURL {
+		t.Fatalf("replaced avatar = %v, want %q", result.ReplacedAvatarURL, oldURL)
+	}
+	referenced, err := repo.IsAvatarURLReferencedContext(context.Background(), oldURL)
+	if err != nil || !referenced {
+		t.Fatalf("shared old avatar reference = %v, err=%v", referenced, err)
+	}
+
+	result, err = repo.UpdateFieldsContext(context.Background(), second.ID, UserPatch{AvatarURLSet: true})
+	if err != nil {
+		t.Fatalf("clear second avatar: %v", err)
+	}
+	if result.ReplacedAvatarURL == nil || *result.ReplacedAvatarURL != oldURL {
+		t.Fatalf("cleared avatar owner = %v, want %q", result.ReplacedAvatarURL, oldURL)
+	}
+	referenced, err = repo.IsAvatarURLReferencedContext(context.Background(), oldURL)
+	if err != nil || referenced {
+		t.Fatalf("released old avatar reference = %v, err=%v", referenced, err)
+	}
+
+	result, err = repo.UpdateFieldsContext(context.Background(), first.ID, UserPatch{AvatarURLSet: true, AvatarURL: &newURL})
+	if err != nil {
+		t.Fatalf("repeat current avatar: %v", err)
+	}
+	if result.ReplacedAvatarURL != nil {
+		t.Fatalf("same URL must not transfer cleanup ownership: %v", result.ReplacedAvatarURL)
 	}
 }
 
@@ -84,7 +134,7 @@ func TestUserRepositoryUpdateFieldsHonorsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	nickname := "must not commit"
-	_, _, err = repo.UpdateFieldsContext(ctx, user.ID, UserPatch{NicknameSet: true, Nickname: &nickname})
+	_, err = repo.UpdateFieldsContext(ctx, user.ID, UserPatch{NicknameSet: true, Nickname: &nickname})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("canceled update error = %v, want deadline exceeded", err)
 	}

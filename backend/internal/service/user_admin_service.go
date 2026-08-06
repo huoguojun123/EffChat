@@ -220,7 +220,7 @@ func (s *UserAdminService) UpdateContext(ctx context.Context, userID int64, req 
 		}
 	}
 
-	_, invalidateActiveRuns, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
+	result, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
 		EmailSet:       req.Email != nil,
 		Email:          email,
 		NicknameSet:    req.Nickname != nil,
@@ -233,7 +233,7 @@ func (s *UserAdminService) UpdateContext(ctx context.Context, userID int64, req 
 	if err != nil {
 		return nil, err
 	}
-	if s.runHub != nil && invalidateActiveRuns {
+	if s.runHub != nil && result.InvalidatedRuns {
 		s.runHub.CancelByUser(userID)
 	}
 	user, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID)

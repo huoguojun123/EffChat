@@ -16,6 +16,9 @@ var (
 	ErrLastActiveAdmin  = errors.New("cannot remove the last active admin")
 	ErrUserConflict     = errors.New("user identity conflict")
 	ErrUserGroupMissing = errors.New("user group not found")
+	// ErrUserCommitUnknown marks the only mutation phase where deleting a
+	// staged avatar without re-reading ownership could remove a committed file.
+	ErrUserCommitUnknown = errors.New("user update commit outcome is unknown")
 )
 
 const userAdminInvariantLock = int64(0x4653484154434841)
@@ -32,6 +35,8 @@ type UserPatch struct {
 	Email          *string
 	NicknameSet    bool
 	Nickname       *string
+	AvatarURLSet   bool
+	AvatarURL      *string
 	Role           *string
 	PermissionsSet bool
 	Permissions    []byte
@@ -45,6 +50,9 @@ func (p UserPatch) Apply(user *model.User) {
 	if p.NicknameSet {
 		user.Nickname = p.Nickname
 	}
+	if p.AvatarURLSet {
+		user.AvatarURL = p.AvatarURL
+	}
 	if p.Role != nil {
 		user.Role = *p.Role
 	}
@@ -54,6 +62,30 @@ func (p UserPatch) Apply(user *model.User) {
 	if p.IsActive != nil {
 		user.IsActive = *p.IsActive
 	}
+}
+
+type UserUpdateResult struct {
+	User            *model.User
+	InvalidatedRuns bool
+	// ReplacedAvatarURL is the canonical URL held by the locked row before an
+	// avatar change. It is returned even on an uncertain commit so the file
+	// owner can re-check database references before deciding what to remove.
+	ReplacedAvatarURL *string
+}
+
+func cloneOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func sameOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 const userColumns = `id, username, email, password_hash, nickname, avatar_url, role, group_id,
@@ -267,48 +299,13 @@ func (r *UserRepository) UpdateLastLogin(userID int64) error {
 	return nil
 }
 
-// Update 更新用户信息
-func (r *UserRepository) Update(user *model.User) error {
-	query := `
-		UPDATE users
-		SET email = $1, nickname = $2, avatar_url = $3, permissions = $4, preferences = $5, updated_at = NOW()
-		WHERE id = $6
-	`
-
-	result, err := r.db.Exec(
-		query,
-		user.Email,
-		user.Nickname,
-		user.AvatarURL,
-		user.Permissions,
-		user.Preferences,
-		user.ID,
-	)
-
-	if err != nil {
-		if IsUniqueViolation(err) {
-			return fmt.Errorf("%w: email already exists", ErrUserConflict)
-		}
-		return fmt.Errorf("failed to update user: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read updated user rows: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("user not found: %w", ErrNotFound)
-	}
-
-	return nil
-}
-
 // UpdateAdminFields 更新管理员可维护的用户资料、角色、状态和权限。
 func (r *UserRepository) UpdateAdminFields(user *model.User) error {
 	return r.UpdateAdminFieldsContext(context.Background(), user)
 }
 
 func (r *UserRepository) UpdateAdminFieldsContext(ctx context.Context, user *model.User) error {
-	updated, _, err := r.UpdateFieldsContext(ctx, user.ID, UserPatch{
+	result, err := r.UpdateFieldsContext(ctx, user.ID, UserPatch{
 		EmailSet: true, Email: user.Email,
 		NicknameSet: true, Nickname: user.Nickname,
 		Role:           &user.Role,
@@ -318,13 +315,13 @@ func (r *UserRepository) UpdateAdminFieldsContext(ctx context.Context, user *mod
 	if err != nil {
 		return err
 	}
-	user.Email = updated.Email
-	user.Nickname = updated.Nickname
-	user.Role = updated.Role
-	user.Permissions = updated.Permissions
-	user.IsActive = updated.IsActive
-	user.AuthVersion = updated.AuthVersion
-	user.UpdatedAt = updated.UpdatedAt
+	user.Email = result.User.Email
+	user.Nickname = result.User.Nickname
+	user.Role = result.User.Role
+	user.Permissions = result.User.Permissions
+	user.IsActive = result.User.IsActive
+	user.AuthVersion = result.User.AuthVersion
+	user.UpdatedAt = result.User.UpdatedAt
 	return nil
 }
 
@@ -333,12 +330,12 @@ func (r *UserRepository) UpdateAdminFieldsContext(ctx context.Context, user *mod
 // mutable field: serializing only the final UPDATE would still write values
 // copied from an older service snapshot over a concurrent request.
 //
-// The returned boolean reports whether this mutation changed role or active
-// state and therefore invalidated authentication and in-flight chat runs.
-func (r *UserRepository) UpdateFieldsContext(ctx context.Context, userID int64, patch UserPatch) (*model.User, bool, error) {
+// The result reports authentication invalidation and, for an avatar swap,
+// the exact old URL that this committed mutation replaced.
+func (r *UserRepository) UpdateFieldsContext(ctx context.Context, userID int64, patch UserPatch) (UserUpdateResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("begin user update transaction: %w", userContextError(ctx, err))
+		return UserUpdateResult{}, fmt.Errorf("begin user update transaction: %w", userContextError(ctx, err))
 	}
 	defer tx.Rollback()
 	// Profile-only patches need only the target row lock. Role or account-state
@@ -346,44 +343,46 @@ func (r *UserRepository) UpdateFieldsContext(ctx context.Context, userID int64, 
 	// rows cannot concurrently remove the final active administrator.
 	if patch.Role != nil || patch.IsActive != nil {
 		if err := lockUserAdminInvariant(ctx, tx); err != nil {
-			return nil, false, err
+			return UserUpdateResult{}, err
 		}
 	}
 
 	current, err := scanUser(tx.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1 FOR UPDATE`, userID))
 	if err == sql.ErrNoRows {
-		return nil, false, fmt.Errorf("user not found: %w", ErrNotFound)
+		return UserUpdateResult{}, fmt.Errorf("user not found: %w", ErrNotFound)
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("load user for update: %w", userContextError(ctx, err))
+		return UserUpdateResult{}, fmt.Errorf("load user for update: %w", userContextError(ctx, err))
 	}
 	currentRole := current.Role
 	currentActive := current.IsActive
+	oldAvatarURL := cloneOptionalString(current.AvatarURL)
 	patch.Apply(current)
 	if currentRole == "admin" && currentActive && (current.Role != "admin" || !current.IsActive) {
 		var activeAdmins int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = true`).Scan(&activeAdmins); err != nil {
-			return nil, false, fmt.Errorf("count active admins: %w", userContextError(ctx, err))
+			return UserUpdateResult{}, fmt.Errorf("count active admins: %w", userContextError(ctx, err))
 		}
 		if activeAdmins <= 1 {
-			return nil, false, ErrLastActiveAdmin
+			return UserUpdateResult{}, ErrLastActiveAdmin
 		}
 	}
 	invalidateRuns := currentRole != current.Role || currentActive != current.IsActive
 
 	query := `
 		UPDATE users
-		SET email = $1, nickname = $2, role = $3,
-		    permissions = $4, is_active = $5,
-		    auth_version = auth_version + CASE WHEN $6 THEN 1 ELSE 0 END,
+		SET email = $1, nickname = $2, avatar_url = $3, role = $4,
+		    permissions = $5, is_active = $6,
+		    auth_version = auth_version + CASE WHEN $7 THEN 1 ELSE 0 END,
 		    updated_at = NOW()
-		WHERE id = $7
+		WHERE id = $8
 		RETURNING ` + userColumns
 	updated, err := scanUser(tx.QueryRowContext(
 		ctx,
 		query,
 		current.Email,
 		current.Nickname,
+		current.AvatarURL,
 		current.Role,
 		current.Permissions,
 		current.IsActive,
@@ -392,19 +391,34 @@ func (r *UserRepository) UpdateFieldsContext(ctx context.Context, userID int64, 
 	))
 	if err != nil {
 		if IsUniqueViolation(err) {
-			return nil, false, fmt.Errorf("%w: email already exists", ErrUserConflict)
+			return UserUpdateResult{}, fmt.Errorf("%w: email already exists", ErrUserConflict)
 		}
-		return nil, false, fmt.Errorf("failed to update user: %w", userContextError(ctx, err))
+		return UserUpdateResult{}, fmt.Errorf("failed to update user: %w", userContextError(ctx, err))
 	}
 	if invalidateRuns {
 		if err := cancelRunningChatRuns(ctx, tx, userID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
-			return nil, false, fmt.Errorf("cancel runs after account change: %w", userContextError(ctx, err))
+			return UserUpdateResult{}, fmt.Errorf("cancel runs after account change: %w", userContextError(ctx, err))
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("commit user update transaction: %w", userContextError(ctx, err))
+	result := UserUpdateResult{User: updated, InvalidatedRuns: invalidateRuns}
+	if patch.AvatarURLSet && !sameOptionalString(oldAvatarURL, updated.AvatarURL) {
+		result.ReplacedAvatarURL = oldAvatarURL
 	}
-	return updated, invalidateRuns, nil
+	if err := tx.Commit(); err != nil {
+		return result, errors.Join(
+			ErrUserCommitUnknown,
+			fmt.Errorf("commit user update transaction: %w", userContextError(ctx, err)),
+		)
+	}
+	return result, nil
+}
+
+func (r *UserRepository) IsAvatarURLReferencedContext(ctx context.Context, avatarURL string) (bool, error) {
+	var referenced bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE avatar_url = $1)`, avatarURL).Scan(&referenced); err != nil {
+		return false, fmt.Errorf("check avatar URL reference: %w", userContextError(ctx, err))
+	}
+	return referenced, nil
 }
 
 // UpdatePassword 更新用户密码

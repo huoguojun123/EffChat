@@ -203,13 +203,13 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 管理员 User Group、用户/认证、External Service reorder、系统配置 batch、Session delete、OCR 原件过期清理和 Skill package mutation 的 HTTP 写事务都从 handler 传播 request context 到 repository；数据库锁等待、statement cancel 或 commit 失败优先归一为 context 错误，事务回滚且不提交。非 HTTP worker、legacy wrapper 与独立后台生命周期继续由各自 owner 使用 background context；这条取消契约不把所有 repository 机械改写成 HTTP context，也不替代各资源的字段并发所有权。
 
-个人 profile 与管理员 User partial update 在 repository transaction 内锁定并重读 canonical user，只应用请求携带的 email、nickname、role、permissions 与 active 字段；不同字段并发按事务顺序合成，同字段采用 last-write-wins。只有 role/active mutation 获取跨用户管理员 invariant advisory lock，并在同一事务内保护最后活动管理员、递增 auth version 和取消活动 run；profile-only patch 只锁目标用户行。HTTP profile update 传播 request context，锁等待取消不提交。头像 URL 与受管文件 swap 仍由同一 P2-47 后续切片单独完成，本切片不以数据库字段 patch 代替文件所有权闭环。
+个人 profile、头像与管理员 User partial update 在 repository transaction 内锁定并重读 canonical user，只应用请求携带的 email、nickname、avatar URL、role、permissions 与 active 字段；不同字段并发按事务顺序合成，同字段采用 last-write-wins。只有 role/active mutation 获取跨用户管理员 invariant advisory lock，并在同一事务内保护最后活动管理员、递增 auth version 和取消活动 run；profile/avatar mutation 只锁目标用户行。HTTP profile/avatar update 传播 request context，锁等待取消不提交。
 
 管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名及最后活动管理员 invariant 为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。用户响应同时返回可空的原始 `group_id` 与非空 `effective_group`；后者包含 id/name/level 及 inherited 标记，使 Admin Users 能明确显示“继承默认组 X（等级 N）”，而不是把 NULL 误称为最低级。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
 
 个人 profile 读取、资料更新与改密共享账户错误边界：邮箱、昵称和新密码的本地约束为稳定 400，当前用户缺失为 404，邮箱重名为 409，repository、事务和密码哈希故障为带 request ID 的 retryable 5xx；错误旧密码继续作为不泄漏账户内部状态的受控 400。密码在 bcrypt 前按 6–72 bytes 校验，资料更新在 repository 约束 owner 保留 unique 与 rows-affected 分类，改密成功仍沿既有事务递增 auth version、取消数据库 run 与 RunHub run。本契约不改变头像文件生命周期、Settings 草稿所有权、HTTP request context 或字段级 PATCH/lost-update 语义。
 
-头像 upload/delete/serve 使用独立的文件与账户错误边界：缺少文件、无效图片和大小超限为稳定 400/413，用户缺失为 404，读取、处理、受管目录/文件写入与 repository 故障为带 request ID 的 retryable 5xx。已写入新文件后若 profile 读取或头像更新失败，handler 继续补偿删除本请求新文件。本公共错误契约不改变头像的并发 swap、旧文件删除 owner 或 profile partial PATCH 策略；这些仍由 P2-47 收口。
+头像 upload/delete/serve 使用独立的文件与账户错误边界：缺少文件、无效图片和大小超限为稳定 400/413，用户缺失为 404，读取、处理、受管目录/文件写入与 repository 故障为带 request ID 的 retryable 5xx。upload 先写入 UUID 受管文件，再通过同一 user row transaction 原子 swap `avatar_url`；repository 返回该次 committed mutation 实际替换的旧 URL，handler 仅在数据库确认已无活动引用后删除该受管路径。事务提交前失败由请求直接回收自己的新文件；commit 结果不确定时，新旧候选都先重新查询数据库 owner，再只删除未引用路径。并发 profile/avatar 不会恢复旧 URL，双 avatar upload 最终只保留 canonical URL 对应文件；外部 URL、非法受管文件名与仍被其他账户引用的路径从不删除。
 
 字体 list/upload/update/select/delete/file 使用独立的资源与存储错误边界：ID、slot、metadata、multipart、内容类型和大小校验为稳定 400/413，字体缺失为 404，已停用字体不可选择为 409；repository、配置解析、请求体读取、受管目录/文件写入和已登记字体文件缺失等内部故障为带 request ID 的 retryable 5xx。repository 列表与 mutation 必须检查 iterator/rows-affected 错误，配置中的非法字体 ID 不能静默退回系统默认。新槽位配置键缺失时才允许从 legacy 全局键兼容回退；键已存在且 JSON 值为 `null` 时表示该槽位明确使用系统默认，读取和 `/system/info` 必须保留该 `null`，前端也只能对 `undefined` 做 legacy 兼容。本公共错误契约不改变 FontAsset partial PATCH 语义；该问题仍由 P2-47 收口。
 

@@ -167,6 +167,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 - 模型与服务：模型、渠道、搜索/提取/OCR 服务。
 - 治理与用量：用量、用户组、用户、工具。用量支持今天、7 天、30 天快捷范围，以及最长 90 天的自定义日期范围；历史范围不改变“今日用户组限额”。
+- OCR 用量与今日限额压力统一以 `files.ocr_started_at` 作为执行事件时间：`created_at` 仅表示上传事件，`ocr_started_at IS NULL` 的排队文件不计入 OCR 文件数、页数或失败数；跨日上传但当日开始的文件按开始日计入，开始后失败仍按开始日计入，并与 OCR quota admission 使用同一口径。
 - Admin Usage 查询只接受空值默认 7 天、`today/7d/30d` 预设，或成对的 RFC3339 `start_at/end_at` 自定义范围；非法组合、日期和超过 90 天的窗口统一返回 `invalid_usage_range` 400 且不可重试，不再静默回退到 7 天。repository 聚合故障继续使用带 request ID 的 retryable `usage_summary_failed` 5xx；该 HTTP 契约不改变 OCR 事件时间口径或前端 query generation owner。
 - 提示与知识：底层提示词、提示词库、Skills。
 - 系统：实例状态、系统配置、字体、文件清理。

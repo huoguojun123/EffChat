@@ -959,6 +959,10 @@ func TestSessionFolders_CRUDAndFiltering(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("pin session: got %d %s", w.Code, w.Body.String())
 	}
+	var pinnedSession model.Session
+	if err := json.Unmarshal(w.Body.Bytes(), &pinnedSession); err != nil || pinnedSession.ID != foldered.ID || pinnedSession.PinnedAt == nil {
+		t.Fatalf("session pin response = %s, err = %v", w.Body.String(), err)
+	}
 	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/sessions/%d", foldered.ID), map[string]interface{}{
 		"folder_id": nil,
 	})

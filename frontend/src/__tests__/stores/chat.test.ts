@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { Message, Session } from "@/types"
+import type { Message, Session, SessionFolder } from "@/types"
 import { assistantErrorDetail, assistantErrorDiagnostic, editableTailUserMessageId, isErrorAssistant, normalizeMessages } from "@/lib/chatMessages"
 import { useChatStore } from "@/stores/chat"
 import * as messagesApi from "@/api/messages"
@@ -42,6 +42,7 @@ const listConversationTurnsMock = vi.mocked(messagesApi.listConversationTurns)
 const listMessageWindowMock = vi.mocked(messagesApi.listMessageWindow)
 const listSessionsMock = vi.mocked(sessionsApi.listSessions)
 const listSessionFoldersMock = vi.mocked(sessionsApi.listSessionFolders)
+const updateSessionFolderMock = vi.mocked(sessionsApi.updateSessionFolder)
 const getSessionCreateReadinessMock = vi.mocked(sessionsApi.getSessionCreateReadiness)
 const createSessionMock = vi.mocked(sessionsApi.createSession)
 const updateSessionMock = vi.mocked(sessionsApi.updateSession)
@@ -132,6 +133,151 @@ function session(id: number, title: string, folderId: number | null = null): Ses
     updated_at: `2026-06-15T13:${String(id).padStart(2, "0")}:00Z`,
   }
 }
+
+function folder(id: number, name: string, pinnedAt: string | null = null): SessionFolder {
+  return {
+    id,
+    user_id: 1,
+    name,
+    pinned_at: pinnedAt,
+    created_at: `2026-06-15T12:${String(id).padStart(2, "0")}:00Z`,
+    updated_at: `2026-06-15T12:${String(id).padStart(2, "0")}:00Z`,
+  }
+}
+
+describe("sidebar pin mutation ownership", () => {
+  it("does not let a failed session pin replace another session's successful pin", async () => {
+    const first = deferred<Session>()
+    const second = deferred<Session>()
+    updateSessionMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    useChatStore.setState({ sessions: [session(1, "first"), session(2, "second")] })
+
+    const failed = useChatStore.getState().setSessionPinned(1, true)
+    const failedResult = expect(failed).rejects.toThrow("pin failed")
+    const succeeded = useChatStore.getState().setSessionPinned(2, true)
+    second.resolve({ ...session(2, "second"), pinned_at: "2026-08-06T01:00:00Z" })
+    await succeeded
+    first.reject(new Error("pin failed"))
+    await failedResult
+
+    expect(useChatStore.getState().sessions.find((item) => item.id === 2)?.pinned_at).toBeTruthy()
+  })
+
+  it("does not let a failed folder pin replace another folder's canonical success", async () => {
+    const first = deferred<SessionFolder>()
+    const second = deferred<SessionFolder>()
+    updateSessionFolderMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    useChatStore.setState({ sessionFolders: [folder(1, "first"), folder(2, "second")] })
+
+    const succeeded = useChatStore.getState().setSessionFolderPinned(1, true)
+    const failed = useChatStore.getState().setSessionFolderPinned(2, true)
+    const failedResult = expect(failed).rejects.toThrow("pin failed")
+    first.resolve(folder(1, "server first", "2026-08-06T01:00:00Z"))
+    await succeeded
+    second.reject(new Error("pin failed"))
+    await failedResult
+
+    expect(useChatStore.getState().sessionFolders.find((item) => item.id === 1)?.pinned_at).toBe("2026-08-06T01:00:00Z")
+  })
+
+  it("ignores an older folder pin success after a newer unpin succeeds", async () => {
+    const older = deferred<SessionFolder>()
+    const newer = deferred<SessionFolder>()
+    updateSessionFolderMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+    useChatStore.setState({ sessionFolders: [folder(1, "folder")] })
+
+    const pin = useChatStore.getState().setSessionFolderPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(1))
+    const unpin = useChatStore.getState().setSessionFolderPinned(1, false)
+    expect(updateSessionFolderMock).toHaveBeenCalledTimes(1)
+    older.resolve(folder(1, "folder", "2026-08-06T01:00:00Z"))
+    await pin
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(2))
+    newer.resolve(folder(1, "folder", null))
+    await unpin
+
+    expect(useChatStore.getState().sessionFolders[0]?.pinned_at).toBeNull()
+  })
+
+  it("ignores an older session pin failure after a newer intent and local update", async () => {
+    const older = deferred<Session>()
+    const newer = deferred<Session>()
+    updateSessionMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+    useChatStore.setState({ sessions: [session(1, "original")] })
+
+    const pin = useChatStore.getState().setSessionPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(1))
+    const unpin = useChatStore.getState().setSessionPinned(1, false)
+    expect(updateSessionMock).toHaveBeenCalledTimes(1)
+    useChatStore.getState().updateSessionLocal(1, { title: "new title" })
+    older.reject(new Error("pin failed"))
+    await pin
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(2))
+    newer.resolve({ ...session(1, "original"), pinned_at: null })
+    await unpin
+
+    expect(useChatStore.getState().sessions[0]).toMatchObject({ title: "new title", pinned_at: null })
+  })
+
+  it("preserves an optimistic session pin while a stale list reload completes", async () => {
+    const pin = deferred<Session>()
+    const reload = deferred<{ sessions: Session[]; has_more: boolean; next_offset: number }>()
+    updateSessionMock.mockReturnValue(pin.promise)
+    listSessionsMock.mockReturnValue(reload.promise)
+    useChatStore.setState({ sessions: [session(1, "session")] })
+
+    const pendingPin = useChatStore.getState().setSessionPinned(1, true)
+    const pendingReload = useChatStore.getState().loadSessions()
+    reload.resolve({ sessions: [session(1, "session")], has_more: false, next_offset: 0 })
+    await pendingReload
+
+    expect(useChatStore.getState().sessions[0]?.pinned_at).toBeTruthy()
+    pin.resolve({ ...session(1, "session"), pinned_at: "2026-08-06T01:00:00Z" })
+    await pendingPin
+  })
+
+  it("does not let a list response started before a folder pin overwrite its success", async () => {
+    const reload = deferred<{ folders: SessionFolder[] }>()
+    listSessionFoldersMock.mockReturnValue(reload.promise)
+    updateSessionFolderMock.mockResolvedValue(folder(1, "folder", "2026-08-06T01:00:00Z"))
+    useChatStore.setState({ sessionFolders: [folder(1, "folder")] })
+
+    const pendingReload = useChatStore.getState().loadSessionFolders()
+    await useChatStore.getState().setSessionFolderPinned(1, true)
+    reload.resolve({ folders: [folder(1, "folder")] })
+    await pendingReload
+
+    expect(useChatStore.getState().sessionFolders[0]?.pinned_at).toBe("2026-08-06T01:00:00Z")
+  })
+
+  it("does not restore sessions when an old pin fails after account reset", async () => {
+    const stale = deferred<Session>()
+    updateSessionMock.mockReturnValue(stale.promise)
+    useChatStore.setState({ sessions: [session(1, "old account")] })
+
+    const pending = useChatStore.getState().setSessionPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(1))
+    useChatStore.getState().resetAccountState()
+    stale.reject(new Error("pin failed"))
+    await expect(pending).resolves.toBeUndefined()
+
+    expect(useChatStore.getState().sessions).toEqual([])
+  })
+
+  it("does not restore folders when an old pin fails after account reset", async () => {
+    const stale = deferred<SessionFolder>()
+    updateSessionFolderMock.mockReturnValue(stale.promise)
+    useChatStore.setState({ sessionFolders: [folder(1, "old account")] })
+
+    const pending = useChatStore.getState().setSessionFolderPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(1))
+    useChatStore.getState().resetAccountState()
+    stale.reject(new Error("pin failed"))
+    await expect(pending).resolves.toBeUndefined()
+
+    expect(useChatStore.getState().sessionFolders).toEqual([])
+  })
+})
 
 describe("account-scoped requests", () => {
   it("ignores a session folder response from before account reset", async () => {
@@ -874,7 +1020,7 @@ describe("session folder and pagination state", () => {
   })
 
   it("移入文件夹后从未分组视图移除该话题", async () => {
-    updateSessionMock.mockResolvedValue({ message: "session updated" })
+    updateSessionMock.mockResolvedValue({ ...session(1, "unfiled", 9), folder_id: 9 })
     useChatStore.setState({
       activeFolderId: "unfiled",
       sessions: [session(1, "unfiled"), session(2, "stay")],

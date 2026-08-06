@@ -73,7 +73,7 @@ export function createSession(data: { model_id?: string; provider?: Model["provi
 }
 
 export function updateSession(id: number, data: Partial<Pick<Session, "title" | "model_id" | "provider" | "folder_id" | "system_prompt" | "temperature" | "max_tokens" | "search_mode" | "memory_enabled">> & { pinned?: boolean }) {
-  return api.patch<{ message: string }>(`/sessions/${id}`, data)
+  return api.patch<Session>(`/sessions/${id}`, data)
 }
 
 export async function exportSessionMarkdown(id: number, includeTools = false) {

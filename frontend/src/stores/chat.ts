@@ -115,6 +115,14 @@ let latestPaginationRequest = 0
 let latestSessionsRequest = 0
 let latestSessionFoldersRequest = 0
 let latestSessionCreateReadinessRequest = 0
+let latestSessionPinOperation = 0
+let latestFolderPinOperation = 0
+const sessionPinOperations = new Map<number, number>()
+const folderPinOperations = new Map<number, number>()
+const pendingSessionPins = new Set<number>()
+const pendingFolderPins = new Set<number>()
+const sessionPinQueues = new Map<number, Promise<void>>()
+const folderPinQueues = new Map<number, Promise<void>>()
 const SESSION_PAGE_SIZE = 100
 
 export const useChatStore = create<ChatState>()((set, get) => ({
@@ -166,15 +174,25 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   loadSessionFolders: async () => {
     const requestId = ++latestSessionFoldersRequest
+    const pinOperation = latestFolderPinOperation
     const res = await sessionsApi.listSessionFolders()
     if (requestId !== latestSessionFoldersRequest) return
-    set({ sessionFolders: sortFolders(res.folders || []) })
+    set((state) => ({
+      sessionFolders: sortFolders(preserveNewerPins(
+        res.folders || [],
+        state.sessionFolders,
+        pinOperation,
+        folderPinOperations,
+        pendingFolderPins,
+      )),
+    }))
   },
 
   loadSessions: async (options = {}) => {
     const folderId = options.folderId ?? get().activeFolderId
     const reset = options.reset ?? true
     const requestId = ++latestSessionsRequest
+    const pinOperation = latestSessionPinOperation
     set({
       activeFolderId: folderId,
       isLoadingSessions: true,
@@ -186,12 +204,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       const res = await sessionsApi.listSessions({ limit: SESSION_PAGE_SIZE, offset: 0, folderId })
       if (get().activeFolderId !== folderId || requestId !== latestSessionsRequest) return
       set((state) => {
-        const nextSessions = res.sessions || []
+        const nextSessions = preserveNewerPins(
+          res.sessions || [],
+          state.sessions,
+          pinOperation,
+          sessionPinOperations,
+          pendingSessionPins,
+        )
         const activeSession = state.sessions.find((session) => session.id === state.activeSessionId)
         return {
           sessions: activeSession && !nextSessions.some((session) => session.id === activeSession.id)
             ? sortSessions([...nextSessions, activeSession])
-            : nextSessions,
+            : sortSessions(nextSessions),
           hasMoreSessions: !!res.has_more,
           sessionNextOffset: res.next_offset || 0,
         }
@@ -248,15 +272,44 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   setSessionFolderPinned: async (id: number, pinned: boolean) => {
-    const previous = get().sessionFolders
+    const operationId = ++latestFolderPinOperation
+    const previousPinnedAt = get().sessionFolders.find((folder) => folder.id === id)?.pinned_at ?? null
     const pinnedAt = pinned ? new Date().toISOString() : null
+    folderPinOperations.set(id, operationId)
+    pendingFolderPins.add(id)
     set((s) => ({ sessionFolders: sortFolders(s.sessionFolders.map((folder) => folder.id === id ? { ...folder, pinned_at: pinnedAt } : folder)) }))
+    const previousOperation = folderPinQueues.get(id) ?? Promise.resolve()
+    const operation = previousOperation.catch(() => undefined).then(async () => {
+      if (folderPinOperations.get(id) !== operationId) return
+      try {
+        const folder = await sessionsApi.updateSessionFolder(id, { pinned })
+        if (folderPinOperations.get(id) !== operationId) return
+        set((s) => ({
+          sessionFolders: sortFolders(s.sessionFolders.map((item) => (
+            item.id === id ? { ...item, pinned_at: folder.pinned_at ?? null } : item
+          ))),
+        }))
+      } catch (err) {
+        if (folderPinOperations.get(id) !== operationId) return
+        set((s) => ({
+          sessionFolders: sortFolders(s.sessionFolders.map((item) => (
+            item.id === id && (item.pinned_at ?? null) === pinnedAt
+              ? { ...item, pinned_at: previousPinnedAt }
+              : item
+          ))),
+        }))
+        throw err
+      } finally {
+        if (folderPinOperations.get(id) === operationId) pendingFolderPins.delete(id)
+      }
+    })
+    // Same-object requests must reach PostgreSQL in user-intent order; otherwise
+    // an older PATCH can finish last and become durable even if its UI response is ignored.
+    folderPinQueues.set(id, operation)
     try {
-      const folder = await sessionsApi.updateSessionFolder(id, { pinned })
-      set((s) => ({ sessionFolders: sortFolders(s.sessionFolders.map((item) => item.id === id ? folder : item)) }))
-    } catch (err) {
-      set({ sessionFolders: previous })
-      throw err
+      await operation
+    } finally {
+      if (folderPinQueues.get(id) === operation) folderPinQueues.delete(id)
     }
   },
 
@@ -397,14 +450,42 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   setSessionPinned: async (id: number, pinned: boolean) => {
-    const previous = get().sessions
+    const operationId = ++latestSessionPinOperation
+    const previousPinnedAt = get().sessions.find((session) => session.id === id)?.pinned_at ?? null
     const pinnedAt = pinned ? new Date().toISOString() : null
+    sessionPinOperations.set(id, operationId)
+    pendingSessionPins.add(id)
     set((s) => ({ sessions: sortSessions(s.sessions.map((session) => session.id === id ? { ...session, pinned_at: pinnedAt } : session)) }))
+    const previousOperation = sessionPinQueues.get(id) ?? Promise.resolve()
+    const operation = previousOperation.catch(() => undefined).then(async () => {
+      if (sessionPinOperations.get(id) !== operationId) return
+      try {
+        const session = await sessionsApi.updateSession(id, { pinned })
+        if (sessionPinOperations.get(id) !== operationId) return
+        set((s) => ({
+          sessions: sortSessions(s.sessions.map((item) => (
+            item.id === id ? { ...item, pinned_at: session.pinned_at ?? null } : item
+          ))),
+        }))
+      } catch (err) {
+        if (sessionPinOperations.get(id) !== operationId) return
+        set((s) => ({
+          sessions: sortSessions(s.sessions.map((item) => (
+            item.id === id && (item.pinned_at ?? null) === pinnedAt
+              ? { ...item, pinned_at: previousPinnedAt }
+              : item
+          ))),
+        }))
+        throw err
+      } finally {
+        if (sessionPinOperations.get(id) === operationId) pendingSessionPins.delete(id)
+      }
+    })
+    sessionPinQueues.set(id, operation)
     try {
-      await sessionsApi.updateSession(id, { pinned })
-    } catch (err) {
-      set({ sessions: previous })
-      throw err
+      await operation
+    } finally {
+      if (sessionPinQueues.get(id) === operation) sessionPinQueues.delete(id)
     }
   },
 
@@ -839,6 +920,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     latestSessionsRequest += 1
     latestSessionFoldersRequest += 1
     latestSessionCreateReadinessRequest += 1
+    sessionPinOperations.clear()
+    folderPinOperations.clear()
+    pendingSessionPins.clear()
+    pendingFolderPins.clear()
+    sessionPinQueues.clear()
+    folderPinQueues.clear()
     localStorage.removeItem("active_session_id")
     set({
       sessions: [],
@@ -1100,6 +1187,24 @@ function formatStoreError(err: unknown, fallback: string) {
 }
 
 const folderNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+
+function preserveNewerPins<T extends { id: number; pinned_at?: string | null }>(
+  incoming: T[],
+  current: T[],
+  requestPinOperation: number,
+  operations: Map<number, number>,
+  pending: Set<number>,
+): T[] {
+  const currentById = new Map(current.map((item) => [item.id, item]))
+  return incoming.map((item) => {
+    const operation = operations.get(item.id) ?? 0
+    if (!pending.has(item.id) && operation <= requestPinOperation) return item
+    const local = currentById.get(item.id)
+    // A list response cannot know about a pin request that was pending or started
+    // after it. Preserve only that field; all other server fields remain canonical.
+    return local ? { ...item, pinned_at: local.pinned_at ?? null } : item
+  })
+}
 
 function sortFolders(folders: SessionFolder[]): SessionFolder[] {
   return [...folders].sort((a, b) => Number(Boolean(b.pinned_at)) - Number(Boolean(a.pinned_at)) || (b.pinned_at || "").localeCompare(a.pinned_at || "") || folderNameCollator.compare(a.name, b.name) || a.id - b.id)

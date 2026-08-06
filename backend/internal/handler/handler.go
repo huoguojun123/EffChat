@@ -550,7 +550,14 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "session updated"})
+		// Return the durable row so optimistic clients can replace timestamps and
+		// normalized fields without issuing a second, race-prone list request.
+		session, err := sessionService.GetByID(uri.ID, userID)
+		if err != nil {
+			writeSessionLookupError(c, "load updated", err)
+			return
+		}
+		c.JSON(http.StatusOK, session)
 	}
 }
 

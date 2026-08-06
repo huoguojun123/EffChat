@@ -35,6 +35,7 @@ describe("ToolCallTree web extraction quality", () => {
     expect(html).toContain("模型提炼未完成，显示抓取原文")
     expect(html).toContain("Fallback content remains visible.")
     expect(html).toContain('href="https://example.com/source"')
+    expect(html).toContain('aria-label="打开来源：Example page"')
     expect(html).toContain("text-amber-700")
     expect(html).not.toContain("text-emerald-600")
   })

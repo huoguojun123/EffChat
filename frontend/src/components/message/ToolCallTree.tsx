@@ -178,7 +178,13 @@ function ExtractResultView({ result }: { result: ExtractResult }) {
       <div className="mb-2 flex items-center gap-2 text-xs font-medium">
         <span className="min-w-0 flex-1 truncate">{result.title || "网页内容"}</span>
         {normalizedUrl ? (
-          <a href={normalizedUrl} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground">
+          <a
+            href={normalizedUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`打开来源：${result.title || "网页内容"}`}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground"
+          >
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
         ) : null}

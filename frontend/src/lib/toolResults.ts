@@ -22,10 +22,24 @@ export interface ExtractResult {
   content?: string
   source?: string
   attempted_sources?: string[]
+  summarized?: boolean
+  detail?: string
+  truncated?: boolean
+  refinement_attempted?: boolean
+  degraded?: boolean
+  degradation_reason?: string
   error?: string
   error_code?: string
   retryable?: boolean
   status_code?: number
+}
+
+const extractDegradationMessages: Record<string, string> = {
+  refinement_disabled: "未启用模型提炼，显示抓取原文",
+  refinement_unavailable: "提炼模型当前不可用，显示抓取原文",
+  refinement_cooldown: "提炼服务暂时冷却，显示抓取原文",
+  refinement_failed: "模型提炼未完成，显示抓取原文",
+  source_truncated: "网页原文过长，仅保留部分内容",
 }
 
 export interface ToolFailure {
@@ -111,6 +125,17 @@ export function parseExtractResult(value?: string): ExtractResult | null {
   } catch {
     return null
   }
+}
+
+export function extractResultWarning(result: ExtractResult) {
+  if (result.ok === false) return ""
+  const message = result.degradation_reason ? extractDegradationMessages[result.degradation_reason] : ""
+  if (message === extractDegradationMessages.source_truncated) return message
+  if (message && result.truncated) return `${message}；网页原文过长，仅保留部分内容`
+  if (message) return message
+  if (result.truncated) return "内容已截断，仅显示部分结果"
+  if (result.degraded) return "网页内容以降级方式返回，可能不完整"
+  return ""
 }
 
 export function parseToolFailure(value?: string): ToolFailure | null {

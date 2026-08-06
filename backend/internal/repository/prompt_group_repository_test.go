@@ -67,8 +67,9 @@ func TestPromptWritesWaitForPendingGroupRename(t *testing.T) {
 		{
 			name: "update",
 			run: func(repo *PromptRepository, _ int64, prompt *model.Prompt) error {
-				prompt.Title = "updated during rename"
-				return repo.Update(prompt)
+				title := "updated during rename"
+				_, err := repo.PatchContext(context.Background(), prompt.ID, prompt.UserID, PromptPatch{Title: &title})
+				return err
 			},
 		},
 	}
@@ -140,7 +141,8 @@ func TestPromptRepositoryUpdateContextCancelsGroupLockWait(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	err = NewPromptRepository(db).UpdateContext(ctx, prompt)
+	title := "canceled update"
+	_, err = NewPromptRepository(db).PatchContext(ctx, prompt.ID, prompt.UserID, PromptPatch{Title: &title})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("update error = %v, want context deadline", err)
 	}

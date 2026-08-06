@@ -187,11 +187,14 @@ describe("sidebar pin mutation ownership", () => {
     useChatStore.setState({ sessionFolders: [folder(1, "folder")] })
 
     const pin = useChatStore.getState().setSessionFolderPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(1))
     const unpin = useChatStore.getState().setSessionFolderPinned(1, false)
-    newer.resolve(folder(1, "folder", null))
-    await unpin
+    expect(updateSessionFolderMock).toHaveBeenCalledTimes(1)
     older.resolve(folder(1, "folder", "2026-08-06T01:00:00Z"))
     await pin
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(2))
+    newer.resolve(folder(1, "folder", null))
+    await unpin
 
     expect(useChatStore.getState().sessionFolders[0]?.pinned_at).toBeNull()
   })
@@ -203,13 +206,15 @@ describe("sidebar pin mutation ownership", () => {
     useChatStore.setState({ sessions: [session(1, "original")] })
 
     const pin = useChatStore.getState().setSessionPinned(1, true)
-    const pinResult = expect(pin).rejects.toThrow("pin failed")
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(1))
     const unpin = useChatStore.getState().setSessionPinned(1, false)
-    newer.resolve({ ...session(1, "original"), pinned_at: null })
-    await unpin
+    expect(updateSessionMock).toHaveBeenCalledTimes(1)
     useChatStore.getState().updateSessionLocal(1, { title: "new title" })
     older.reject(new Error("pin failed"))
-    await pinResult
+    await pin
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(2))
+    newer.resolve({ ...session(1, "original"), pinned_at: null })
+    await unpin
 
     expect(useChatStore.getState().sessions[0]).toMatchObject({ title: "new title", pinned_at: null })
   })
@@ -251,10 +256,10 @@ describe("sidebar pin mutation ownership", () => {
     useChatStore.setState({ sessions: [session(1, "old account")] })
 
     const pending = useChatStore.getState().setSessionPinned(1, true)
-    const pendingResult = expect(pending).rejects.toThrow("pin failed")
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(1))
     useChatStore.getState().resetAccountState()
     stale.reject(new Error("pin failed"))
-    await pendingResult
+    await expect(pending).resolves.toBeUndefined()
 
     expect(useChatStore.getState().sessions).toEqual([])
   })
@@ -265,10 +270,10 @@ describe("sidebar pin mutation ownership", () => {
     useChatStore.setState({ sessionFolders: [folder(1, "old account")] })
 
     const pending = useChatStore.getState().setSessionFolderPinned(1, true)
-    const pendingResult = expect(pending).rejects.toThrow("pin failed")
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(1))
     useChatStore.getState().resetAccountState()
     stale.reject(new Error("pin failed"))
-    await pendingResult
+    await expect(pending).resolves.toBeUndefined()
 
     expect(useChatStore.getState().sessionFolders).toEqual([])
   })

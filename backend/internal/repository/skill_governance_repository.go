@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 )
@@ -17,6 +18,40 @@ type SkillGovernanceMutation struct {
 	Reason      string
 }
 
+// SkillMetadataPatch preserves field presence across metadata-only updates and
+// package replacements. Package bytes own source/checksum/file fields, while
+// these administrator fields are applied to the canonical row selected by the
+// same transaction so a concurrent request cannot be overwritten by a stale
+// service snapshot.
+type SkillMetadataPatch struct {
+	Name          *string
+	Description   *string
+	Enabled       *bool
+	MinGroupLevel *int
+}
+
+func (p SkillMetadataPatch) Apply(skill *model.Skill) {
+	if p.Name != nil {
+		skill.Name = *p.Name
+	}
+	if p.Description != nil {
+		skill.Description = *p.Description
+	}
+	if p.Enabled != nil {
+		skill.Enabled = *p.Enabled
+	}
+	if p.MinGroupLevel != nil {
+		skill.MinGroupLevel = *p.MinGroupLevel
+	}
+}
+
+func FullSkillMetadataPatch(skill *model.Skill) SkillMetadataPatch {
+	return SkillMetadataPatch{
+		Name: &skill.Name, Description: &skill.Description,
+		Enabled: &skill.Enabled, MinGroupLevel: &skill.MinGroupLevel,
+	}
+}
+
 // GovernedSkillPackage is one member of an atomic package import. The service
 // prepares immutable package files before this repository transaction starts;
 // this boundary owns only the active database state and its audit history.
@@ -24,6 +59,7 @@ type GovernedSkillPackage struct {
 	Skill    *model.Skill
 	Files    []model.SkillFile
 	Record   *model.SkillImportRecord
+	Patch    SkillMetadataPatch
 	Mutation SkillGovernanceMutation
 }
 
@@ -56,7 +92,7 @@ type skillFileManifestItem struct {
 // UpsertPackageGoverned commits the active package, immutable package version,
 // and governance event together. A pre-051 active package is snapshotted first
 // so every event created by this code has a locally retained rollback target.
-func (r *SkillRepository) UpsertPackageGoverned(ctx context.Context, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord, mutation SkillGovernanceMutation) (*model.GovernanceEvent, error) {
+func (r *SkillRepository) UpsertPackageGoverned(ctx context.Context, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord, patch SkillMetadataPatch, mutation SkillGovernanceMutation) (*model.GovernanceEvent, error) {
 	if err := validateSkillGovernanceMutation(mutation); err != nil {
 		return nil, err
 	}
@@ -69,7 +105,7 @@ func (r *SkillRepository) UpsertPackageGoverned(ctx context.Context, skill *mode
 	}
 	defer tx.Rollback()
 
-	event, err := upsertPackageGovernedTx(ctx, tx, skill, files, record, mutation)
+	event, err := upsertPackageGovernedTx(ctx, tx, skill, files, record, patch, mutation)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +137,7 @@ func (r *SkillRepository) UpsertPackagesGoverned(ctx context.Context, packages [
 	}
 	defer tx.Rollback()
 	for _, item := range packages {
-		if _, err := upsertPackageGovernedTx(ctx, tx, item.Skill, item.Files, item.Record, item.Mutation); err != nil {
+		if _, err := upsertPackageGovernedTx(ctx, tx, item.Skill, item.Files, item.Record, item.Patch, item.Mutation); err != nil {
 			return err
 		}
 	}
@@ -114,13 +150,22 @@ func (r *SkillRepository) UpsertPackagesGoverned(ctx context.Context, packages [
 	return nil
 }
 
-func upsertPackageGovernedTx(ctx context.Context, tx *sql.Tx, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord, mutation SkillGovernanceMutation) (*model.GovernanceEvent, error) {
+func upsertPackageGovernedTx(ctx context.Context, tx *sql.Tx, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord, patch SkillMetadataPatch, mutation SkillGovernanceMutation) (*model.GovernanceEvent, error) {
 	before, err := skillGovernanceStateForUpdateTx(ctx, tx, skill.ID, mutation.ActorUserID, true)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
 	if errors.Is(err, ErrNotFound) {
 		before = nil
+	} else {
+		var state skillGovernanceState
+		if err := json.Unmarshal(before, &state); err != nil {
+			return nil, fmt.Errorf("decode governed Skill package state: %w", err)
+		}
+		mergeSkillPackage(state.model(), skill, patch)
+	}
+	if err := validateSkillMetadata(skill); err != nil {
+		return nil, err
 	}
 	if err := upsertSkillPackageTx(ctx, tx, skill, files, record); err != nil {
 		return nil, err
@@ -139,22 +184,27 @@ func upsertPackageGovernedTx(ctx context.Context, tx *sql.Tx, skill *model.Skill
 
 // UpdateMetadataGoverned keeps metadata-only mutations tied to the exact
 // package version that remained active during the change.
-func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, skill *model.Skill, mutation SkillGovernanceMutation) (*model.GovernanceEvent, error) {
+func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, id string, patch SkillMetadataPatch, mutation SkillGovernanceMutation) (*model.Skill, *model.GovernanceEvent, error) {
 	if err := validateSkillGovernanceMutation(mutation); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("begin governed Skill metadata update: %w", err)
+		return nil, nil, fmt.Errorf("begin governed Skill metadata update: %w", err)
 	}
 	defer tx.Rollback()
-	before, err := skillGovernanceStateForUpdateTx(ctx, tx, skill.ID, mutation.ActorUserID, false)
+	before, err := skillGovernanceStateForUpdateTx(ctx, tx, id, mutation.ActorUserID, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var state skillGovernanceState
 	if err := json.Unmarshal(before, &state); err != nil {
-		return nil, fmt.Errorf("decode governed Skill state: %w", err)
+		return nil, nil, fmt.Errorf("decode governed Skill state: %w", err)
+	}
+	skill := state.model()
+	patch.Apply(skill)
+	if err := validateSkillMetadata(skill); err != nil {
+		return nil, nil, err
 	}
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE skills
@@ -163,9 +213,9 @@ func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, skill *mod
 		RETURNING created_at, updated_at
 	`, skill.Name, skill.Description, skill.Enabled, skill.MinGroupLevel, skill.ID).Scan(&skill.CreatedAt, &skill.UpdatedAt); err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("skill not found: %w", ErrNotFound)
+			return nil, nil, fmt.Errorf("skill not found: %w", ErrNotFound)
 		}
-		return nil, fmt.Errorf("update governed Skill metadata: %w", err)
+		return nil, nil, fmt.Errorf("update governed Skill metadata: %w", err)
 	}
 	after := marshalSkillGovernanceState(skill, state.ImportRecordID)
 	event := &model.GovernanceEvent{
@@ -174,12 +224,12 @@ func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, skill *mod
 		BeforeState: before, AfterState: after, SkillImportRecordID: &state.ImportRecordID,
 	}
 	if err := InsertGovernanceEventTx(ctx, tx, event); err != nil {
-		return nil, fmt.Errorf("audit governed Skill metadata update: %w", err)
+		return nil, nil, fmt.Errorf("audit governed Skill metadata update: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit governed Skill metadata update: %w", err)
+		return nil, nil, fmt.Errorf("commit governed Skill metadata update: %w", err)
 	}
-	return event, nil
+	return skill, event, nil
 }
 
 // DeleteGoverned records a tombstone rather than removing either the Skill row
@@ -377,6 +427,32 @@ func getSkillPackageForUpdateTx(ctx context.Context, tx *sql.Tx, id string) (*mo
 		return nil, nil, err
 	}
 	return skill, files, nil
+}
+
+func mergeSkillPackage(current, incoming *model.Skill, patch SkillMetadataPatch) {
+	// Package updates own the immutable package identity and source fields. The
+	// administrator metadata remains canonical unless its field was explicitly
+	// included in this request.
+	current.SourceType = incoming.SourceType
+	current.SourceURL = incoming.SourceURL
+	current.SourceRef = incoming.SourceRef
+	current.SourcePath = incoming.SourcePath
+	current.Checksum = incoming.Checksum
+	current.PackageChecksum = incoming.PackageChecksum
+	current.EntryPath = incoming.EntryPath
+	current.IsBuiltin = incoming.IsBuiltin
+	patch.Apply(current)
+	*incoming = *current
+}
+
+func validateSkillMetadata(skill *model.Skill) error {
+	if strings.TrimSpace(skill.Name) == "" {
+		return fmt.Errorf("Skill name is required")
+	}
+	if skill.MinGroupLevel < 0 {
+		return fmt.Errorf("Skill min_group_level must be >= 0")
+	}
+	return nil
 }
 
 func upsertSkillPackageTx(ctx context.Context, tx *sql.Tx, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {

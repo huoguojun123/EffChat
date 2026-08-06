@@ -178,7 +178,8 @@ func (s *SkillService) persistSkillUpdate(ctx context.Context, userID int64, cur
 		CreatedBy:       current.CreatedBy,
 	}
 	record := s.buildImportRecord("update", skill, item, item.Files, report, &userID)
-	if err := s.persistSkillPackage(ctx, skill, item.Files, record, repository.SkillGovernanceMutation{
+	patch := repository.SkillMetadataPatch{Name: &skill.Name, Description: &skill.Description}
+	if err := s.persistSkillPackage(ctx, skill, item.Files, record, patch, repository.SkillGovernanceMutation{
 		Action: "import", ActorType: "import", ActorUserID: userID,
 		Reason: "admin updated Skill from imported package",
 	}); err != nil {

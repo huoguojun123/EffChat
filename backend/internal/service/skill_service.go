@@ -168,6 +168,7 @@ type preparedSkillPackage struct {
 	skill       *model.Skill
 	parsedFiles []skillparser.ParsedSkillFile
 	record      *model.SkillImportRecord
+	patch       repository.SkillMetadataPatch
 	mutation    repository.SkillGovernanceMutation
 }
 
@@ -305,7 +306,7 @@ func (s *SkillService) CreateManualContext(ctx context.Context, userID int64, re
 		Action: action, ActorType: "admin", ActorUserID: userID,
 		Reason: normalizeGovernanceReason("", "admin saved manual Skill package"),
 	}
-	if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, mutation); err != nil {
+	if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, repository.FullSkillMetadataPatch(skill), mutation); err != nil {
 		return nil, err
 	}
 	return toSkillResponse(skill, true), nil
@@ -319,6 +320,29 @@ func (s *SkillService) UpdateContext(ctx context.Context, userID int64, id strin
 	if userID <= 0 {
 		return nil, newSkillError(SkillErrorInvalid, "admin actor is required", nil)
 	}
+	patch, err := skillMetadataPatchFromUpdate(req)
+	if err != nil {
+		return nil, err
+	}
+	if req.EntryContent == nil {
+		skill, _, err := s.skillRepo.UpdateMetadataGoverned(ctx, id, patch, repository.SkillGovernanceMutation{
+			Action: "update", ActorType: "admin", ActorUserID: userID,
+			Reason: "admin updated Skill metadata",
+		})
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+			}
+			return nil, err
+		}
+		files, err := s.skillRepo.ListFiles(skill.ID)
+		if err != nil {
+			return nil, err
+		}
+		skill.Files = files
+		return toSkillResponse(skill, true), nil
+	}
+
 	skill, err := s.skillRepo.Get(id, true)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -326,63 +350,54 @@ func (s *SkillService) UpdateContext(ctx context.Context, userID int64, id strin
 		}
 		return nil, err
 	}
-	if req.Name != nil {
-		skill.Name = strings.TrimSpace(*req.Name)
-	}
-	if req.Description != nil {
-		skill.Description = strings.TrimSpace(*req.Description)
-	}
-	if req.Enabled != nil {
-		skill.Enabled = *req.Enabled
-	}
-	if req.MinGroupLevel != nil {
-		if *req.MinGroupLevel < 0 {
-			return nil, newSkillError(SkillErrorInvalid, "min_group_level must be >= 0", nil)
-		}
-		skill.MinGroupLevel = *req.MinGroupLevel
-	}
+	patch.Apply(skill)
 	if strings.TrimSpace(skill.Name) == "" {
 		return nil, newSkillError(SkillErrorInvalid, "name is required", nil)
 	}
-	if req.EntryContent != nil {
-		parsed, err := parseManualSkill(&SkillInput{
-			ID:            skill.ID,
-			Name:          skill.Name,
-			Description:   skill.Description,
-			EntryContent:  *req.EntryContent,
-			Files:         req.Files,
-			Enabled:       &skill.Enabled,
-			MinGroupLevel: skill.MinGroupLevel,
-		})
-		if err != nil {
-			return nil, newSkillError(SkillErrorInvalid, "invalid Skill package", err)
-		}
-		skill.Checksum = parsed.Checksum
-		skill.PackageChecksum = parsed.PackageChecksum
-		skill.SourcePath = &parsed.SourcePath
-		skill.EntryPath = "SKILL.md"
-		record := s.buildImportRecord("update", skill, parsed, parsed.Files, skillparser.ImportReport{}, &userID)
-		mutation := repository.SkillGovernanceMutation{
-			Action: "update", ActorType: "admin", ActorUserID: userID,
-			Reason: "admin updated manual Skill package",
-		}
-		if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, mutation); err != nil {
-			return nil, err
-		}
-		return toSkillResponse(skill, true), nil
-	}
-	if _, err := s.skillRepo.UpdateMetadataGoverned(ctx, skill, repository.SkillGovernanceMutation{
-		Action: "update", ActorType: "admin", ActorUserID: userID,
-		Reason: "admin updated Skill metadata",
-	}); err != nil {
-		return nil, err
-	}
-	files, err := s.skillRepo.ListFiles(skill.ID)
+	parsed, err := parseManualSkill(&SkillInput{
+		ID:            skill.ID,
+		Name:          skill.Name,
+		Description:   skill.Description,
+		EntryContent:  *req.EntryContent,
+		Files:         req.Files,
+		Enabled:       &skill.Enabled,
+		MinGroupLevel: skill.MinGroupLevel,
+	})
 	if err != nil {
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill package", err)
+	}
+	skill.Checksum = parsed.Checksum
+	skill.PackageChecksum = parsed.PackageChecksum
+	skill.SourcePath = &parsed.SourcePath
+	skill.EntryPath = "SKILL.md"
+	record := s.buildImportRecord("update", skill, parsed, parsed.Files, skillparser.ImportReport{}, &userID)
+	mutation := repository.SkillGovernanceMutation{
+		Action: "update", ActorType: "admin", ActorUserID: userID,
+		Reason: "admin updated manual Skill package",
+	}
+	if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, patch, mutation); err != nil {
 		return nil, err
 	}
-	skill.Files = files
 	return toSkillResponse(skill, true), nil
+}
+
+func skillMetadataPatchFromUpdate(req *SkillUpdateInput) (repository.SkillMetadataPatch, error) {
+	patch := repository.SkillMetadataPatch{Enabled: req.Enabled, MinGroupLevel: req.MinGroupLevel}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return repository.SkillMetadataPatch{}, newSkillError(SkillErrorInvalid, "name is required", nil)
+		}
+		patch.Name = &name
+	}
+	if req.Description != nil {
+		description := strings.TrimSpace(*req.Description)
+		patch.Description = &description
+	}
+	if req.MinGroupLevel != nil && *req.MinGroupLevel < 0 {
+		return repository.SkillMetadataPatch{}, newSkillError(SkillErrorInvalid, "min_group_level must be >= 0", nil)
+	}
+	return patch, nil
 }
 
 func (s *SkillService) Delete(userID int64, id string) error {
@@ -642,7 +657,7 @@ var skillUploadDir = filepolicy.SkillRoot
 
 var skillPackageGracePeriod = 16 * time.Minute
 
-func (s *SkillService) persistSkillPackage(ctx context.Context, skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord, mutation repository.SkillGovernanceMutation) error {
+func (s *SkillService) persistSkillPackage(ctx context.Context, skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord, patch repository.SkillMetadataPatch, mutation repository.SkillGovernanceMutation) error {
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
 
@@ -659,7 +674,7 @@ func (s *SkillService) persistSkillPackage(ctx context.Context, skill *model.Ski
 		record.SelectedFiles = marshalSelectedSkillFiles(parsedFiles)
 		record.FileManifest = marshalSkillFileManifest(files)
 	}
-	if _, err := s.skillRepo.UpsertPackageGoverned(ctx, skill, files, record, mutation); err != nil {
+	if _, err := s.skillRepo.UpsertPackageGoverned(ctx, skill, files, record, patch, mutation); err != nil {
 		s.scheduleSkillPackageCleanup()
 		return err
 	}
@@ -700,7 +715,7 @@ func (s *SkillService) persistSkillPackages(packages []preparedSkillPackage) err
 		writes = append(writes, preparedWrite{
 			oldPaths: oldPaths, packageRoot: packageRoot,
 			upsert: repository.GovernedSkillPackage{
-				Skill: item.skill, Files: files, Record: item.record, Mutation: item.mutation,
+				Skill: item.skill, Files: files, Record: item.record, Patch: item.patch, Mutation: item.mutation,
 			},
 		})
 	}

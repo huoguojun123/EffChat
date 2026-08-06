@@ -181,6 +181,8 @@ Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导
 
 一次 Git/Zip 多选导入可同时创建和覆盖多个 Skill，但浏览器只提交一个 import 请求，并用 `source_path -> target skill id` 明确重复候选的覆盖目标。服务在同一 `packageMu` 临界区先准备整批 content-addressed package root 和 manifest；repository 再用一个 SQL transaction 提交全部 active package、immutable import record 与 governance event。任一包写入或 SQL/commit 失败都不会切换任何 active Skill，未引用的新根由既有延迟清理回收；只有整批 commit 成功后旧根才进入宽限清理。相同目标与 package checksum 的重试是 no-op，不改变 `updated_at` 或追加 history，响应分别列出 created、updated 与 unchanged id。独立单 Skill 更新入口继续使用原单项事务，不引入任务队列或通用 batch framework。
 
+Skill metadata PATCH 与 manual/Git/Zip package replacement 在 repository transaction 内锁定并重读 canonical Skill，再按字段 owner 合并：package 请求拥有 source、checksum、entry 和 active files，只有请求显式携带的 name、description、enabled、min group level 才覆盖管理员 metadata；未携带字段保留锁内 canonical 值。治理事件的 before/after、immutable import record、active package/files 切换仍在同一事务提交，`packageMu`、content-addressed root 和延迟清理边界不变。不同 owner 的并发请求因此按锁顺序合成，同字段保持 last-write-wins；锁等待取消不提交，也不会产生治理历史。
+
 Skill 管理编辑器为实体选择维护单调 generation，为当前草稿维护 revision 与已确认 baseline；加载、保存、Git/Zip 预览和候选正文读取只有在实体、generation 及所需 revision 仍匹配时才能更新对应编辑器或弹窗。A→B→A 不能恢复旧 owner，旧请求的 `finally` 也不能清除新请求的 busy 状态。保存期间产生的新编辑继续保持 dirty，较早 revision 的成功只推进其 baseline；切换或关闭 dirty 草稿必须显式确认。服务端已经提交的保存、导入或更新仍必须汇入共享 Skill catalog，但迟到响应不得关闭、报错或覆盖后来打开的编辑器与弹窗。
 
 模型管理复用同一局部 editor ownership 契约：对象、渠道、新建和离开模型管理都会失效旧 generation；models.dev 单项能力、目录匹配、渠道模型发现、保存、导入、启停和删除分别只提交仍拥有对应 editor/request 的局部 UI。服务端已经完成的模型 mutation 始终收敛共享目录；保存期间继续修改只确认已提交 revision，不覆盖新草稿。模型创建从临时 key 过渡到持久 model id 时保留同一 revision 历史，而不是把新输入误判为已保存。dirty 模型切换、换渠道或返回渠道概览必须确认放弃。

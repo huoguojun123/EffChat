@@ -57,6 +57,18 @@ func TestSkillInputFailuresAreTyped(t *testing.T) {
 	}
 }
 
+func TestSkillMetadataUpdateNotFoundIsTyped(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	service := NewSkillService(repository.NewSkillRepository(db), nil, nil)
+	description := "fixture"
+
+	_, err := service.Update(7, fmt.Sprintf("missing-skill-%d", time.Now().UnixNano()), &SkillUpdateInput{Description: &description})
+	var skillErr *SkillError
+	if !errors.As(err, &skillErr) || skillErr.Kind != SkillErrorNotFound {
+		t.Fatalf("error=%v typed=%+v", err, skillErr)
+	}
+}
+
 func TestSkillCRUDSuccessWithManagedPackage(t *testing.T) {
 	db := testutil.OpenPostgresTestDB(t)
 	userID := time.Now().UnixNano()

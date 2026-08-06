@@ -162,31 +162,29 @@ func UpdateFontHandler(fontRepo *repository.FontRepository) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
-		font, err := fontRepo.Get(id)
-		if err != nil {
+		if _, err := fontRepo.Get(id); err != nil {
 			writeFontError(c, "load", err)
 			return
 		}
+		var patch repository.FontPatch
 		if req.DisplayName != nil {
-			font.DisplayName = strings.TrimSpace(*req.DisplayName)
+			value := strings.TrimSpace(*req.DisplayName)
+			patch.DisplayName = &value
 		}
 		if req.FamilyName != nil {
-			font.FamilyName = strings.TrimSpace(*req.FamilyName)
+			value := strings.TrimSpace(*req.FamilyName)
+			patch.FamilyName = &value
 		}
 		if req.Weight != nil {
-			font.Weight = normalizeFontWeight(*req.Weight)
+			value := normalizeFontWeight(*req.Weight)
+			patch.Weight = &value
 		}
 		if req.Style != nil {
-			font.Style = parseFontStyle(*req.Style)
+			value := parseFontStyle(*req.Style)
+			patch.Style = &value
 		}
-		if req.Enabled != nil {
-			font.Enabled = *req.Enabled
-		}
-		if font.DisplayName == "" || font.FamilyName == "" {
-			writePublicError(c, http.StatusBadRequest, "font_metadata_invalid", "display_name and family_name are required", false)
-			return
-		}
-		selection, err := fontRepo.Update(font)
+		patch.Enabled = req.Enabled
+		font, selection, err := fontRepo.PatchContext(c.Request.Context(), id, patch)
 		if err != nil {
 			writeFontError(c, "update", err)
 			return

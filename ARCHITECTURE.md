@@ -104,6 +104,8 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功；该公共错误契约不改变复合 PATCH 字段的更新语义。
 
+侧栏会话与文件夹置顶分别按对象 ID 维护局部 operation generation。乐观更新、服务端 canonical `pinned_at`、失败回滚和列表 reload 只有在仍拥有当前对象时才能提交；失败只恢复该对象的置顶字段，不能覆盖其他对象或该对象的标题、归属等并发变化。列表请求会保留其发起后出现或仍在途的 pin intent，账户 reset 会失效全部 owner。`PATCH /sessions/:id` 成功返回更新后的 Session，使客户端无需追加一个可能乱序的读取；该协调只覆盖侧栏 pin 字段，不扩展为通用 mutation framework 或跨标签页 CAS。
+
 send/preflight/retry/manual compaction 在 run accepted 前沿用相同公共错误契约：会话缺失为 404，账号失效为 401，消息输入为 400/413，retry 尾部竞态、已产生回答和附件失效为稳定 409；用户、Skill、历史、压缩任务状态、run reservation 和 SSE writer 的内部故障只返回带 request ID 的 retryable 5xx。manual compaction 一旦被 RunHub 接受，setup 阶段的会话/账号消失和 preserve target 竞态会写入同一 durable terminal 公共码，刷新和 replay 不会退化成内部错误原文。撤销压缩把缺失 checkpoint 归为 404，把非 manual 或已有新消息归为 409，repository/事务故障归为可追踪 5xx。
 
 checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成的上下文治理记录，不是用户发送消息。每日消息配额、准入检查和 Admin 今日用量统一排除 `metadata.compaction_summary=true`；普通用户消息即使后来被 retry 或删除，仍按既有消费语义计数。

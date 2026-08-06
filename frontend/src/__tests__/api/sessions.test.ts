@@ -44,10 +44,22 @@ describe("downloadFilename", () => {
 describe("updateSession", () => {
   beforeEach(() => patch.mockReset())
 
-  it("sends a memory toggle without a memory document", async () => {
-    patch.mockResolvedValue({ message: "session updated" })
+  it("returns the canonical session after a partial update", async () => {
+    const updated = {
+      id: 42,
+      user_id: 1,
+      folder_id: null,
+      title: "fixture",
+      title_generated: false,
+      model_id: "fixture-model",
+      provider: "openai",
+      memory_enabled: false,
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:01:00Z",
+    }
+    patch.mockResolvedValue(updated)
 
-    await updateSession(42, { memory_enabled: false })
+    await expect(updateSession(42, { memory_enabled: false })).resolves.toBe(updated)
 
     expect(patch).toHaveBeenCalledOnce()
     expect(patch).toHaveBeenCalledWith("/sessions/42", { memory_enabled: false })

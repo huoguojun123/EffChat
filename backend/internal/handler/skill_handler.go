@@ -65,7 +65,7 @@ func CreateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
-		skill, err := skillService.CreateManual(userID, &req)
+		skill, err := skillService.CreateManualContext(c.Request.Context(), userID, &req)
 		if err != nil {
 			writeSkillError(c, "create", err)
 			return
@@ -81,7 +81,7 @@ func UpdateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
-		skill, err := skillService.Update(middleware.GetUserID(c), c.Param("id"), &req)
+		skill, err := skillService.UpdateContext(c.Request.Context(), middleware.GetUserID(c), c.Param("id"), &req)
 		if err != nil {
 			writeSkillError(c, "update", err)
 			return
@@ -259,7 +259,7 @@ func ApplySkillZipUpdateHandler(skillService *service.SkillService) gin.HandlerF
 		if !ok {
 			return
 		}
-		result, err := skillService.UpdateZip(userID, c.Param("id"), data, &service.SkillUpdateApplyRequest{
+		result, err := skillService.UpdateZipContext(c.Request.Context(), userID, c.Param("id"), data, &service.SkillUpdateApplyRequest{
 			SourcePath:    sourcePath,
 			SelectedFiles: selectedFiles,
 		})

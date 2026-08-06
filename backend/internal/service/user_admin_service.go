@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,7 +192,11 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 }
 
 func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserResponse, error) {
-	user, err := s.userRepo.GetByIDIncludeInactive(userID)
+	return s.UpdateContext(context.Background(), userID, req)
+}
+
+func (s *UserAdminService) UpdateContext(ctx context.Context, userID int64, req *UpdateUserRequest) (*UserResponse, error) {
+	user, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +235,7 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 		user.Permissions = req.Permissions
 	}
 
-	if err := s.userRepo.UpdateAdminFields(user); err != nil {
+	if err := s.userRepo.UpdateAdminFieldsContext(ctx, user); err != nil {
 		return nil, err
 	}
 	if s.runHub != nil && invalidateActiveRuns {
@@ -264,17 +269,21 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 }
 
 func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest) error {
+	return s.ResetPasswordContext(context.Background(), userID, req)
+}
+
+func (s *UserAdminService) ResetPasswordContext(ctx context.Context, userID int64, req *ResetPasswordRequest) error {
 	if err := validateUserPassword(req.Password); err != nil {
 		return fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
-	if _, err := s.userRepo.GetByIDIncludeInactive(userID); err != nil {
+	if _, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID); err != nil {
 		return err
 	}
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
-	if err := s.userRepo.UpdatePassword(userID, string(hashedPassword)); err != nil {
+	if err := s.userRepo.UpdatePasswordContext(ctx, userID, string(hashedPassword)); err != nil {
 		return err
 	}
 	if s.runHub != nil {

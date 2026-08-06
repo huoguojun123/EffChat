@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"unicode/utf8"
@@ -61,6 +62,10 @@ func (s *UserGroupService) List() ([]*model.UserGroup, error) {
 }
 
 func (s *UserGroupService) Create(req *CreateGroupRequest) (*model.UserGroup, error) {
+	return s.CreateContext(context.Background(), req)
+}
+
+func (s *UserGroupService) CreateContext(ctx context.Context, req *CreateGroupRequest) (*model.UserGroup, error) {
 	if err := validateUserGroupText(req.Name, req.Description); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserGroupInvalid, err)
 	}
@@ -93,14 +98,18 @@ func (s *UserGroupService) Create(req *CreateGroupRequest) (*model.UserGroup, er
 		DailyOCRFileLimit:    req.DailyOCRFileLimit,
 		DailyOCRPageLimit:    req.DailyOCRPageLimit,
 	}
-	if err := s.groupRepo.Create(g); err != nil {
+	if err := s.groupRepo.CreateContext(ctx, g); err != nil {
 		return nil, err
 	}
 	return g, nil
 }
 
 func (s *UserGroupService) Update(id int64, req *UpdateGroupRequest) (*model.UserGroup, error) {
-	g, err := s.groupRepo.Get(id)
+	return s.UpdateContext(context.Background(), id, req)
+}
+
+func (s *UserGroupService) UpdateContext(ctx context.Context, id int64, req *UpdateGroupRequest) (*model.UserGroup, error) {
+	g, err := s.groupRepo.GetContext(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +170,7 @@ func (s *UserGroupService) Update(id int64, req *UpdateGroupRequest) (*model.Use
 	}); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserGroupInvalid, err)
 	}
-	if err := s.groupRepo.Update(g); err != nil {
+	if err := s.groupRepo.UpdateContext(ctx, g); err != nil {
 		return nil, err
 	}
 	return g, nil
@@ -220,5 +229,9 @@ func validateGroupLimits(limits groupLimitValues) error {
 }
 
 func (s *UserGroupService) Delete(id int64) error {
-	return s.groupRepo.Delete(id)
+	return s.DeleteContext(context.Background(), id)
+}
+
+func (s *UserGroupService) DeleteContext(ctx context.Context, id int64) error {
+	return s.groupRepo.DeleteContext(ctx, id)
 }

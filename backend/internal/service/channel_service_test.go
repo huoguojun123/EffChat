@@ -196,6 +196,34 @@ func TestChannelServiceExternalServiceSaveHonorsLockCancellation(t *testing.T) {
 	}
 }
 
+func TestChannelServiceExternalServiceReorderHonorsRowCancellation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	defer db.Close()
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	svc := NewChannelService(repository.NewChannelRepository(db))
+	key := fmt.Sprintf("context_reorder_%d", time.Now().UnixNano())
+	if _, err := svc.SaveExternalServiceContext(context.Background(), &ExternalServiceInput{Key: key, DisplayName: "Context Reorder", Kind: ServiceKindSearch, APIKey: "fixture-key"}); err != nil {
+		t.Fatalf("seed external service: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM external_services WHERE service_key = $1", key) })
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedKey string
+	if err := blocker.QueryRowContext(context.Background(), `SELECT service_key FROM external_services WHERE service_key = $1 FOR UPDATE`, key).Scan(&lockedKey); err != nil {
+		t.Fatalf("lock external service row: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := svc.ReorderExternalServicesContext(ctx, ServiceKindSearch, []string{key}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("reorder error = %v, want context deadline", err)
+	}
+}
+
 func TestChannelFromInputRejectsInvalidAdapter(t *testing.T) {
 	_, _, err := channelFromInput(&AIChannelInput{
 		Key:         "openai",

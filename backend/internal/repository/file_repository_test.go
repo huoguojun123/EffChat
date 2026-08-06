@@ -513,6 +513,53 @@ func TestFileRepository_RestartAndExpireOCRSource(t *testing.T) {
 	}
 }
 
+func TestFileRepository_ExpireStaleOCROriginalsHonorsContextCancellation(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	user := &model.User{Username: fmt.Sprintf("ocr_context_%d", time.Now().UnixNano()), PasswordHash: "x", Role: "user", IsActive: true, Permissions: []byte(`{}`), Preferences: []byte(`{}`)}
+	if err := NewUserRepository(db).Create(user); err != nil {
+		t.Fatal(err)
+	}
+	session := &model.Session{UserID: user.ID, Title: "OCR context", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM files WHERE user_id = $1", user.ID)
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", user.ID)
+	})
+	provider, source := "mineru", fmt.Sprintf("./storage/attachments/ocr-staging/%d/context.pdf", user.ID)
+	sessionID := session.ID
+	file := &model.File{UserID: user.ID, SessionID: &sessionID, FileName: "context.pdf", FilePath: source + ".txt", FileType: "application/pdf", FileSize: 10, ExtractStatus: "ready", OCRProvider: &provider, OCRSourcePath: &source}
+	repo := NewFileRepository(db)
+	if err := repo.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedID int64
+	if err := blocker.QueryRowContext(context.Background(), `SELECT id FROM files WHERE id = $1 FOR UPDATE`, file.ID).Scan(&lockedID); err != nil {
+		t.Fatalf("lock OCR file row: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = repo.ExpireStaleOCROriginalsContext(ctx, time.Now().Add(-24*time.Hour), time.Now(), 10)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expire OCR error = %v, want context deadline", err)
+	}
+	var storedSource *string
+	if err := db.QueryRow("SELECT ocr_source_path FROM files WHERE id = $1", file.ID).Scan(&storedSource); err != nil {
+		t.Fatalf("read canceled OCR file: %v", err)
+	}
+	if storedSource == nil || *storedSource != source {
+		t.Fatal("canceled OCR expiry committed source mutation")
+	}
+}
+
 func TestFileRepository_ExpireStaleOCROriginalsKeepsReferencedFiles(t *testing.T) {
 	db := setupTestDB(t)
 	t.Cleanup(func() { _ = db.Close() })

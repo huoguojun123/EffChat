@@ -53,7 +53,7 @@ func ChangePasswordHandler(authService *service.AuthService) gin.HandlerFunc {
 			return
 		}
 
-		if err := authService.ChangePassword(userID, &req); err != nil {
+		if err := authService.ChangePasswordContext(c.Request.Context(), userID, &req); err != nil {
 			writeUserProfileError(c, "change_password", err)
 			return
 		}
@@ -118,7 +118,7 @@ func UpdateUserHandler(userAdminService *service.UserAdminService, limiters ...*
 			writeInvalidJSON(c)
 			return
 		}
-		user, err := userAdminService.Update(userID, &req)
+		user, err := userAdminService.UpdateContext(c.Request.Context(), userID, &req)
 		if err != nil {
 			writeAdminUserError(c, "update", err)
 			return
@@ -145,7 +145,7 @@ func ResetUserPasswordHandler(userAdminService *service.UserAdminService) gin.Ha
 			return
 		}
 
-		if err := userAdminService.ResetPassword(userID, &req); err != nil {
+		if err := userAdminService.ResetPasswordContext(c.Request.Context(), userID, &req); err != nil {
 			writeAdminUserError(c, "reset_password", err)
 			return
 		}

@@ -133,10 +133,14 @@ func (s *SkillService) UpdateGit(ctx context.Context, userID int64, id string, r
 	if ref != "" {
 		sourceRef = &ref
 	}
-	return s.persistSkillUpdate(userID, current, parsed[0], report, SkillSourceGit, &sourceURL, sourceRef)
+	return s.persistSkillUpdate(ctx, userID, current, parsed[0], report, SkillSourceGit, &sourceURL, sourceRef)
 }
 
 func (s *SkillService) UpdateZip(userID int64, id string, data []byte, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
+	return s.UpdateZipContext(context.Background(), userID, id, data, req)
+}
+
+func (s *SkillService) UpdateZipContext(ctx context.Context, userID int64, id string, data []byte, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
 	current, err := s.skillRepo.Get(id, true)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
@@ -152,10 +156,10 @@ func (s *SkillService) UpdateZip(userID int64, id string, data []byte, req *Skil
 	if len(parsed) == 0 {
 		return nil, newSkillError(SkillErrorConflict, "selected Skill candidate is no longer available", nil)
 	}
-	return s.persistSkillUpdate(userID, current, parsed[0], report, SkillSourceZip, nil, nil)
+	return s.persistSkillUpdate(ctx, userID, current, parsed[0], report, SkillSourceZip, nil, nil)
 }
 
-func (s *SkillService) persistSkillUpdate(userID int64, current *model.Skill, item skillparser.ParsedSkill, report skillparser.ImportReport, sourceType string, sourceURL, sourceRef *string) (*SkillImportResult, error) {
+func (s *SkillService) persistSkillUpdate(ctx context.Context, userID int64, current *model.Skill, item skillparser.ParsedSkill, report skillparser.ImportReport, sourceType string, sourceURL, sourceRef *string) (*SkillImportResult, error) {
 	sourcePath := item.SourcePath
 	skill := &model.Skill{
 		ID:              current.ID,
@@ -174,7 +178,7 @@ func (s *SkillService) persistSkillUpdate(userID int64, current *model.Skill, it
 		CreatedBy:       current.CreatedBy,
 	}
 	record := s.buildImportRecord("update", skill, item, item.Files, report, &userID)
-	if err := s.persistSkillPackage(skill, item.Files, record, repository.SkillGovernanceMutation{
+	if err := s.persistSkillPackage(ctx, skill, item.Files, record, repository.SkillGovernanceMutation{
 		Action: "import", ActorType: "import", ActorUserID: userID,
 		Reason: "admin updated Skill from imported package",
 	}); err != nil {

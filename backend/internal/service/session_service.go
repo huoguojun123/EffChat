@@ -602,7 +602,11 @@ func (s *SessionService) Update(sessionID, userID int64, req *UpdateSessionReque
 
 // Delete 删除会话
 func (s *SessionService) Delete(sessionID, userID int64) error {
-	if err := s.sessionRepo.Delete(sessionID, userID); err != nil {
+	return s.DeleteContext(context.Background(), sessionID, userID)
+}
+
+func (s *SessionService) DeleteContext(ctx context.Context, sessionID, userID int64) error {
+	if err := s.sessionRepo.DeleteContext(ctx, sessionID, userID); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return ErrSessionNotFound
 		}

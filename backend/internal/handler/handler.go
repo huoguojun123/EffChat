@@ -353,7 +353,7 @@ func RegisterHandler(authService *service.AuthService, limiters ...*AuthRateLimi
 			return
 		}
 
-		resp, err := authService.Register(&req)
+		resp, err := authService.RegisterContext(c.Request.Context(), &req)
 		if err != nil {
 			limiter.RecordFailure(requestClientIP(c), req.Username)
 			writeAuthError(c, "register", err)
@@ -567,7 +567,7 @@ func DeleteSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			return
 		}
 
-		if err := sessionService.Delete(uri.ID, userID); err != nil {
+		if err := sessionService.DeleteContext(c.Request.Context(), uri.ID, userID); err != nil {
 			writeSessionMutationError(c, "delete", err)
 			return
 		}

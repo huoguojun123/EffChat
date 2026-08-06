@@ -334,6 +334,10 @@ func (s *AuthService) GetProfileContext(ctx context.Context, userID int64) (*mod
 
 // UpdateProfile 更新用户个人信息
 func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*model.User, error) {
+	return s.UpdateProfileContext(context.Background(), userID, req)
+}
+
+func (s *AuthService) UpdateProfileContext(ctx context.Context, userID int64, req *UpdateProfileRequest) (*model.User, error) {
 	if err := validateUserNickname(req.Nickname); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
 	}
@@ -342,37 +346,39 @@ func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*m
 		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
 	}
 
-	user, err := s.userRepo.GetByID(userID)
+	result, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
+		EmailSet:    req.Email != nil,
+		Email:       email,
+		NicknameSet: req.Nickname != nil,
+		Nickname:    req.Nickname,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if req.Nickname != nil {
-		user.Nickname = req.Nickname
-	}
-	if req.Email != nil {
-		user.Email = email
-	}
-
-	if err := s.userRepo.Update(user); err != nil {
-		return nil, err
-	}
-
-	user.PasswordHash = ""
-	return user, nil
+	result.User.PasswordHash = ""
+	return result.User, nil
 }
 
 func (s *AuthService) UpdateAvatar(userID int64, avatarURL *string) (*model.User, error) {
-	user, err := s.userRepo.GetByID(userID)
+	user, _, err := s.SwapAvatarContext(context.Background(), userID, avatarURL)
+	return user, err
+}
+
+func (s *AuthService) SwapAvatarContext(ctx context.Context, userID int64, avatarURL *string) (*model.User, *string, error) {
+	result, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
+		AvatarURLSet: true,
+		AvatarURL:    avatarURL,
+	})
 	if err != nil {
-		return nil, err
+		return nil, result.ReplacedAvatarURL, err
 	}
-	user.AvatarURL = avatarURL
-	if err := s.userRepo.Update(user); err != nil {
-		return nil, err
-	}
-	user.PasswordHash = ""
-	return user, nil
+	result.User.PasswordHash = ""
+	return result.User, result.ReplacedAvatarURL, nil
+}
+
+func (s *AuthService) IsAvatarURLReferencedContext(ctx context.Context, avatarURL string) (bool, error) {
+	return s.userRepo.IsAvatarURLReferencedContext(ctx, avatarURL)
 }
 
 // ChangePasswordRequest 修改密码请求

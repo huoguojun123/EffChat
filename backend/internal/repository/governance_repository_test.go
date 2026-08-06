@@ -149,7 +149,7 @@ func TestSkillGovernedPackageRollbackRestoresRetainedVersion(t *testing.T) {
 		}
 		files := []model.SkillFile{{RelativePath: "SKILL.md", StoragePath: path, Kind: "entry", Size: 7, Checksum: checksum}}
 		record := &model.SkillImportRecord{Action: action, SourceType: "manual", PackageChecksum: checksum, CreatedBy: &userID}
-		return repo.UpsertPackageGoverned(context.Background(), skill, files, record, SkillGovernanceMutation{
+		return repo.UpsertPackageGoverned(context.Background(), skill, files, record, FullSkillMetadataPatch(skill), SkillGovernanceMutation{
 			Action: action, ActorType: "admin", ActorUserID: userID, Reason: action + " fixture package",
 		})
 	}
@@ -200,15 +200,16 @@ func TestSkillGovernedMetadataDeleteAndCAS(t *testing.T) {
 	if err := repo.UpsertPackageWithRecord(skill, files, record); err != nil {
 		t.Fatal(err)
 	}
-	skill.Description = "first"
-	first, err := repo.UpdateMetadataGoverned(context.Background(), skill, SkillGovernanceMutation{
+	firstDescription := "first"
+	updated, first, err := repo.UpdateMetadataGoverned(context.Background(), skill.ID, SkillMetadataPatch{Description: &firstDescription}, SkillGovernanceMutation{
 		Action: "update", ActorType: "admin", ActorUserID: userID, Reason: "first metadata",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	skill.Description = "later"
-	if _, err := repo.UpdateMetadataGoverned(context.Background(), skill, SkillGovernanceMutation{
+	skill = updated
+	laterDescription := "later"
+	if _, _, err := repo.UpdateMetadataGoverned(context.Background(), skill.ID, SkillMetadataPatch{Description: &laterDescription}, SkillGovernanceMutation{
 		Action: "update", ActorType: "admin", ActorUserID: userID, Reason: "later metadata",
 	}); err != nil {
 		t.Fatal(err)

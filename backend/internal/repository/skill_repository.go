@@ -170,25 +170,6 @@ func (r *SkillRepository) Get(id string, includeDisabled bool) (*model.Skill, er
 	return skill, nil
 }
 
-func (r *SkillRepository) UpdateMetadata(skill *model.Skill) error {
-	result, err := r.db.Exec(`
-		UPDATE skills
-		SET name = $1, description = $2, enabled = $3, min_group_level = $4, updated_at = NOW()
-		WHERE id = $5 AND deleted_at IS NULL
-	`, skill.Name, skill.Description, skill.Enabled, skill.MinGroupLevel, skill.ID)
-	if err != nil {
-		return fmt.Errorf("failed to update skill: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get updated skill count: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("skill not found: %w", ErrNotFound)
-	}
-	return nil
-}
-
 func (r *SkillRepository) Delete(id string) error {
 	result, err := r.db.Exec(`UPDATE skills SET deleted_at = NOW(), enabled = false, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {

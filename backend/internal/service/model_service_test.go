@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -80,7 +81,7 @@ func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicMo
 	if err := svc.ValidateDefaultModel(modelID); err != nil {
 		t.Fatalf("validate runnable public default: %v", err)
 	}
-	if err := svc.Delete(modelID); err != nil {
+	if err := svc.Delete(context.Background(), modelID); err != nil {
 		t.Fatalf("disable model: %v", err)
 	}
 	stored, err := modelRepo.Get(modelID)
@@ -128,7 +129,7 @@ func TestModelServiceManualCatalogOverrideClearsDirectoryCheckTime(t *testing.T)
 
 	source := model.CatalogSourceManual
 	lifecycle := model.ModelLifecycleUnknown
-	updated, err := NewModelService(repo).Update(modelID, &UpdateModelRequest{
+	updated, err := NewModelService(repo).Update(context.Background(), modelID, &UpdateModelRequest{
 		CatalogSource: &source, LifecycleStatus: &lifecycle,
 	})
 	if err != nil {

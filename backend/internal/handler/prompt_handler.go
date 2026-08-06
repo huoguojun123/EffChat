@@ -244,30 +244,13 @@ func UpdatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 			return
 		}
 
-		if req.Title != nil {
-			p.Title = *req.Title
-		}
-		if req.Content != nil {
-			p.Content = *req.Content
-		}
-		if req.Description != nil {
-			p.Description = req.Description
-		}
-		if req.Tags != nil {
-			p.Tags = req.Tags
-		}
-		if req.GroupID.Set {
-			p.GroupID = req.GroupID.Value
-		}
-		if req.GroupName != nil {
-			p.GroupName = *req.GroupName
-		}
-		if err := promptRepo.UpdateContext(c.Request.Context(), p); err != nil {
+		updated, err := promptRepo.PatchContext(c.Request.Context(), id, userID, promptPatchFromRequest(&req, true))
+		if err != nil {
 			writePromptError(c, "update", err)
 			return
 		}
 
-		c.JSON(http.StatusOK, p)
+		c.JSON(http.StatusOK, updated)
 	}
 }
 
@@ -366,7 +349,7 @@ func UpdateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.Hand
 			return
 		}
 
-		p, err := promptRepo.GetSharedByID(id)
+		_, err := promptRepo.GetSharedByID(id)
 		if err != nil {
 			writePromptError(c, "load_shared", err)
 			return
@@ -382,25 +365,27 @@ func UpdateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.Hand
 			return
 		}
 
-		if req.Title != nil {
-			p.Title = *req.Title
-		}
-		if req.Content != nil {
-			p.Content = *req.Content
-		}
-		if req.Description != nil {
-			p.Description = req.Description
-		}
-		if req.Tags != nil {
-			p.Tags = req.Tags
-		}
-		if err := promptRepo.UpdateShared(p); err != nil {
+		updated, err := promptRepo.PatchSharedContext(c.Request.Context(), id, promptPatchFromRequest(&req, false))
+		if err != nil {
 			writePromptError(c, "update_shared", err)
 			return
 		}
 
-		c.JSON(http.StatusOK, p)
+		c.JSON(http.StatusOK, updated)
 	}
+}
+
+func promptPatchFromRequest(req *updatePromptRequest, includeGroups bool) repository.PromptPatch {
+	patch := repository.PromptPatch{
+		Title: req.Title, Content: req.Content,
+		Description: req.Description, DescriptionSet: req.Description != nil,
+		Tags: req.Tags, TagsSet: req.Tags != nil,
+	}
+	if includeGroups {
+		patch.GroupID, patch.GroupIDSet = req.GroupID.Value, req.GroupID.Set
+		patch.GroupName = req.GroupName
+	}
+	return patch
 }
 
 func DeleteSharedPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {

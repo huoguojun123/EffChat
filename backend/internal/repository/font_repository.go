@@ -1,14 +1,24 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type FontRepository struct {
 	db *sql.DB
+}
+
+type FontPatch struct {
+	DisplayName *string
+	FamilyName  *string
+	Weight      *int
+	Style       *string
+	Enabled     *bool
 }
 
 func NewFontRepository(db *sql.DB) *FontRepository {
@@ -128,40 +138,83 @@ func (r *FontRepository) Get(id int64) (*model.FontAsset, error) {
 }
 
 func (r *FontRepository) Update(font *model.FontAsset) (ChatFontSelection, error) {
-	tx, err := r.db.Begin()
+	_, selection, err := r.PatchContext(context.Background(), font.ID, FontPatch{
+		DisplayName: &font.DisplayName, FamilyName: &font.FamilyName,
+		Weight: &font.Weight, Style: &font.Style, Enabled: &font.Enabled,
+	})
+	return selection, err
+}
+
+func (r *FontRepository) PatchContext(ctx context.Context, id int64, patch FontPatch) (*model.FontAsset, ChatFontSelection, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ChatFontSelection{}, fmt.Errorf("begin font update: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("begin font patch: %w", err)
 	}
 	defer tx.Rollback()
-
-	result, err := tx.Exec(`
-		UPDATE font_assets
-		SET display_name = $1, family_name = $2, weight = $3, style = $4, enabled = $5, updated_at = NOW()
-		WHERE id = $6 AND deleted_at IS NULL
+	font, err := scanFontRow(tx.QueryRowContext(ctx, `
+		SELECT id, display_name, family_name, file_name, file_path, mime_type,
+		       file_size, checksum, weight, style, enabled, created_by,
+		       created_at, updated_at, deleted_at
+		FROM font_assets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+	`, id))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
+		}
+		return nil, ChatFontSelection{}, fmt.Errorf("get font for patch: %w", err)
+	}
+	if patch.DisplayName != nil {
+		font.DisplayName = strings.TrimSpace(*patch.DisplayName)
+	}
+	if patch.FamilyName != nil {
+		font.FamilyName = strings.TrimSpace(*patch.FamilyName)
+	}
+	if patch.Weight != nil {
+		font.Weight = *patch.Weight
+	}
+	if patch.Style != nil {
+		font.Style = *patch.Style
+	}
+	if patch.Enabled != nil {
+		font.Enabled = *patch.Enabled
+	}
+	if font.DisplayName == "" || font.FamilyName == "" {
+		return nil, ChatFontSelection{}, fmt.Errorf("font display_name and family_name are required")
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE font_assets SET display_name = $1, family_name = $2, weight = $3,
+		style = $4, enabled = $5, updated_at = NOW() WHERE id = $6 AND deleted_at IS NULL
 	`, font.DisplayName, font.FamilyName, font.Weight, font.Style, font.Enabled, font.ID)
 	if err != nil {
-		return ChatFontSelection{}, fmt.Errorf("failed to update font: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("patch font: %w", err)
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return ChatFontSelection{}, fmt.Errorf("read updated font row count: %w", err)
-	}
-	if rows == 0 {
-		return ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return nil, ChatFontSelection{}, fmt.Errorf("read patched font rows: %w", err)
+		}
+		return nil, ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
 	}
 	if !font.Enabled {
 		if err := clearSelectedFontTx(tx, font.ID); err != nil {
-			return ChatFontSelection{}, err
+			return nil, ChatFontSelection{}, err
 		}
 	}
 	selection, err := getSelectedIDs(tx)
 	if err != nil {
-		return ChatFontSelection{}, err
+		return nil, ChatFontSelection{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return ChatFontSelection{}, fmt.Errorf("commit font update: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("commit font patch: %w", err)
 	}
-	return selection, nil
+	return font, selection, nil
+}
+
+func scanFontRow(row *sql.Row) (*model.FontAsset, error) {
+	font := &model.FontAsset{}
+	err := row.Scan(&font.ID, &font.DisplayName, &font.FamilyName, &font.FileName, &font.FilePath,
+		&font.MimeType, &font.FileSize, &font.Checksum, &font.Weight, &font.Style,
+		&font.Enabled, &font.CreatedBy, &font.CreatedAt, &font.UpdatedAt, &font.DeletedAt)
+	return font, err
 }
 
 func (r *FontRepository) Delete(id int64) (ChatFontSelection, error) {

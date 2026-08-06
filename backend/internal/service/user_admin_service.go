@@ -196,11 +196,6 @@ func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserRe
 }
 
 func (s *UserAdminService) UpdateContext(ctx context.Context, userID int64, req *UpdateUserRequest) (*UserResponse, error) {
-	user, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	invalidateActiveRuns := (req.Role != nil && *req.Role != user.Role) || (req.IsActive != nil && *req.IsActive != user.IsActive)
 	email, err := normalizeOptionalEmail(req.Email)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
@@ -213,33 +208,37 @@ func (s *UserAdminService) UpdateContext(ctx context.Context, userID int64, req 
 		if err := validateRole(*req.Role); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 		}
-		user.Role = *req.Role
 	}
-	if req.IsActive != nil {
-		user.IsActive = *req.IsActive
+	nickname := req.Nickname
+	if nickname != nil && *nickname == "" {
+		nickname = nil
 	}
-	if req.Email != nil {
-		user.Email = email
-	}
-	if req.Nickname != nil {
-		if *req.Nickname == "" {
-			user.Nickname = nil
-		} else {
-			user.Nickname = req.Nickname
-		}
-	}
+	permissionsSet := len(req.Permissions) > 0
 	if len(req.Permissions) > 0 {
 		if !json.Valid(req.Permissions) {
 			return nil, fmt.Errorf("%w: permissions must be valid json", ErrUserAdminInvalid)
 		}
-		user.Permissions = req.Permissions
 	}
 
-	if err := s.userRepo.UpdateAdminFieldsContext(ctx, user); err != nil {
+	result, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
+		EmailSet:       req.Email != nil,
+		Email:          email,
+		NicknameSet:    req.Nickname != nil,
+		Nickname:       nickname,
+		Role:           req.Role,
+		PermissionsSet: permissionsSet,
+		Permissions:    req.Permissions,
+		IsActive:       req.IsActive,
+	})
+	if err != nil {
 		return nil, err
 	}
-	if s.runHub != nil && invalidateActiveRuns {
+	if s.runHub != nil && result.InvalidatedRuns {
 		s.runHub.CancelByUser(userID)
+	}
+	user, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
 	return toUserResponse(user), nil
 }

@@ -39,13 +39,11 @@ func TestUserRepositoryUpdateClassifiesConstraintAndMissingFailures(t *testing.T
 		t.Fatalf("create second user: %v", err)
 	}
 
-	second.Email = &firstEmail
-	if err := repo.Update(second); !errors.Is(err, ErrUserConflict) {
+	if _, err := repo.UpdateFieldsContext(t.Context(), second.ID, UserPatch{EmailSet: true, Email: &firstEmail}); !errors.Is(err, ErrUserConflict) {
 		t.Fatalf("duplicate email error = %v, want ErrUserConflict", err)
 	}
 
-	missing := &model.User{ID: 999999999, Permissions: []byte(`{}`), Preferences: []byte(`{}`)}
-	if err := repo.Update(missing); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.UpdateFieldsContext(t.Context(), 999999999, UserPatch{EmailSet: true}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing user error = %v, want ErrNotFound", err)
 	}
 }

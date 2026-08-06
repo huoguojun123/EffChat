@@ -18,8 +18,14 @@ func TestPromptRepositoryClassifiesMissingWriteTargets(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{name: "personal update", run: func() error { return repo.UpdateContext(context.Background(), missing) }},
-		{name: "shared update", run: func() error { return repo.UpdateShared(missing) }},
+		{name: "personal update", run: func() error {
+			_, err := repo.PatchContext(context.Background(), missing.ID, missing.UserID, PromptPatch{Title: &missing.Title})
+			return err
+		}},
+		{name: "shared update", run: func() error {
+			_, err := repo.PatchSharedContext(context.Background(), missing.ID, PromptPatch{Title: &missing.Title})
+			return err
+		}},
 		{name: "personal delete", run: func() error { return repo.Delete(missing.ID, missing.UserID) }},
 		{name: "shared delete", run: func() error { return repo.DeleteShared(missing.ID) }},
 	}

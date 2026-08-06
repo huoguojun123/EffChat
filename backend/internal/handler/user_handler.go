@@ -32,7 +32,7 @@ func UpdateMeHandler(authService *service.AuthService) gin.HandlerFunc {
 			return
 		}
 
-		user, err := authService.UpdateProfile(userID, &req)
+		user, err := authService.UpdateProfileContext(c.Request.Context(), userID, &req)
 		if err != nil {
 			writeUserProfileError(c, "update", err)
 			return

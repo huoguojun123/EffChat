@@ -150,7 +150,7 @@ func UpdateModelHandler(modelService *service.ModelService) gin.HandlerFunc {
 			return
 		}
 
-		m, err := modelService.Update(id, &req)
+		m, err := modelService.Update(c.Request.Context(), id, &req)
 		if err != nil {
 			writeModelError(c, "update", err)
 			return
@@ -165,7 +165,7 @@ func DeleteModelHandler(modelService *service.ModelService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := modelIDParam(c)
 
-		if err := modelService.Delete(id); err != nil {
+		if err := modelService.Delete(c.Request.Context(), id); err != nil {
 			writeModelError(c, "delete", err)
 			return
 		}

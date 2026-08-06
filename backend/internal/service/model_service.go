@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -212,103 +213,42 @@ func (s *ModelService) Create(req *CreateModelRequest) (*model.Model, error) {
 }
 
 // Update 部分更新模型（模型须已存在）
-func (s *ModelService) Update(id string, req *UpdateModelRequest) (*model.Model, error) {
-	m, err := s.modelRepo.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	if m == nil {
+func (s *ModelService) Update(ctx context.Context, id string, req *UpdateModelRequest) (*model.Model, error) {
+	patch := modelPatchFromRequest(req)
+	updated, err := s.modelRepo.UpdateFields(ctx, id, patch, validateModelInput)
+	if errors.Is(err, repository.ErrNotFound) {
 		return nil, ErrModelNotFound
 	}
-
-	if req.DisplayName != nil {
-		m.DisplayName = *req.DisplayName
-	}
-	if req.Provider != nil {
-		m.Provider = *req.Provider
-	}
-	if req.Vision != nil {
-		m.Vision = *req.Vision
-	}
-	if req.ToolUse != nil {
-		m.ToolUse = *req.ToolUse
-	}
-	if req.Reasoning != nil {
-		m.Reasoning = *req.Reasoning
-	}
-	if req.ThinkingFormat != nil {
-		m.ThinkingFormat = modelbank.NormalizeThinkingFormat(*req.ThinkingFormat)
-	}
-	if req.SearchImpl != nil {
-		m.SearchImpl = *req.SearchImpl
-	}
-	if req.ContextWindow != nil {
-		m.ContextWindow = *req.ContextWindow
-	}
-	if req.MaxOutput != nil {
-		m.MaxOutput = *req.MaxOutput
-	}
-	if req.Enabled != nil {
-		m.Enabled = *req.Enabled
-	}
-	if req.MinGroupLevel != nil {
-		m.MinGroupLevel = *req.MinGroupLevel
-	}
-	if req.SortOrder != nil {
-		m.SortOrder = *req.SortOrder
-	}
-	if req.CatalogSource != nil {
-		m.CatalogSource = model.NormalizeCatalogSource(*req.CatalogSource)
-		// A manual capability override no longer represents a time-bounded
-		// directory check. Clear the old timestamp unless this request carries
-		// a replacement source check below.
-		if m.CatalogSource == model.CatalogSourceManual && req.CatalogCheckedAt == nil {
-			m.CatalogCheckedAt = nil
-		}
-	}
-	if req.CatalogCheckedAt != nil {
-		m.CatalogCheckedAt = req.CatalogCheckedAt
-	}
-	if req.LifecycleStatus != nil {
-		m.LifecycleStatus = model.NormalizeModelLifecycleStatus(*req.LifecycleStatus)
-	}
-	if req.TemperaturePolicy != nil {
-		m.TemperaturePolicy = model.NormalizeTemperaturePolicy(*req.TemperaturePolicy)
-		if m.TemperaturePolicy != model.TemperaturePolicyFixed {
-			m.TemperatureValue = nil
-		}
-	}
-	if req.TemperatureValue != nil {
-		m.TemperatureValue = req.TemperatureValue
-	}
-	if req.OpenAIRequestProfile != nil {
-		m.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(*req.OpenAIRequestProfile)
-	}
-
-	if err := validateModelInput(m); err != nil {
-		return nil, err
-	}
-	if err := s.modelRepo.Upsert(m); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	if err := s.reloadRegistry(); err != nil {
 		return nil, err
 	}
-	return s.applyThinkingRuntimeMetadata(m), nil
+	return s.applyThinkingRuntimeMetadata(updated), nil
+}
+
+func modelPatchFromRequest(req *UpdateModelRequest) repository.ModelPatch {
+	return repository.ModelPatch{
+		DisplayName: req.DisplayName, Provider: req.Provider, Vision: req.Vision,
+		ToolUse: req.ToolUse, Reasoning: req.Reasoning, ThinkingFormat: req.ThinkingFormat,
+		SearchImpl: req.SearchImpl, ContextWindow: req.ContextWindow, MaxOutput: req.MaxOutput,
+		Enabled: req.Enabled, MinGroupLevel: req.MinGroupLevel, SortOrder: req.SortOrder,
+		CatalogSource: req.CatalogSource, CatalogCheckedAt: req.CatalogCheckedAt,
+		LifecycleStatus: req.LifecycleStatus, TemperaturePolicy: req.TemperaturePolicy,
+		TemperatureValue: req.TemperatureValue, OpenAIRequestProfile: req.OpenAIRequestProfile,
+	}
 }
 
 // Delete transitions a model to disabled so existing sessions fail with a clear,
 // recoverable model state instead of losing their configured model reference.
-func (s *ModelService) Delete(id string) error {
-	m, err := s.modelRepo.Get(id)
-	if err != nil {
-		return err
-	}
-	if m == nil {
+func (s *ModelService) Delete(ctx context.Context, id string) error {
+	disabled := false
+	_, err := s.modelRepo.UpdateFields(ctx, id, repository.ModelPatch{Enabled: &disabled}, nil)
+	if errors.Is(err, repository.ErrNotFound) {
 		return ErrModelNotFound
 	}
-	m.Enabled = false
-	if err := s.modelRepo.Upsert(m); err != nil {
+	if err != nil {
 		return err
 	}
 	return s.reloadRegistry()

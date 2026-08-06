@@ -24,6 +24,65 @@ type UserRepository struct {
 	db *sql.DB
 }
 
+// UserPatch contains only fields present in a profile or administrator PATCH.
+// Nullable profile fields carry a separate Set flag so JSON null/blank values
+// remain distinguishable from fields omitted by the client.
+type UserPatch struct {
+	EmailSet       bool
+	Email          *string
+	NicknameSet    bool
+	Nickname       *string
+	Role           *string
+	PermissionsSet bool
+	Permissions    []byte
+	IsActive       *bool
+}
+
+func (p UserPatch) Apply(user *model.User) {
+	if p.EmailSet {
+		user.Email = p.Email
+	}
+	if p.NicknameSet {
+		user.Nickname = p.Nickname
+	}
+	if p.Role != nil {
+		user.Role = *p.Role
+	}
+	if p.PermissionsSet {
+		user.Permissions = p.Permissions
+	}
+	if p.IsActive != nil {
+		user.IsActive = *p.IsActive
+	}
+}
+
+const userColumns = `id, username, email, password_hash, nickname, avatar_url, role, group_id,
+	permissions, preferences, is_active, auth_version, created_at, updated_at, last_login_at`
+
+func scanUser(s interface {
+	Scan(dest ...interface{}) error
+}) (*model.User, error) {
+	user := &model.User{}
+	err := s.Scan(
+		&user.ID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.Nickname,
+		&user.AvatarURL,
+		&user.Role,
+		&user.GroupID,
+		&user.Permissions,
+		&user.Preferences,
+		&user.IsActive,
+		&user.AuthVersion,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&user.LastLoginAt,
+	)
+	return user, err
+}
+
 func lockUserAdminInvariant(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", userAdminInvariantLock); err != nil {
 		return fmt.Errorf("lock user admin invariant: %w", userContextError(ctx, err))
@@ -249,76 +308,103 @@ func (r *UserRepository) UpdateAdminFields(user *model.User) error {
 }
 
 func (r *UserRepository) UpdateAdminFieldsContext(ctx context.Context, user *model.User) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+	updated, _, err := r.UpdateFieldsContext(ctx, user.ID, UserPatch{
+		EmailSet: true, Email: user.Email,
+		NicknameSet: true, Nickname: user.Nickname,
+		Role:           &user.Role,
+		PermissionsSet: true, Permissions: user.Permissions,
+		IsActive: &user.IsActive,
+	})
 	if err != nil {
-		return fmt.Errorf("begin admin user update transaction: %w", userContextError(ctx, err))
-	}
-	defer tx.Rollback()
-	if err := lockUserAdminInvariant(ctx, tx); err != nil {
 		return err
 	}
+	user.Email = updated.Email
+	user.Nickname = updated.Nickname
+	user.Role = updated.Role
+	user.Permissions = updated.Permissions
+	user.IsActive = updated.IsActive
+	user.AuthVersion = updated.AuthVersion
+	user.UpdatedAt = updated.UpdatedAt
+	return nil
+}
 
-	var currentRole string
-	var currentActive bool
-	if err := tx.QueryRowContext(ctx, `SELECT role, is_active FROM users WHERE id = $1 FOR UPDATE`, user.ID).Scan(&currentRole, &currentActive); err == sql.ErrNoRows {
-		return fmt.Errorf("user not found: %w", ErrNotFound)
-	} else if err != nil {
-		return fmt.Errorf("load user for admin update: %w", userContextError(ctx, err))
+// UpdateFieldsContext locks and reloads the canonical user before applying a
+// partial mutation. The row lock is deliberately acquired before reading any
+// mutable field: serializing only the final UPDATE would still write values
+// copied from an older service snapshot over a concurrent request.
+//
+// The returned boolean reports whether this mutation changed role or active
+// state and therefore invalidated authentication and in-flight chat runs.
+func (r *UserRepository) UpdateFieldsContext(ctx context.Context, userID int64, patch UserPatch) (*model.User, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("begin user update transaction: %w", userContextError(ctx, err))
 	}
-	if currentRole == "admin" && currentActive && (user.Role != "admin" || !user.IsActive) {
+	defer tx.Rollback()
+	// Profile-only patches need only the target row lock. Role or account-state
+	// changes also take the global admin invariant lock so two different user
+	// rows cannot concurrently remove the final active administrator.
+	if patch.Role != nil || patch.IsActive != nil {
+		if err := lockUserAdminInvariant(ctx, tx); err != nil {
+			return nil, false, err
+		}
+	}
+
+	current, err := scanUser(tx.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1 FOR UPDATE`, userID))
+	if err == sql.ErrNoRows {
+		return nil, false, fmt.Errorf("user not found: %w", ErrNotFound)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("load user for update: %w", userContextError(ctx, err))
+	}
+	currentRole := current.Role
+	currentActive := current.IsActive
+	patch.Apply(current)
+	if currentRole == "admin" && currentActive && (current.Role != "admin" || !current.IsActive) {
 		var activeAdmins int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = true`).Scan(&activeAdmins); err != nil {
-			return fmt.Errorf("count active admins: %w", userContextError(ctx, err))
+			return nil, false, fmt.Errorf("count active admins: %w", userContextError(ctx, err))
 		}
 		if activeAdmins <= 1 {
-			return ErrLastActiveAdmin
+			return nil, false, ErrLastActiveAdmin
 		}
 	}
-	invalidateRuns := currentRole != user.Role || currentActive != user.IsActive
+	invalidateRuns := currentRole != current.Role || currentActive != current.IsActive
 
 	query := `
 		UPDATE users
-		SET email = $1, nickname = $2, avatar_url = $3, role = $4,
-		    permissions = $5, preferences = $6, is_active = $7,
-		    auth_version = auth_version + CASE WHEN $8 THEN 1 ELSE 0 END,
+		SET email = $1, nickname = $2, role = $3,
+		    permissions = $4, is_active = $5,
+		    auth_version = auth_version + CASE WHEN $6 THEN 1 ELSE 0 END,
 		    updated_at = NOW()
-		WHERE id = $9
-	`
-	result, err := tx.ExecContext(
+		WHERE id = $7
+		RETURNING ` + userColumns
+	updated, err := scanUser(tx.QueryRowContext(
 		ctx,
 		query,
-		user.Email,
-		user.Nickname,
-		user.AvatarURL,
-		user.Role,
-		user.Permissions,
-		user.Preferences,
-		user.IsActive,
+		current.Email,
+		current.Nickname,
+		current.Role,
+		current.Permissions,
+		current.IsActive,
 		invalidateRuns,
-		user.ID,
-	)
+		userID,
+	))
 	if err != nil {
 		if IsUniqueViolation(err) {
-			return fmt.Errorf("%w: email already exists", ErrUserConflict)
+			return nil, false, fmt.Errorf("%w: email already exists", ErrUserConflict)
 		}
-		return fmt.Errorf("failed to update user: %w", userContextError(ctx, err))
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read updated administrator user rows: %w", userContextError(ctx, err))
-	}
-	if rows == 0 {
-		return fmt.Errorf("user not found: %w", ErrNotFound)
+		return nil, false, fmt.Errorf("failed to update user: %w", userContextError(ctx, err))
 	}
 	if invalidateRuns {
-		if err := cancelRunningChatRuns(ctx, tx, user.ID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
-			return fmt.Errorf("cancel runs after account change: %w", userContextError(ctx, err))
+		if err := cancelRunningChatRuns(ctx, tx, userID, nil, "account_changed", "account_changed", "账号状态已变更，请重新登录", false); err != nil {
+			return nil, false, fmt.Errorf("cancel runs after account change: %w", userContextError(ctx, err))
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit admin user update transaction: %w", userContextError(ctx, err))
+		return nil, false, fmt.Errorf("commit user update transaction: %w", userContextError(ctx, err))
 	}
-	return nil
+	return updated, invalidateRuns, nil
 }
 
 // UpdatePassword 更新用户密码

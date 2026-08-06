@@ -334,6 +334,10 @@ func (s *AuthService) GetProfileContext(ctx context.Context, userID int64) (*mod
 
 // UpdateProfile 更新用户个人信息
 func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*model.User, error) {
+	return s.UpdateProfileContext(context.Background(), userID, req)
+}
+
+func (s *AuthService) UpdateProfileContext(ctx context.Context, userID int64, req *UpdateProfileRequest) (*model.User, error) {
 	if err := validateUserNickname(req.Nickname); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
 	}
@@ -342,19 +346,13 @@ func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*m
 		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)
 	}
 
-	user, err := s.userRepo.GetByID(userID)
+	user, _, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
+		EmailSet:    req.Email != nil,
+		Email:       email,
+		NicknameSet: req.Nickname != nil,
+		Nickname:    req.Nickname,
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	if req.Nickname != nil {
-		user.Nickname = req.Nickname
-	}
-	if req.Email != nil {
-		user.Email = email
-	}
-
-	if err := s.userRepo.Update(user); err != nil {
 		return nil, err
 	}
 

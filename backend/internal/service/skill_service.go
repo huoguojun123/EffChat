@@ -256,6 +256,10 @@ func (s *SkillService) ListForUser(userID int64) ([]*SkillResponse, error) {
 }
 
 func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillResponse, error) {
+	return s.CreateManualContext(context.Background(), userID, req)
+}
+
+func (s *SkillService) CreateManualContext(ctx context.Context, userID int64, req *SkillInput) (*SkillResponse, error) {
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -301,13 +305,17 @@ func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillRespon
 		Action: action, ActorType: "admin", ActorUserID: userID,
 		Reason: normalizeGovernanceReason("", "admin saved manual Skill package"),
 	}
-	if err := s.persistSkillPackage(skill, parsed.Files, record, mutation); err != nil {
+	if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, mutation); err != nil {
 		return nil, err
 	}
 	return toSkillResponse(skill, true), nil
 }
 
 func (s *SkillService) Update(userID int64, id string, req *SkillUpdateInput) (*SkillResponse, error) {
+	return s.UpdateContext(context.Background(), userID, id, req)
+}
+
+func (s *SkillService) UpdateContext(ctx context.Context, userID int64, id string, req *SkillUpdateInput) (*SkillResponse, error) {
 	if userID <= 0 {
 		return nil, newSkillError(SkillErrorInvalid, "admin actor is required", nil)
 	}
@@ -358,12 +366,12 @@ func (s *SkillService) Update(userID int64, id string, req *SkillUpdateInput) (*
 			Action: "update", ActorType: "admin", ActorUserID: userID,
 			Reason: "admin updated manual Skill package",
 		}
-		if err := s.persistSkillPackage(skill, parsed.Files, record, mutation); err != nil {
+		if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, mutation); err != nil {
 			return nil, err
 		}
 		return toSkillResponse(skill, true), nil
 	}
-	if _, err := s.skillRepo.UpdateMetadataGoverned(context.Background(), skill, repository.SkillGovernanceMutation{
+	if _, err := s.skillRepo.UpdateMetadataGoverned(ctx, skill, repository.SkillGovernanceMutation{
 		Action: "update", ActorType: "admin", ActorUserID: userID,
 		Reason: "admin updated Skill metadata",
 	}); err != nil {
@@ -634,7 +642,7 @@ var skillUploadDir = filepolicy.SkillRoot
 
 var skillPackageGracePeriod = 16 * time.Minute
 
-func (s *SkillService) persistSkillPackage(skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord, mutation repository.SkillGovernanceMutation) error {
+func (s *SkillService) persistSkillPackage(ctx context.Context, skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord, mutation repository.SkillGovernanceMutation) error {
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
 
@@ -651,7 +659,7 @@ func (s *SkillService) persistSkillPackage(skill *model.Skill, parsedFiles []ski
 		record.SelectedFiles = marshalSelectedSkillFiles(parsedFiles)
 		record.FileManifest = marshalSkillFileManifest(files)
 	}
-	if _, err := s.skillRepo.UpsertPackageGoverned(context.Background(), skill, files, record, mutation); err != nil {
+	if _, err := s.skillRepo.UpsertPackageGoverned(ctx, skill, files, record, mutation); err != nil {
 		s.scheduleSkillPackageCleanup()
 		return err
 	}

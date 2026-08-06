@@ -22,20 +22,31 @@ func (r *SkillRepository) UpsertPackage(skill *model.Skill, files []model.SkillF
 }
 
 func (r *SkillRepository) UpsertPackageWithRecord(skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {
-	tx, err := r.db.Begin()
+	return r.UpsertPackageWithRecordContext(context.Background(), skill, files, record)
+}
+
+func (r *SkillRepository) UpsertPackageWithRecordContext(ctx context.Context, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to begin skill tx: %w", err)
+		return fmt.Errorf("failed to begin skill tx: %w", skillContextError(ctx, err))
 	}
 	defer tx.Rollback()
-	if err := upsertSkillPackageTx(context.Background(), tx, skill, files, record); err != nil {
+	if err := upsertSkillPackageTx(ctx, tx, skill, files, record); err != nil {
 		return err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit skill tx: %w", err)
+		return fmt.Errorf("failed to commit skill tx: %w", skillContextError(ctx, err))
 	}
 	skill.Files = files
 	return nil
+}
+
+func skillContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func (r *SkillRepository) ListImportRecords(skillID string, limit int) ([]model.SkillImportRecord, error) {

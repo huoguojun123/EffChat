@@ -29,44 +29,8 @@ jobs:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-
-          case "${GITHUB_REF_NAME}" in
-            v*) ;;
-            *) echo "release workflow only accepts v* tags" >&2; exit 1 ;;
-          esac
-
           git fetch --no-tags origin main:refs/remotes/origin/main
-          if ! git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main; then
-            echo "release tag ${GITHUB_REF_NAME} does not point to a commit reachable from origin/main" >&2
-            exit 1
-          fi
-
-          required_checks=(
-            "Backend"
-            "Frontend"
-            "Python extractor"
-            "PostgreSQL integration"
-            "Compose and containers"
-            "Gitleaks"
-          )
-          check_runs="$(gh api --paginate \
-            -H 'Accept: application/vnd.github+json' \
-            "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
-            --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')"
-
-          for required in "${required_checks[@]}"; do
-            matching="$(printf '%s\n' "${check_runs}" | awk -F '\t' -v expected="${required}" \
-              '$1 == expected || $1 == "CI / " expected || $1 == "Secret scan / " expected')"
-            if [ -z "${matching}" ]; then
-              echo "required CI check is missing for ${GITHUB_SHA}: ${required}" >&2
-              exit 1
-            fi
-            if ! printf '%s\n' "${matching}" | awk -F '\t' '$2 == "completed" && $3 == "success" { found = 1 } END { exit(found ? 0 : 1) }'; then
-              echo "required CI check did not complete successfully: ${required}" >&2
-              printf '%s\n' "${matching}" >&2
-              exit 1
-            fi
-          done
+          scripts/verify-release-ref.sh
 
   build:
     name: Build ${{ matrix.component.name }}

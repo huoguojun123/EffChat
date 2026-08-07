@@ -55,7 +55,8 @@ scripts/docker-build.sh up
 
 EffChat 自有源码采用 [Apache License 2.0](LICENSE)。第三方依赖与素材继续
 遵循各自许可证，主要依赖及非代码素材的声明见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [NOTICE](NOTICE)。
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [NOTICE](NOTICE)。三个应用
+镜像还会在构建时从实际分发依赖生成可离线校验的组件级许可归档。
 
 ## 开源发布
 

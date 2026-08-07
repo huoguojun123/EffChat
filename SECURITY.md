@@ -31,3 +31,9 @@ reporter unless anonymity is requested.
 EffChat is self-hosted. Operators are responsible for strong database and JWT
 secrets, TLS termination, backups, access control, and keeping the host,
 containers, dependencies, and EffChat release current.
+
+Do not copy a running PostgreSQL data directory as a backup. Use the documented
+`scripts/backup-restore.sh backup` artifact workflow, then protect the resulting
+directory with restrictive permissions, encryption at rest, off-host copies,
+retention limits, and secure deletion. Backup artifacts intentionally exclude
+`.env.docker` and deployment secrets.

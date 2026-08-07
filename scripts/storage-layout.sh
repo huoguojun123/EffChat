@@ -9,6 +9,8 @@ else
 fi
 ENV_FILE="${ENV_FILE:-$DEPLOY_ROOT/.env.docker}"
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$SRC_DIR/docker-compose.yml")
+# shellcheck source=compose-env.sh
+source "$SRC_DIR/scripts/compose-env.sh"
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "help" ]; then
   cat <<'USAGE'
@@ -26,18 +28,6 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "Missing deployment environment file: $ENV_FILE" >&2
   exit 1
 fi
-
-env_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $0 !~ /^[[:space:]]*#/ && $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-      print
-      exit
-    }
-  ' "$ENV_FILE"
-}
 
 env_value_or() {
   local value

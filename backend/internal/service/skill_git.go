@@ -3,35 +3,25 @@ package service
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/EffChat/internal/netpolicy"
 	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 var gitRefPattern = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,120}$`)
 
-var trustedGitHosts = map[string]struct{}{
-	"github.com":    {},
-	"gitlab.com":    {},
-	"bitbucket.org": {},
-	"codeberg.org":  {},
-}
-
 func listGitBranches(ctx context.Context, repoURL string) ([]string, string, error) {
-	if err := validateGitURL(ctx, repoURL); err != nil {
+	transport, err := resolveGitTransport(ctx, repoURL)
+	if err != nil {
 		return nil, "", err
 	}
 	lsCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := gitRemoteCommand(lsCtx, "ls-remote", "--symref", repoURL, "HEAD", "refs/heads/*")
+	cmd := gitCommand(lsCtx, transport, "ls-remote", "--symref", repoURL, "HEAD", "refs/heads/*")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, "", fmt.Errorf("git branch scan failed: %s", strings.TrimSpace(string(out)))
@@ -45,7 +35,8 @@ func listGitBranches(ctx context.Context, repoURL string) ([]string, string, err
 // 让管理员看到可选 references；import 阶段再额外拉管理员手选的文本文件。
 // 这条边界很重要：入口自动、references 手选，避免大仓库或同包目录被隐式整包下载。
 func scanGitRef(ctx context.Context, repoURL, ref string, selectedFiles map[string][]string) ([]skillparser.ParsedSkill, skillparser.ImportReport, error) {
-	if err := validateGitURL(ctx, repoURL); err != nil {
+	transport, err := resolveGitTransport(ctx, repoURL)
+	if err != nil {
 		return nil, skillparser.ImportReport{}, err
 	}
 	tmp, err := os.MkdirTemp("", "effchat-skill-import-*")
@@ -61,11 +52,11 @@ func scanGitRef(ctx context.Context, repoURL, ref string, selectedFiles map[stri
 		args = append(args, "--branch", ref)
 	}
 	args = append(args, repoURL, tmp)
-	cmd := gitRemoteCommand(cloneCtx, args...)
+	cmd := gitCommand(cloneCtx, transport, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, skillparser.ImportReport{}, fmt.Errorf("git clone failed: %s", strings.TrimSpace(string(out)))
 	}
-	treePaths, treeErr := listGitTreePaths(ctx, tmp)
+	treePaths, treeErr := listGitTreePaths(ctx, transport, tmp)
 	if treeErr != nil {
 		return nil, skillparser.ImportReport{}, treeErr
 	}
@@ -73,8 +64,7 @@ func scanGitRef(ctx context.Context, repoURL, ref string, selectedFiles map[stri
 	defer sparseCancel()
 	patterns := skillSparseCheckoutPatterns()
 	sparseArgs := append([]string{"-C", tmp, "sparse-checkout", "set", "--no-cone"}, patterns...)
-	sparseCmd := exec.CommandContext(sparseCtx, "git", sparseArgs...)
-	sparseCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	sparseCmd := gitCommand(sparseCtx, transport, sparseArgs...)
 	if out, err := sparseCmd.CombinedOutput(); err != nil {
 		return nil, skillparser.ImportReport{}, fmt.Errorf("git sparse checkout failed: %s", strings.TrimSpace(string(out)))
 	}
@@ -88,8 +78,7 @@ func scanGitRef(ctx context.Context, repoURL, ref string, selectedFiles map[stri
 		depCtx, depCancel := context.WithTimeout(ctx, 20*time.Second)
 		defer depCancel()
 		depArgs := append([]string{"-C", tmp, "sparse-checkout", "set", "--no-cone"}, fullPatterns...)
-		depCmd := exec.CommandContext(depCtx, "git", depArgs...)
-		depCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		depCmd := gitCommand(depCtx, transport, depArgs...)
 		if out, err := depCmd.CombinedOutput(); err != nil {
 			return nil, skillparser.ImportReport{}, fmt.Errorf("git dependency checkout failed: %s", strings.TrimSpace(string(out)))
 		}
@@ -99,11 +88,10 @@ func scanGitRef(ctx context.Context, repoURL, ref string, selectedFiles map[stri
 	return parsed, report, err
 }
 
-func listGitTreePaths(ctx context.Context, repoDir string) ([]string, error) {
+func listGitTreePaths(ctx context.Context, transport gitTransportPlan, repoDir string) ([]string, error) {
 	treeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(treeCtx, "git", "-C", repoDir, "ls-tree", "-r", "--name-only", "HEAD")
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd := gitCommand(treeCtx, transport, "-C", repoDir, "ls-tree", "-r", "--name-only", "HEAD")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git tree scan failed: %s", strings.TrimSpace(string(out)))
@@ -226,42 +214,4 @@ func safeGitRef(ref string) bool {
 		return false
 	}
 	return gitRefPattern.MatchString(ref)
-}
-
-func gitRemoteCommand(ctx context.Context, args ...string) *exec.Cmd {
-	commandArgs := append([]string{"-c", "http.followRedirects=false"}, args...)
-	cmd := exec.CommandContext(ctx, "git", commandArgs...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	return cmd
-}
-
-func validateGitURL(ctx context.Context, raw string) error {
-	return validateGitURLWithResolver(ctx, net.DefaultResolver, raw)
-}
-
-func validateGitURLWithResolver(ctx context.Context, resolver netpolicy.IPResolver, raw string) error {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || parsed.Scheme != "https" {
-		return fmt.Errorf("invalid git url")
-	}
-	if parsed.User != nil {
-		return fmt.Errorf("invalid git url: url must not include credentials")
-	}
-	if port := parsed.Port(); port != "" && port != "443" {
-		return fmt.Errorf("invalid git url: unsupported port")
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return fmt.Errorf("invalid git url: blocked host")
-	}
-	if ip := net.ParseIP(host); ip != nil && netpolicy.IsBlockedIP(ip) {
-		return fmt.Errorf("invalid git url: blocked address")
-	}
-	if _, trusted := trustedGitHosts[host]; trusted {
-		return nil
-	}
-	if err := netpolicy.ValidatePublicHTTPURL(ctx, resolver, raw); err != nil {
-		return fmt.Errorf("invalid git url: %w", err)
-	}
-	return nil
 }

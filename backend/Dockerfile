@@ -31,8 +31,11 @@ FROM alpine:3.22
 
 ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 
+# Git Skill SSRF protection relies on curloptResolve; fail the image build if a
+# future Alpine/Git base image removes that transport capability.
 RUN sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" /etc/apk/repositories \
   && apk add --no-cache ca-certificates tzdata wget su-exec git \
+  && git help --config | grep -qx 'http.curloptResolve' \
   && addgroup -S app \
   && adduser -S app -G app
 

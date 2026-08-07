@@ -14,6 +14,16 @@ type IPResolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
+// PublicHTTPResolution is the result of validating a URL and resolving its
+// destination once. Callers that perform multiple network operations should
+// retain this result so later operations cannot silently re-resolve the host.
+type PublicHTTPResolution struct {
+	Scheme    string
+	Host      string
+	Port      string
+	Addresses []net.IPAddr
+}
+
 func IsBlockedIP(ip net.IP) bool {
 	if ip == nil {
 		return true
@@ -33,46 +43,64 @@ func IsBlockedIP(ip net.IP) bool {
 }
 
 func ValidatePublicHTTPURL(ctx context.Context, resolver IPResolver, raw string) error {
+	_, err := ResolvePublicHTTPURL(ctx, resolver, raw)
+	return err
+}
+
+func ResolvePublicHTTPURL(ctx context.Context, resolver IPResolver, raw string) (PublicHTTPResolution, error) {
+	var resolution PublicHTTPResolution
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host == "" {
-		return fmt.Errorf("invalid url")
+		return resolution, fmt.Errorf("invalid url")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("unsupported scheme")
+		return resolution, fmt.Errorf("unsupported scheme")
 	}
 	if parsed.User != nil {
-		return fmt.Errorf("url must not include credentials")
+		return resolution, fmt.Errorf("url must not include credentials")
 	}
 	host := parsed.Hostname()
 	if host == "" {
-		return fmt.Errorf("empty host")
+		return resolution, fmt.Errorf("empty host")
 	}
 	lower := strings.ToLower(host)
 	if lower == "localhost" || strings.HasSuffix(lower, ".localhost") {
-		return fmt.Errorf("blocked host")
+		return resolution, fmt.Errorf("blocked host")
+	}
+	port := parsed.Port()
+	if port == "" {
+		if parsed.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
 	}
 	if ip := net.ParseIP(host); ip != nil {
 		if IsBlockedIP(ip) {
-			return fmt.Errorf("blocked address")
+			return resolution, fmt.Errorf("blocked address")
 		}
-		return nil
+		return PublicHTTPResolution{Scheme: parsed.Scheme, Host: lower, Port: port, Addresses: []net.IPAddr{{IP: ip}}}, nil
 	}
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
 	ips, err := resolver.LookupIPAddr(ctx, host)
 	if err != nil {
-		return fmt.Errorf("dns resolution failed: %w", err)
+		return resolution, fmt.Errorf("dns resolution failed: %w", err)
 	}
 	if len(ips) == 0 {
-		return fmt.Errorf("no addresses resolved")
+		return resolution, fmt.Errorf("no addresses resolved")
 	}
 	for _, addr := range ips {
 		if IsBlockedIP(addr.IP) {
-			return fmt.Errorf("blocked address")
+			return resolution, fmt.Errorf("blocked address")
 		}
 	}
-	return nil
+	addresses := make([]net.IPAddr, len(ips))
+	for i, addr := range ips {
+		addresses[i] = net.IPAddr{IP: append(net.IP(nil), addr.IP...), Zone: addr.Zone}
+	}
+	return PublicHTTPResolution{Scheme: parsed.Scheme, Host: lower, Port: port, Addresses: addresses}, nil
 }
 
 func mustParseIPRanges(cidrs ...string) []*net.IPNet {

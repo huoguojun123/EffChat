@@ -31,3 +31,16 @@ reporter unless anonymity is requested.
 EffChat is self-hosted. Operators are responsible for strong database and JWT
 secrets, TLS termination, backups, access control, and keeping the host,
 containers, dependencies, and EffChat release current.
+
+Do not copy a running PostgreSQL data directory as a backup. Use the documented
+`scripts/backup-restore.sh backup` artifact workflow, then protect the resulting
+directory with restrictive permissions, encryption at rest, off-host copies,
+retention limits, and secure deletion. Backup artifacts intentionally exclude
+`.env.docker` and deployment secrets.
+
+Test recovery with `scripts/backup-restore.sh restore` only in a dedicated empty
+directory. The command creates an isolated Compose project, network, data root,
+and loopback ports; it never restores over the active deployment or removes
+volumes. Treat the restored database and files as sensitive production data,
+and stop the isolated stack with `scripts/backup-restore.sh stop-restore` after
+acceptance.

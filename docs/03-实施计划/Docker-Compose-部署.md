@@ -1,6 +1,6 @@
 # Docker Compose 部署
 
-本文档描述全量 Docker 部署路径：PostgreSQL 17 开新库，`migrate` 按 `backend/migrations/production/` 记录并执行生产迁移，后端和前端分别构建为镜像。Compose 会把 `web`、`backend`、`postgres` 放在同一个 Docker 网络里；浏览器访问前端容器，前端 Nginx 在内部网络把 `/api/` 转发给 `backend:8080`。默认数据写入发布目录下的 `./data`，方便整目录迁移、备份和服务器交付。
+本文档描述全量 Docker 部署路径：PostgreSQL 17 开新库，`migrate` 按 `backend/migrations/production/` 记录并执行生产迁移，后端和前端分别构建为镜像。Compose 会把 `web`、`backend`、`postgres` 放在同一个 Docker 网络里；浏览器访问前端容器，前端 Nginx 在内部网络把 `/api/` 转发给 `backend:8080`。数据库和受管存储都位于 `DATA_DIR`，但运行中的 PostgreSQL 数据目录不能用普通目录复制充当备份。
 
 ## 组件
 
@@ -185,13 +185,40 @@ scripts/docker-build.sh down     # 停止服务，不删除 ./data
 DATA_DIR=./data
 ```
 
-这适合把 `docker-compose.yml`、`.env.docker`、源码和运行数据放在同一个发布目录里。备份时直接备份 `./data`；迁移服务器时复制整个发布目录即可。
+这适合把 `docker-compose.yml`、`.env.docker`、源码和运行数据放在同一个发布目录里。迁移源码或发布目录不等于迁移数据；不要在 PostgreSQL 运行时复制整个 `DATA_DIR` 或 `postgres` 目录。
 
 如果服务器数据盘另有路径，可以改成绝对路径：
 
 ```env
 DATA_DIR=/srv/effchat/data
 ```
+
+## 备份与隔离恢复
+
+```bash
+scripts/backup-restore.sh backup
+scripts/backup-restore.sh verify /path/to/effchat-YYYYMMDDTHHMMSSZ
+scripts/backup-restore.sh restore \
+  /path/to/effchat-YYYYMMDDTHHMMSSZ \
+  /path/to/empty-restore-root \
+  /path/to/.env.docker
+```
+
+`backup` 会记录当前正在运行的 Web、backend 和提取器并优雅停止它们，避免 `pause` 把跨数据库与文件系统的在途事务冻结在中间状态；随后从仍运行的 PostgreSQL 生成 custom-format `pg_dump`，同时归档稳定的 `storage`。只有数据库 dump、storage tar、受保护的逐文件 SHA-256 清单、migration 版本/checksum 账本、Compose checksum、应用版本、build ref、schema 和 PostgreSQL major 全部成功并由同一验证器复核后，临时目录才会原子发布为一个版本化备份集；失败会删除临时工件，并且无论成功或失败都只恢复原先运行的服务。默认输出到 `${DATA_DIR}/backups`，可用 `BACKUP_ROOT` 指向受保护的异机挂载；自定义目录的父目录必须预先存在。
+
+备份不包含 `.env.docker`、数据库密码、JWT secret 或后台渠道密钥，但 database dump 本身包含消息、用户、渠道密钥等数据库内容。运维方仍需为备份目录配置最小权限、静态加密、异机副本、保留周期和安全销毁。
+
+`restore` 不覆盖或切换现有部署，只接受空、非符号链接且与活动 `DATA_DIR` 无重叠的目标，并通过原子目录锁阻止两个恢复任务写入同一根目录。第三个参数提供恢复栈所需的基础设施 secret；脚本不会复制该文件，而是强制用独立 `COMPOSE_PROJECT_NAME`、显式 Docker network、目标 `DATA_DIR` 和 Docker 分配的 loopback 动态端口覆盖冲突字段。恢复顺序固定为：验证全部工件与路径 → 在临时目录安全解包并逐文件复核 storage → 启动隔离 PostgreSQL 并确认空库/major → `pg_restore` → 核对备份 migration 账本 → 运行当前统一 migration runner → 核对受管文件引用 → 等待四个服务并检查内部 health。任一步失败都只停止隔离 project（不使用 `-v`）并清理本次创建的目标内容。
+
+成功后命令会输出隔离 Web URL，并在目标根写入不含 secret 的 `restore-manifest`。此时仍需通过浏览器完成登录、会话读取、文件预览与下载验收；完成后停止隔离栈但保留恢复数据：
+
+```bash
+scripts/backup-restore.sh stop-restore \
+  /path/to/empty-restore-root \
+  /path/to/.env.docker
+```
+
+确认 `restore-manifest`、浏览器验收和目标路径无误后，再由运维方删除该隔离目录。脚本从不删除活动 volume，也不会自动把隔离数据切换为生产数据。
 
 ### 从旧 uploads 布局升级
 

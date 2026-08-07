@@ -19,13 +19,16 @@ usage() {
 Usage:
   scripts/backup-restore.sh backup
   scripts/backup-restore.sh verify BACKUP_DIR
+  scripts/backup-restore.sh restore BACKUP_DIR RESTORE_ROOT RESTORE_ENV_FILE
+  scripts/backup-restore.sh stop-restore RESTORE_ROOT RESTORE_ENV_FILE
 
 Environment:
   ENV_FILE=/path/to/.env.docker       Active deployment environment
   BACKUP_ROOT=/path/to/backups        Override the backup output directory
 
-Backup artifacts never contain `.env.docker` or deployment secrets. Restore is
-added as a separate audited slice after the artifact contract is complete.
+Backup artifacts never contain `.env.docker` or deployment secrets. Restore
+always creates an isolated Compose project in an empty target and leaves it
+running for application-level acceptance.
 USAGE
 }
 
@@ -122,6 +125,13 @@ manifest_value() {
   ' "$manifest"
 }
 
+write_active_migration_manifest() {
+  local output="$1"
+  "${COMPOSE[@]}" exec -T postgres sh -ec \
+    'PGPASSWORD="$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -At -F "$(printf "\t")" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT version, checksum FROM schema_migrations ORDER BY version;"' \
+    > "$output"
+}
+
 ensure_safe_data_dir() {
   local dir="$1"
   if [ -z "$dir" ] || [ "$dir" = "/" ] || [ -L "$dir" ]; then
@@ -147,7 +157,7 @@ health_value() {
 
 backup() {
   require_env_file
-  local data_root backup_root requested_backup_root timestamp target temp db_dump storage_archive storage_manifest
+  local data_root backup_root requested_backup_root timestamp target temp db_dump storage_archive storage_manifest migration_manifest
   data_root="$(data_dir)"
   ensure_safe_data_dir "$data_root"
   [ -d "$data_root/storage" ] || {
@@ -210,6 +220,7 @@ backup() {
   db_dump="$temp/database.dump"
   storage_archive="$temp/storage.tar"
   storage_manifest="$temp/storage.manifest.tsv"
+  migration_manifest="$temp/migrations.manifest.tsv"
 
   health_json="$("${COMPOSE[@]}" exec -T backend wget -Y off -qO- http://127.0.0.1:8080/health)"
   version="$(health_value "$health_json" version)"
@@ -238,6 +249,7 @@ backup() {
     'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$db_dump"
   tar -C "$data_root" -cf "$storage_archive" storage
   sha256_path_manifest "$data_root/storage" "$storage_manifest"
+  write_active_migration_manifest "$migration_manifest"
 
   local schema postgres_major
   schema="$(schema_version | tr -d '[:space:]')"
@@ -251,6 +263,7 @@ backup() {
     printf 'postgres_major=%s\n' "$postgres_major"
     printf 'schema=%s\n' "$schema"
     printf 'build_ref=%s\n' "$build_ref"
+    printf 'compose_sha256=%s\n' "$(sha256_file "$SRC_DIR/docker-compose.yml")"
     printf 'database_dump=database.dump\n'
     printf 'database_dump_sha256=%s\n' "$(sha256_file "$db_dump")"
     printf 'storage_archive=storage.tar\n'
@@ -258,6 +271,9 @@ backup() {
     printf 'storage_manifest=storage.manifest.tsv\n'
     printf 'storage_manifest_sha256=%s\n' "$(sha256_file "$storage_manifest")"
     printf 'storage_file_count=%s\n' "$(wc -l < "$storage_manifest" | tr -d ' ')"
+    printf 'migration_manifest=migrations.manifest.tsv\n'
+    printf 'migration_manifest_sha256=%s\n' "$(sha256_file "$migration_manifest")"
+    printf 'migration_count=%s\n' "$(wc -l < "$migration_manifest" | tr -d ' ')"
   } > "$temp/manifest"
   verify_backup "$temp" >/dev/null
 
@@ -272,7 +288,7 @@ backup() {
 }
 
 verify_backup() {
-  local backup_dir="$1" manifest db_dump storage_archive storage_manifest expected actual expected_count actual_count entry relative
+  local backup_dir="$1" manifest db_dump storage_archive storage_manifest migration_manifest expected actual expected_count actual_count entry relative
   [ -d "$backup_dir" ] || { echo "Backup directory is missing: $backup_dir" >&2; return 1; }
   manifest="$backup_dir/manifest"
   [ -f "$manifest" ] || { echo "Backup manifest is missing: $manifest" >&2; return 1; }
@@ -282,7 +298,8 @@ verify_backup() {
   }
   [ "$(manifest_value "$manifest" database_dump)" = 'database.dump' ] &&
     [ "$(manifest_value "$manifest" storage_archive)" = 'storage.tar' ] &&
-    [ "$(manifest_value "$manifest" storage_manifest)" = 'storage.manifest.tsv' ] || {
+    [ "$(manifest_value "$manifest" storage_manifest)" = 'storage.manifest.tsv' ] &&
+    [ "$(manifest_value "$manifest" migration_manifest)" = 'migrations.manifest.tsv' ] || {
       echo "Backup manifest contains unsupported artifact names." >&2
       return 1
     }
@@ -291,10 +308,13 @@ verify_backup() {
   manifest_value "$manifest" build_ref >/dev/null
   manifest_value "$manifest" schema >/dev/null
   manifest_value "$manifest" postgres_major >/dev/null
+  expected="$(manifest_value "$manifest" compose_sha256)"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "Compose checksum is malformed." >&2; return 1; }
   db_dump="$backup_dir/database.dump"
   storage_archive="$backup_dir/storage.tar"
   storage_manifest="$backup_dir/storage.manifest.tsv"
-  [ -f "$db_dump" ] && [ -f "$storage_archive" ] && [ -f "$storage_manifest" ] || {
+  migration_manifest="$backup_dir/migrations.manifest.tsv"
+  [ -f "$db_dump" ] && [ -f "$storage_archive" ] && [ -f "$storage_manifest" ] && [ -f "$migration_manifest" ] || {
     echo "Backup artifacts are incomplete." >&2
     return 1
   }
@@ -314,6 +334,16 @@ verify_backup() {
     NF != 2 || $1 == "" || $1 ~ /^\// || $1 ~ /(^|\/)\.\.?($|\/)/ || $2 !~ /^[0-9a-f]{64}$/ { exit 1 }
   ' "$storage_manifest" || {
     echo "Storage manifest is malformed." >&2
+    return 1
+  }
+  expected="$(manifest_value "$manifest" migration_manifest_sha256)"
+  actual="$(sha256_file "$migration_manifest")"
+  [ "$expected" = "$actual" ] || { echo "Migration manifest hash mismatch." >&2; return 1; }
+  expected_count="$(manifest_value "$manifest" migration_count)"
+  actual_count="$(wc -l < "$migration_manifest" | tr -d ' ')"
+  [ "$expected_count" = "$actual_count" ] || { echo "Migration manifest count mismatch." >&2; return 1; }
+  awk -F '\t' 'NF != 2 || $1 == "" || $2 !~ /^[0-9a-f]{64}$/ { exit 1 }' "$migration_manifest" || {
+    echo "Migration manifest is malformed." >&2
     return 1
   }
   tar -tvf "$storage_archive" | awk 'substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" { exit 1 }' || {
@@ -336,11 +366,24 @@ verify_backup() {
   echo "Backup verification passed: $backup_dir"
 }
 
+# shellcheck source=backup-restore/isolated-restore.sh
+source "$SRC_DIR/scripts/backup-restore/isolated-restore.sh"
+
 case "${1:-}" in
   backup) backup ;;
   verify)
     [ "$#" -eq 2 ] || { usage >&2; exit 1; }
     verify_backup "$2"
+    ;;
+  restore)
+    [ "$#" -eq 4 ] || { usage >&2; exit 1; }
+    RESTORE_ENV_FILE="$4"
+    restore_backup "$2" "$3"
+    ;;
+  stop-restore)
+    [ "$#" -eq 3 ] || { usage >&2; exit 1; }
+    RESTORE_ENV_FILE="$3"
+    stop_restore "$2"
     ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 1 ;;

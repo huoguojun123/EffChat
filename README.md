@@ -5,7 +5,7 @@ EffChat 是一个面向小团队自托管的 AI agent workbench。目标是比�
 [GitHub 仓库](https://github.com/huoguojun123/EffChat)
 
 > [!WARNING]
-> EffChat 当前是 `pre-release 0.3.4`。数据迁移、配置兼容性和公开 API 仍可能变化，请在升级前备份 PostgreSQL 与受管存储。
+> EffChat 当前是 `pre-release 0.3.4`。数据迁移、配置兼容性和公开 API 仍可能变化；升级前请使用 [Docker Compose 部署文档](docs/03-实施计划/Docker-Compose-部署.md#备份与隔离恢复) 中的一致备份入口，不要复制运行中的 PostgreSQL 数据目录。
 
 ## pre-release 0.3.4 定位
 

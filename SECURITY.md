@@ -37,3 +37,10 @@ Do not copy a running PostgreSQL data directory as a backup. Use the documented
 directory with restrictive permissions, encryption at rest, off-host copies,
 retention limits, and secure deletion. Backup artifacts intentionally exclude
 `.env.docker` and deployment secrets.
+
+Test recovery with `scripts/backup-restore.sh restore` only in a dedicated empty
+directory. The command creates an isolated Compose project, network, data root,
+and loopback ports; it never restores over the active deployment or removes
+volumes. Treat the restored database and files as sensitive production data,
+and stop the isolated stack with `scripts/backup-restore.sh stop-restore` after
+acceptance.

@@ -44,6 +44,10 @@ case " $* " in
     if [ "${FAKE_DUMP_FAIL:-0}" = 1 ]; then exit 42; fi
     printf 'fake custom-format dump\n'
     ;;
+  *" exec -T postgres sh -ec "*"SELECT version, checksum FROM schema_migrations "*)
+    printf '050_fixture.sql\t%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    printf '051_fixture.sql\t%s\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    ;;
   *" exec -T postgres sh -ec "*"psql "*)
     printf '051_fixture.sql\n'
     ;;
@@ -83,6 +87,9 @@ grep -Fqx 'schema=051_fixture.sql' "$backup_dir/manifest"
 grep -Fqx 'postgres_major=17' "$backup_dir/manifest"
 grep -Fqx 'storage_file_count=2' "$backup_dir/manifest"
 grep -Eq '^storage_manifest_sha256=[0-9a-f]{64}$' "$backup_dir/manifest"
+grep -Eq '^compose_sha256=[0-9a-f]{64}$' "$backup_dir/manifest"
+grep -Fqx 'migration_count=2' "$backup_dir/manifest"
+grep -Eq '^migration_manifest_sha256=[0-9a-f]{64}$' "$backup_dir/manifest"
 grep -Fq $'attachments/originals/1/example.txt\t' "$backup_dir/storage.manifest.tsv"
 grep -Fq $'fonts/example.woff2\t' "$backup_dir/storage.manifest.tsv"
 if rg -n 'test-password|test-jwt' "$backup_dir" >/dev/null; then

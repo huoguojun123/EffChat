@@ -65,4 +65,12 @@ EffChat 自有源码采用 [Apache License 2.0](LICENSE)。第三方依赖与素
 bash scripts/export-public-source.sh /path/to/public-export
 ```
 
+导出目标会写入 `.effchat-public-source.marker`，后续 `rsync --delete` 只接受空目录或带有效 marker 的既有目录。在三线工作区首次接管已有的 `runtime/src` 时，必须显式执行一次：
+
+```bash
+EFFCHAT_EXPORT_INITIALIZE=1 bash scripts/export-public-source.sh ../runtime/src
+```
+
+该初始化仅允许规范化后的工作区 `runtime/src`；源码目录、其祖先/子目录、符号链接别名、其他工作区目录以及无 marker 的任意非空目录都会在创建或删除文件前失败。
+
 发布前请按 [开源发布检查清单.md](docs/03-实施计划/开源发布检查清单.md) 做泄密和产物扫描。

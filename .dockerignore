@@ -6,9 +6,47 @@
 **/.env
 **/.env.*
 !**/.env.example
+!**/.env.docker.example
 **/node_modules
 **/dist
 **/coverage
 **/__pycache__
 **/.pytest_cache
 **/.DS_Store
+
+# Runtime and operator-owned state must never enter a local or remote build
+# context, even when a deployment keeps it below the exported source tree.
+data/
+**/data/
+storage/
+**/storage/
+uploads/
+**/uploads/
+backups/
+**/backups/
+logs/
+**/logs/
+
+# Test output and local project-control material are not image inputs.
+test-results/
+**/test-results/
+playwright-report/
+**/playwright-report/
+blob-report/
+**/blob-report/
+allure-results/
+**/allure-results/
+.serena/
+**/.serena/
+.audit-*/
+**/.audit-*/
+
+# Database exports and logs can contain production data or credentials.
+*.dump
+**/*.dump
+*.backup
+**/*.backup
+*.bak
+**/*.bak
+*.log
+**/*.log

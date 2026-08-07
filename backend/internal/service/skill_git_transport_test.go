@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGitTransportPinsValidatedAddressesIntoGitCommand(t *testing.T) {
@@ -68,5 +71,40 @@ func TestSanitizedGitEnvironmentRejectsInheritedTransportConfiguration(t *testin
 		if !strings.Contains(joined, required) {
 			t.Fatalf("required git environment setting missing: %q", required)
 		}
+	}
+}
+
+func TestGitCommandHonorsContextCancellation(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "started")
+	fakeGit := filepath.Join(dir, "git")
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\ntouch \"$EFFCHAT_TEST_GIT_MARKER\"\nwhile :; do sleep 1; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("EFFCHAT_TEST_GIT_MARKER", marker)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := gitCommand(ctx, gitTransportPlan{}, "ls-remote", "https://git.example/skill.git", "HEAD")
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmd.CombinedOutput()
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake Git process did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Git subprocess did not stop after context cancellation")
 	}
 }

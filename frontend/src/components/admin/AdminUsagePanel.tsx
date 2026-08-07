@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   adminApi,
   type AdminUsageResponse,
@@ -13,6 +13,7 @@ import {
   type UsageTotals,
 } from "@/api/admin"
 import { Button } from "@/components/ui/button"
+import { UsageQueryOwnership } from "@/components/admin/usageQueryOwnership"
 import { Activity, Database, FileText, RefreshCw, Search, Wrench, Zap } from "lucide-react"
 
 interface Props {
@@ -45,17 +46,37 @@ export function AdminUsagePanel({ setError }: Props) {
   const [activeLabel, setActiveLabel] = useState("今天治理")
   const [data, setData] = useState<AdminUsageResponse>(emptyUsage)
   const [loading, setLoading] = useState(false)
+  const usageOwner = useRef(new UsageQueryOwnership()).current
+
+  function queryKey(query: UsageQuery) {
+    return typeof query === "string" ? `range:${query}` : `custom:${query.start_at}:${query.end_at}`
+  }
+
+  function selectionKey(nextMode: UsageMode, start = customStart, end = customEnd) {
+    if (nextMode !== "custom") return `range:${nextMode}`
+    return `custom:${start}:${end}`
+  }
+
+  function invalidateSelection(key: string) {
+    usageOwner.activate(key)
+    setLoading(false)
+    setError("")
+  }
 
   async function loadUsage(query: UsageQuery, label: string) {
+    const operation = usageOwner.begin(queryKey(query))
     setLoading(true)
     setError("")
     try {
-      setData(normalizeUsage(await adminApi.getUsage(query)))
-      setActiveLabel(label)
+      const nextData = normalizeUsage(await adminApi.getUsage(query))
+      if (usageOwner.owns(operation)) {
+        setData(nextData)
+        setActiveLabel(label)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "用量加载失败")
+      if (usageOwner.owns(operation)) setError(err instanceof Error ? err.message : "用量加载失败")
     } finally {
-      setLoading(false)
+      if (usageOwner.owns(operation)) setLoading(false)
     }
   }
 
@@ -66,6 +87,7 @@ export function AdminUsagePanel({ setError }: Props) {
     }
     const query = customUsageQuery(customStart, customEnd)
     if (!query) {
+      invalidateSelection(selectionKey("custom"))
       setError("请选择不超过 90 天的有效日期范围")
       return
     }
@@ -73,26 +95,16 @@ export function AdminUsagePanel({ setError }: Props) {
   }
 
   useEffect(() => {
-    let canceled = false
-    async function run() {
-      setLoading(true)
-      setError("")
-      try {
-        if (mode === "custom") return
-        const res = await adminApi.getUsage(mode)
-        if (!canceled) {
-          setData(normalizeUsage(res))
-          setActiveLabel(rangeLabel(mode))
-        }
-      } catch (err) {
-        if (!canceled) setError(err instanceof Error ? err.message : "用量加载失败")
-      } finally {
-        if (!canceled) setLoading(false)
-      }
+    let active = true
+    usageOwner.activate(selectionKey(mode))
+    if (mode !== "custom") {
+      queueMicrotask(() => {
+        if (active) void loadUsage(mode, rangeLabel(mode))
+      })
     }
-    void run()
     return () => {
-      canceled = true
+      active = false
+      usageOwner.activate("")
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
@@ -115,7 +127,12 @@ export function AdminUsagePanel({ setError }: Props) {
           {ranges.map((item) => (
             <button
               key={item.value}
-              onClick={() => setMode(item.value)}
+              onClick={() => {
+                if (mode !== item.value) {
+                  invalidateSelection(selectionKey(item.value))
+                  setMode(item.value)
+                }
+              }}
               className={`h-8 rounded px-3 text-sm transition-colors motion-control ${
                 mode === item.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
@@ -124,7 +141,12 @@ export function AdminUsagePanel({ setError }: Props) {
             </button>
           ))}
           <button
-            onClick={() => setMode("custom")}
+            onClick={() => {
+              if (mode !== "custom") {
+                invalidateSelection(selectionKey("custom"))
+                setMode("custom")
+              }
+            }}
             className={`h-8 rounded px-3 text-sm transition-colors motion-control ${
               mode === "custom" ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
@@ -134,9 +156,15 @@ export function AdminUsagePanel({ setError }: Props) {
         </div>
         {mode === "custom" ? (
           <div className="flex items-center gap-1.5">
-            <input type="date" aria-label="开始日期" value={customStart} max={localDateValue(0)} onChange={(event) => setCustomStart(event.target.value)} className="h-8 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm" />
+            <input type="date" aria-label="开始日期" value={customStart} max={localDateValue(0)} onChange={(event) => {
+              invalidateSelection(selectionKey("custom", event.target.value, customEnd))
+              setCustomStart(event.target.value)
+            }} className="h-8 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm" />
             <span className="text-xs text-muted-foreground">至</span>
-            <input type="date" aria-label="结束日期" value={customEnd} max={localDateValue(0)} onChange={(event) => setCustomEnd(event.target.value)} className="h-8 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm" />
+            <input type="date" aria-label="结束日期" value={customEnd} max={localDateValue(0)} onChange={(event) => {
+              invalidateSelection(selectionKey("custom", customStart, event.target.value))
+              setCustomEnd(event.target.value)
+            }} className="h-8 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm" />
           </div>
         ) : null}
         <Button variant="outline" size="sm" className="h-8" onClick={refreshUsage} disabled={loading}>

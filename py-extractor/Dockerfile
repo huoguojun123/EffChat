@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:646fb0bca3dd3ea1bcc6feb72c17ed16eed6e10cffc732fcc1478bd3e7f02d7b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
   PYTHONUNBUFFERED=1 \
@@ -7,8 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY py-extractor/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY py-extractor/requirements.lock .
+# The committed lock contains the complete Python dependency graph and hashes;
+# a missing or changed artifact must fail the image build instead of silently
+# resolving a different transitive package set.
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY py-extractor/app ./app
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/effchat/

@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -27,7 +27,7 @@ COPY backend/ .
 # 避免 Docker 构建阶段偷偷改动依赖图，保证发布镜像和 Git 中记录的版本一致。
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=readonly -trimpath -ldflags="-s -w -X github.com/huoguojun123/EffChat/pkg/config.BuildRef=${BUILD_REF}" -o /out/effchat-server ./cmd/server
 
-FROM alpine:3.22
+FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
 
 ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 

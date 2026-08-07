@@ -1,0 +1,65 @@
+{
+  "fallbacks": [
+    {
+      "component": "backend",
+      "files": [
+        "Apache-2.0.txt"
+      ],
+      "name": "github.com/cloudwego/eino-ext/components/model/openai",
+      "reason": "The versioned Go submodule omits the repository-root Apache license from its module zip.",
+      "source": "https://github.com/cloudwego/eino-ext/blob/0ebab92e14f26088411dbc440a1ebdc904ccd8a1/LICENSE-APACHE",
+      "version": "v0.1.13"
+    },
+    {
+      "component": "backend",
+      "files": [
+        "Apache-2.0.txt"
+      ],
+      "name": "github.com/cloudwego/eino-ext/libs/acl/openai",
+      "reason": "The versioned Go submodule omits the repository-root Apache license from its module zip.",
+      "source": "https://github.com/cloudwego/eino-ext/blob/846f52bd97c61b84abb576c6b8bbe585db7e20b9/LICENSE-APACHE",
+      "version": "v0.1.18-0.20260527084435-846f52bd97c6"
+    },
+    {
+      "component": "frontend",
+      "files": [
+        "MIT-canonical.txt"
+      ],
+      "name": "react-remove-scroll-bar",
+      "reason": "The npm package declares MIT and identifies its author, but its published tarball and upstream repository contain no license file.",
+      "source": "npm:react-remove-scroll-bar@2.3.8",
+      "version": "2.3.8"
+    },
+    {
+      "component": "frontend",
+      "files": [
+        "remark-math-MIT.txt"
+      ],
+      "name": "rehype-katex",
+      "reason": "The package tarball omits the monorepo-root license file.",
+      "source": "https://github.com/remarkjs/remark-math/blob/88a9497e1ede93b958237c85edbf5651faeca7af/license",
+      "version": "7.0.1"
+    },
+    {
+      "component": "frontend",
+      "files": [
+        "remark-math-MIT.txt"
+      ],
+      "name": "remark-math",
+      "reason": "The package tarball omits the monorepo-root license file.",
+      "source": "https://github.com/remarkjs/remark-math/blob/d5d0660b150810a535bbb07eac6cc96a4510aa24/license",
+      "version": "6.0.0"
+    },
+    {
+      "component": "frontend",
+      "files": [
+        "rolldown-MIT.txt",
+        "rolldown-THIRD-PARTY-LICENSE.txt"
+      ],
+      "name": "@rolldown/binding-*",
+      "reason": "Platform binding tarballs omit the Rolldown repository-root license file.",
+      "source": "https://github.com/rolldown/rolldown/blob/f09947ab017d6df74299f691853dcfc4f4f0f86e/LICENSE",
+      "version": "1.1.5"
+    }
+  ]
+}

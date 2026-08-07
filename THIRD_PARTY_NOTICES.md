@@ -7,8 +7,33 @@ container image does not relicense third-party work under the EffChat license.
 
 The authoritative dependency versions are recorded in `backend/go.mod`,
 `backend/go.sum`, `frontend/package-lock.json`, and
-`py-extractor/requirements.txt`. Transitive dependencies listed in those lock
+`py-extractor/requirements.lock`. Transitive dependencies listed in those
 files remain under their respective upstream licenses.
+
+Each application image also contains a component-specific, machine-readable
+archive under `/usr/share/licenses/effchat/third-party/<component>/`. The
+archive contains a manifest with package names, versions, source metadata,
+license-file paths, and SHA-256 checksums, together with the original license,
+notice, copyright, and declared license files found in the distributed
+dependency artifacts.
+
+The archive is generated during the image build by
+`scripts/licenses/collect-third-party-licenses.py` from:
+
+- the packages reachable when compiling `backend/cmd/server`;
+- the installed frontend production tree reported by
+  `npm ls --omit=dev --all`, plus Vite, vite-plugin-pwa, and Workbox packages
+  whose runtime code is emitted into the production PWA assets;
+- the exact Python distributions pinned by `requirements.lock` and their
+  installed package metadata.
+
+If an upstream submodule or package tarball omits a repository-level license,
+the build fails unless `scripts/licenses/fallbacks.json` contains an explicit
+component, package/version, reason, pinned upstream source, and retained text.
+This controlled fallback currently covers two Eino Go submodules, the
+react-remove-scroll-bar package metadata, the remark-math monorepo packages,
+and platform-specific Rolldown bindings. Dependency version changes do not
+inherit a fallback automatically.
 
 ## Backend
 
@@ -76,7 +101,21 @@ authoritative notices for operating-system and runtime packages:
 - <https://hub.docker.com/_/postgres>
 
 EffChat application images include this repository's `LICENSE`, `NOTICE`, and
-`THIRD_PARTY_NOTICES.md` under `/usr/share/licenses/effchat/`.
+`THIRD_PARTY_NOTICES.md` under `/usr/share/licenses/effchat/`, plus the
+component archive described above. Base-image operating-system and runtime
+packages remain governed by the upstream image's own notices; EffChat does not
+copy an independently maintained OS package license inventory into this
+repository.
+
+After building the three local application images, verify the offline archive
+and every recorded checksum with:
+
+```bash
+scripts/check-image-licenses.sh \
+  effchat-backend:local \
+  effchat-web:local \
+  effchat-py-extractor:local
+```
 
 ## Prompts, Fonts, Icons, and Other Materials
 

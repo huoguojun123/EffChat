@@ -46,6 +46,8 @@ cp .env.docker.example .env.docker
 
 `RUN_FIRST_OUTPUT_TIMEOUT` 支持 Go duration（如 `90s`、`25m`）或纯秒数，只限制模型返回首个有效文本、思考内容或具名工具调用前的等待。一旦有效输出开始，后端会继续读取流直到 EOF；用户停止、服务排空、账号或会话失效仍可取消任务。值为 `0` 时使用聊天 15 分钟、压缩 5 分钟的内建首包默认值。
 
+`scripts/docker-build.sh up` 先构建全部镜像，再启动 PostgreSQL、执行 migration 和 storage layout，最后用已有镜像 `up --no-build --wait` 切换并等待服务健康；构建失败不会先停服务或改 schema/storage。`reset-db` 也先完成构建，再执行明确确认的删除和等待健康启动。
+
 ### Git Skill 的出站网络边界
 
 管理员从 Git 导入 Skill 时，backend 只接受 HTTPS/443、无凭据且不跟随重定向的仓库地址。自定义主机的 DNS 必须返回真实公网 A/AAAA 地址；backend 会在 Go 预检后把这些地址固定到每个 Git 子进程，代理、`GIT_*`、global/system Git config 和 URL rewrite 不会被继承。loopback、私网、link-local、benchmark（包括 `198.18.0.0/15`）或混合 blocked DNS 响应会整体拒绝，这是防止 DNS rebinding/SSRF 的预期行为。

@@ -200,11 +200,14 @@ case "$cmd" in
     validate_runtime_secrets
     export_data_dir
     export_build_ref
+    # Build before touching services, schema, or storage so a failed build
+    # leaves the currently running deployment available for recovery.
+    "${COMPOSE[@]}" build
     prepare_data_dirs
     "${COMPOSE[@]}" up -d --wait postgres
     "${COMPOSE[@]}" run --rm --no-deps migrate
     "$SRC_DIR/scripts/storage-layout.sh" apply
-    "${COMPOSE[@]}" up -d --build
+    "${COMPOSE[@]}" up -d --no-build --wait
     ;;
   config)
     require_env_file
@@ -235,9 +238,12 @@ case "$cmd" in
       echo "Re-run with CONFIRM_RESET=DELETE_EFFCHAT_DATA scripts/docker-build.sh reset-db"
       exit 1
     fi
+    # Do not destroy the requested reset target until replacement images are
+    # available and the final switch can run without another build.
+    "${COMPOSE[@]}" build
     "${COMPOSE[@]}" down
     reset_data_dirs
-    "${COMPOSE[@]}" up -d --build
+    "${COMPOSE[@]}" up -d --no-build --wait
     ;;
   -h|--help|help)
     usage

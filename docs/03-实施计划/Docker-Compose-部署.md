@@ -208,7 +208,7 @@ scripts/storage-layout.sh verify
 CONFIRM_STORAGE_FINALIZE=DELETE_LEGACY_UPLOADS scripts/storage-layout.sh finalize
 ```
 
-迁移失败时工具会自动恢复数据库路径；需要人工回退时可执行 `scripts/storage-layout.sh rollback`，然后启动上一版本源码。不要手工移动单个文件或直接批量替换数据库路径。
+迁移失败时工具会自动恢复数据库路径；旧 `uploads` 仍在保留期内且 marker 为 `migrated` 时，可执行 `scripts/storage-layout.sh rollback`，然后启动上一版本源码。`finalize` 成功后 marker 会永久转为 `finalized`，此时旧文件已删除，工具会在停止服务或修改数据库前拒绝 rollback。不要手工移动单个文件、修改 marker 或直接批量替换数据库路径。
 
 ## 主机公共反代
 

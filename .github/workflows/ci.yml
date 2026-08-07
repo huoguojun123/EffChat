@@ -17,6 +17,7 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -36,6 +37,7 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -56,6 +58,7 @@ jobs:
   extractor:
     name: Python extractor
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: py-extractor
@@ -72,6 +75,7 @@ jobs:
   postgres:
     name: PostgreSQL integration
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -83,10 +87,41 @@ jobs:
   containers:
     name: Compose and containers
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Lint shell scripts
+        run: |
+          find scripts backend/migrations -type f -name '*.sh' -print0 |
+            xargs -0 docker run --rm --entrypoint shellcheck \
+              -v "$PWD:/mnt:ro" -w /mnt \
+              koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 \
+              --severity=warning
+      - name: Test PostgreSQL readiness timeout
+        run: scripts/test-postgres-readiness-timeout.sh
+      - name: Test export target fencing
+        run: scripts/test-export-target-safety.sh
+      - name: Test Compose environment contract
+        run: scripts/test-compose-env-contract.sh
+      - name: Test storage finalization fencing
+        run: scripts/test-storage-finalization-state.sh
+      - name: Test deployment stage ordering
+        run: scripts/test-deployment-stage-order.sh
+      - name: Test backup artifact contract
+        run: scripts/test-backup-artifact-contract.sh
+      - name: Test isolated restore contract
+        run: scripts/test-isolated-restore-contract.sh
+      - name: Test Docker context boundary
+        run: scripts/test-docker-context-boundary.sh
+      - name: Test BUILD_REF inputs
+        run: scripts/test-build-ref-inputs.sh
       - name: Test release ref gate
         run: scripts/test-release-ref-gate.sh
+      - name: Verify Nginx security headers
+        run: node frontend/scripts/check-nginx-security-headers.mjs
       - name: Test third-party license archive
         run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/licenses/test_collect_third_party_licenses.py
       - name: Render Compose configuration

@@ -377,11 +377,14 @@ case "${1:-}" in
     ;;
   restore)
     [ "$#" -eq 4 ] || { usage >&2; exit 1; }
+    # The sourced restore lifecycle owns this caller-provided environment path.
+    # shellcheck disable=SC2034
     RESTORE_ENV_FILE="$4"
     restore_backup "$2" "$3"
     ;;
   stop-restore)
     [ "$#" -eq 3 ] || { usage >&2; exit 1; }
+    # shellcheck disable=SC2034
     RESTORE_ENV_FILE="$3"
     stop_restore "$2"
     ;;

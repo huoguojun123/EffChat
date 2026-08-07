@@ -48,6 +48,8 @@ expect_secret_rejection 'JWT_SECRET'
 write_env "'a-valid-test-password=with#characters'" \
   '"a-valid-test-jwt=with#characters"' '"./test data#blue=1" # inline comment'
 
+# The sourced helper consumes this caller-owned array.
+# shellcheck disable=SC2034
 COMPOSE=(docker compose --env-file "$TEST_ROOT/.env" -f "$ROOT/docker-compose.yml")
 # shellcheck source=compose-env.sh
 source "$ROOT/scripts/compose-env.sh"

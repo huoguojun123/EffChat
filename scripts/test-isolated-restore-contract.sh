@@ -236,7 +236,7 @@ failure_case() {
   local name="$1" expected="$2"
   shift 2
   : > "$FAKE_DOCKER_LOG"
-  if (export "$@"; run_restore "$backup" "$TEST_ROOT/$name") >"$TEST_ROOT/$name.log" 2>&1; then
+  if (export "${@?}"; run_restore "$backup" "$TEST_ROOT/$name") >"$TEST_ROOT/$name.log" 2>&1; then
     echo "Expected restore failure: $name" >&2
     exit 1
   fi

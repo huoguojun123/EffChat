@@ -6,7 +6,7 @@ if [ "$#" -ne 3 ]; then
   exit 2
 fi
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 TMP_DIR=$(mktemp -d)
 CONTAINERS=""
 

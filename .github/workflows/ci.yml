@@ -87,7 +87,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Test release ref gate
         run: scripts/test-release-ref-gate.sh
+      - name: Test third-party license archive
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/licenses/test_collect_third_party_licenses.py
       - name: Render Compose configuration
         run: docker compose --env-file .env.docker.example config
       - name: Build application images
         run: docker compose --env-file .env.docker.example build backend web py-extractor
+      - name: Verify image license archives
+        run: scripts/check-image-licenses.sh effchat-backend:local effchat-web:local effchat-py-extractor:local

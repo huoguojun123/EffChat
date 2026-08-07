@@ -14,7 +14,12 @@ COPY py-extractor/requirements.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY py-extractor/app ./app
+COPY scripts/licenses /tmp/license-tools
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/effchat/
+RUN python /tmp/license-tools/collect-third-party-licenses.py collect python \
+    --root /app \
+    --output /usr/share/licenses/effchat/third-party/python \
+  && rm -rf /tmp/license-tools
 
 EXPOSE 8090
 

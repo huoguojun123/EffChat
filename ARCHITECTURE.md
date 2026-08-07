@@ -241,6 +241,7 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 - storage layout marker 是显式生命周期状态：旧 marker 兼容解释为 `migrated`，成功清理 legacy uploads 后原子记录为 `finalized`；rollback 只允许 `migrated` 且 legacy/restore 工件仍存在的状态，并在停止服务或执行 SQL 前拒绝 finalized、未知或缺失工件。
 - `docker-build.sh up` 和 `reset-db` 均先完成镜像构建，再进入服务、migration 和 storage 切换；最终服务使用 `up --no-build --wait`，构建失败不会先停止现有服务或删除 reset 目标。
 - 根 Docker build context 通过 `.dockerignore` 同时排除根级与嵌套的 data、storage、uploads、backups、logs、数据库导出、测试报告和本地审查/控制目录；源码、lockfile、公开 env example 与许可证材料仍是显式构建输入。该边界只减少发送给本地或远程 builder 的内容，不能替代 Git/Gitleaks 扫描。
+- 导出源码和 dirty Git 工作树的 `BUILD_REF` 由同一输入清单计算，覆盖 backend/frontend/extractor、构建脚本、Dockerfile、Compose、`.dockerignore` 与根许可证/第三方声明；env、运行数据、日志、构建产物和文件时间戳不进入标识。干净 Git 构建继续使用 commit SHA，显式发布 workflow 继续使用完整 GitHub SHA。
 - 备份入口不会复制在线 PGDATA：它优雅停止当前正在运行的 Web/backend/提取器，避免把跨数据库与文件系统的在途事务冻结在中间状态；随后在同一静止窗口生成 PostgreSQL custom-format dump 与 storage tar，并在版本、build ref、schema、PostgreSQL major、Compose checksum、migration 账本、工件 SHA-256 和逐文件清单齐全且自验证通过后原子发布，最后只恢复原先运行的服务；`.env.docker` 和 secret 不进入备份。
 - restore 只接受与活动 `DATA_DIR` 无重叠的空目录，并用原子目录锁独占该目标，强制生成独立 Compose project、显式网络和 Docker 动态 loopback 端口。它先验证并安全解包 storage，再恢复到空 PostgreSQL、核对备份 migration 账本并运行当前统一 runner，检查数据库受管路径与磁盘文件，最后等待四个服务健康并输出隔离 URL；失败只对该隔离 project 执行不带 volume 删除的 `down` 并清理脚本创建的目标内容。
 - 管理配置见 [管理员配置指南](docs/03-实施计划/管理员配置指南.md)。

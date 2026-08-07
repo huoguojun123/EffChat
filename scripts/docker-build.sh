@@ -13,6 +13,21 @@ COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$SRC_DIR/docker-compose.yml")
 # shellcheck source=compose-env.sh
 source "$SRC_DIR/scripts/compose-env.sh"
 
+# One owner drives both source hashing and Git dirty detection. These paths
+# cover application source, Dockerfiles, build helpers, Compose behavior, the
+# root context contract, and every project/license file copied into images.
+BUILD_REF_PATHS=(
+  backend
+  frontend
+  py-extractor
+  scripts
+  docker-compose.yml
+  .dockerignore
+  LICENSE
+  NOTICE
+  THIRD_PARTY_NOTICES.md
+)
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -124,7 +139,7 @@ source_tree_hash() {
   (
     cd "$SRC_DIR"
     {
-      find backend frontend py-extractor scripts \
+      find "${BUILD_REF_PATHS[@]}" \
         \( \( \
           -name node_modules -o -name dist -o -name dist-ssr -o -name bin -o \
           -name uploads -o -name data -o -name logs -o -name tmp -o -name coverage -o \
@@ -136,7 +151,6 @@ source_tree_hash() {
           ! -name '.envrc' ! -name '.envrc.*' ! -name '*.local' ! -name '*.log' \
           ! -name '*.test' ! -name '*.out' ! -name '.DS_Store' -print \
         \)
-      printf '%s\n' docker-compose.yml
     } | LC_ALL=C sort | while IFS= read -r file; do
       if [ -L "$file" ]; then
         printf 'link:%s  %s\n' "$(readlink "$file")" "$file"
@@ -162,7 +176,7 @@ export_build_ref() {
     git_root="$(cd "$git_root_raw" && pwd -P)"
   fi
   if [ "$git_root" = "$SRC_DIR" ] && git_ref="$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null)"; then
-    if [ -n "$(git -C "$SRC_DIR" status --porcelain --untracked-files=normal -- backend frontend py-extractor scripts docker-compose.yml 2>/dev/null)" ]; then
+    if [ -n "$(git -C "$SRC_DIR" status --porcelain --untracked-files=normal -- "${BUILD_REF_PATHS[@]}" 2>/dev/null)" ]; then
       tree_hash="$(source_tree_hash)"
       BUILD_REF="${git_ref}-dirty-${tree_hash:0:12}"
     else

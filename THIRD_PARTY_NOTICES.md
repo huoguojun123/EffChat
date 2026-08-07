@@ -125,6 +125,14 @@ must retain its original source, copyright notice, license, attribution, and
 modification notice where required.
 
 The default system prompt remains unchanged during open-source preparation.
-Its original upstream source and license coverage must be verified before the
-repository is made public. This notice does not claim that third-party prompt
-content is relicensed under Apache-2.0.
+Its historical reference source is the
+[`asgeirtj/system_prompts_leaks`](https://github.com/asgeirtj/system_prompts_leaks)
+repository, inspected at commit
+`87578587f873183f90dc8205d665527d5e4ee560`, whose root `LICENSE` declares
+CC0-1.0 Universal.
+
+This provenance note records the public source and license declaration of the
+referenced repository. It does not assert that EffChat authored all referenced
+material, that Anthropic licensed or endorsed EffChat, or that Anthropic has
+made an infringement claim against this project. Third-party prompt material
+does not become Apache-2.0 merely through inclusion in EffChat.

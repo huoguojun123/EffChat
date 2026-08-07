@@ -42,6 +42,8 @@ cp .env.docker.example .env.docker
 - `TRUST_PROXY_HEADERS`（使用内置 Web 反代时保持 `true`；后端可能绕过可信代理时设为 `false`）
 - `RUN_FIRST_OUTPUT_TIMEOUT` / `SSE_HEARTBEAT_INTERVAL`
 
+`.env.docker` 完全遵循 Docker Compose 的 dotenv 语义：单引号、双引号、转义、行尾注释和当前 shell 覆盖均由 Compose 解析。`docker-build.sh` 与 `storage-layout.sh` 只读取 `docker compose config --environment` 的最终插值结果，不会 `source` 或自行解释 env 文件；因此 secret 占位检查、`DATA_DIR` 文件操作和实际 Compose 挂载使用同一值。可先执行 `scripts/docker-build.sh config` 检查最终配置。
+
 `RUN_FIRST_OUTPUT_TIMEOUT` 支持 Go duration（如 `90s`、`25m`）或纯秒数，只限制模型返回首个有效文本、思考内容或具名工具调用前的等待。一旦有效输出开始，后端会继续读取流直到 EOF；用户停止、服务排空、账号或会话失效仍可取消任务。值为 `0` 时使用聊天 15 分钟、压缩 5 分钟的内建首包默认值。
 
 ### Git Skill 的出站网络边界

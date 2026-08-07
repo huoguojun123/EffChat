@@ -10,6 +10,8 @@ fi
 ENV_FILE="${ENV_FILE:-$DEPLOY_ROOT/.env.docker}"
 EXAMPLE_ENV="$DEPLOY_ROOT/.env.docker.example"
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$SRC_DIR/docker-compose.yml")
+# shellcheck source=compose-env.sh
+source "$SRC_DIR/scripts/compose-env.sh"
 
 usage() {
   cat <<'USAGE'
@@ -37,18 +39,6 @@ require_env_file() {
     echo "Create it with: cp $EXAMPLE_ENV $ENV_FILE"
     exit 1
   fi
-}
-
-env_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $0 !~ /^[[:space:]]*#/ && $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-      print
-      exit
-    }
-  ' "$ENV_FILE"
 }
 
 validate_runtime_secrets() {

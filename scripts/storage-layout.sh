@@ -104,6 +104,41 @@ prepare_storage() {
     "$BACKUP_ROOT"
 }
 
+marker_value() {
+  local key="$1"
+  awk -F= -v key="$key" '
+    $1 == key {
+      sub(/^[^=]*=/, "")
+      print
+      exit
+    }
+  ' "$MARKER"
+}
+
+marker_state() {
+  local state
+  state="$(marker_value state)"
+  if [ -n "$state" ]; then
+    printf '%s\n' "$state"
+  elif [ "$(marker_value layout)" = "v1" ]; then
+    # Markers created before explicit states are still reversible migrations.
+    printf 'migrated\n'
+  fi
+}
+
+set_marker_state() {
+  local state="$1" timestamp_key="$2" timestamp="$3" temp_marker
+  temp_marker="${MARKER}.tmp.$$"
+  awk -F= -v timestamp_key="$timestamp_key" '
+    $1 != "state" && $1 != timestamp_key { print }
+  ' "$MARKER" > "$temp_marker"
+  {
+    printf 'state=%s\n' "$state"
+    printf '%s=%s\n' "$timestamp_key" "$timestamp"
+  } >> "$temp_marker"
+  mv -f -- "$temp_marker" "$MARKER"
+}
+
 legacy_file_count() {
   if [ -d "$LEGACY_ROOT" ]; then
     find "$LEGACY_ROOT" -type f ! -name .DS_Store | wc -l | tr -d ' '
@@ -413,7 +448,7 @@ plan() {
   printf 'storage_files=%s\n' "$(storage_file_count)"
   printf 'legacy_database_paths=%s\n' "$database_paths"
   if [ -f "$MARKER" ]; then
-    printf 'status=migrated\n'
+    printf 'status=%s\n' "$(marker_state)"
   else
     printf 'status=pending\n'
   fi
@@ -457,6 +492,7 @@ apply_layout() {
 
   {
     printf 'layout=v1\n'
+    printf 'state=migrated\n'
     printf 'migrated_at_epoch=%s\n' "$(date +%s)"
     printf 'legacy_root=%s\n' "$LEGACY_ROOT"
     printf 'restore_sql=%s\n' "$restore_sql"
@@ -467,19 +503,29 @@ apply_layout() {
 }
 
 rollback_layout() {
-  ensure_postgres
-  "${COMPOSE[@]}" stop web backend >/dev/null 2>&1 || true
-  WRITERS_STOPPED=1
   if [ ! -f "$MARKER" ]; then
     echo "Storage layout marker not found." >&2
     return 1
   fi
-  local restore_sql
-  restore_sql="$(awk -F= '$1 == "restore_sql" {sub(/^[^=]*=/, ""); print; exit}' "$MARKER")"
+  local state restore_sql
+  state="$(marker_state)"
+  if [ "$state" != "migrated" ]; then
+    echo "Storage layout is $state and cannot be rolled back." >&2
+    return 1
+  fi
+  if [ ! -d "$LEGACY_ROOT" ]; then
+    echo "Legacy uploads are missing; refusing rollback." >&2
+    return 1
+  fi
+  validate_legacy_tree
+  restore_sql="$(marker_value restore_sql)"
   if [ -z "$restore_sql" ] || [ ! -f "$restore_sql" ]; then
     echo "Restore SQL is missing." >&2
     return 1
   fi
+  ensure_postgres
+  "${COMPOSE[@]}" stop web backend >/dev/null 2>&1 || true
+  WRITERS_STOPPED=1
   db_psql -f - < "$restore_sql"
   rm -f "$MARKER"
   WRITERS_STOPPED=0
@@ -487,24 +533,44 @@ rollback_layout() {
 }
 
 finalize_layout() {
-  ensure_postgres
-  verify_layout
   if [ ! -f "$MARKER" ]; then
     echo "Storage layout marker not found." >&2
     return 1
   fi
+  local state
+  state="$(marker_state)"
+  case "$state" in
+    migrated) ;;
+    finalized)
+      if [ -e "$LEGACY_ROOT" ]; then
+        echo "Finalized layout still has a legacy uploads path; refusing to continue." >&2
+        return 1
+      fi
+      ensure_postgres
+      verify_layout
+      echo "Storage layout is already finalized."
+      return
+      ;;
+    *)
+      echo "Unknown storage layout state: ${state:-missing}" >&2
+      return 1
+      ;;
+  esac
   if [ "${CONFIRM_STORAGE_FINALIZE:-}" != "DELETE_LEGACY_UPLOADS" ]; then
     echo "Set CONFIRM_STORAGE_FINALIZE=DELETE_LEGACY_UPLOADS to remove legacy uploads." >&2
     return 1
   fi
   local migrated_at now
-  migrated_at="$(awk -F= '$1 == "migrated_at_epoch" {print $2; exit}' "$MARKER")"
+  migrated_at="$(marker_value migrated_at_epoch)"
   now="$(date +%s)"
   if [ -z "$migrated_at" ] || [ $((now - migrated_at)) -lt 604800 ]; then
     echo "Legacy uploads must be retained for at least 7 days." >&2
     return 1
   fi
-  rm -rf "$LEGACY_ROOT"
+  ensure_postgres
+  verify_layout
+  rm -rf -- "$LEGACY_ROOT"
+  set_marker_state finalized finalized_at_epoch "$now"
   echo "Legacy uploads removed after verification and retention."
 }
 

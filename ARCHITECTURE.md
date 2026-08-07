@@ -239,6 +239,7 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 - 快速部署见 [Docker Compose 部署](docs/03-实施计划/Docker-Compose-部署.md)。
 - 部署脚本不自行解析或执行 `.env.docker`；secret、数据库身份和 `DATA_DIR` 均消费 `docker compose config --environment` 的最终插值结果，使引号、注释、转义及 shell/`--env-file` 优先级与实际容器环境和 bind mount 保持一致。
 - storage layout marker 是显式生命周期状态：旧 marker 兼容解释为 `migrated`，成功清理 legacy uploads 后原子记录为 `finalized`；rollback 只允许 `migrated` 且 legacy/restore 工件仍存在的状态，并在停止服务或执行 SQL 前拒绝 finalized、未知或缺失工件。
+- `docker-build.sh up` 和 `reset-db` 均先完成镜像构建，再进入服务、migration 和 storage 切换；最终服务使用 `up --no-build --wait`，构建失败不会先停止现有服务或删除 reset 目标。
 - 管理配置见 [管理员配置指南](docs/03-实施计划/管理员配置指南.md)。
 - 公开导出见 [开源发布检查清单](docs/03-实施计划/开源发布检查清单.md)。
 - 三个应用镜像在构建阶段分别从实际 Go 编译图、前端生产依赖树和 Python 锁定安装集生成第三方许可归档；缺少许可正文且没有精确版本 fallback 时构建失败。最终镜像只携带对应组件归档，基础镜像 OS/runtime 包继续以其上游镜像声明为边界。`scripts/check-image-licenses.sh` 会从最终镜像离线复制归档并校验 manifest、文件完整性和 SHA-256。

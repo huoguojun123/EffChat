@@ -1294,6 +1294,7 @@ func shouldRetryMemoryMaintenanceBeforeCompaction(err error) bool {
 
 func runCompactionTasks(ctx context.Context, maintainMemory func(context.Context) error, compact func(context.Context) (*agent.CompressionCheckpoint, error)) (*agent.CompressionCheckpoint, error) {
 	type result struct {
+		memory     bool
 		checkpoint *agent.CompressionCheckpoint
 		err        error
 	}
@@ -1301,10 +1302,10 @@ func runCompactionTasks(ctx context.Context, maintainMemory func(context.Context
 	defer cancel()
 	results := make(chan result, 2)
 	go func() {
-		// Memory maintenance is a sibling prerequisite, not the output owner
-		// of the compaction run. Its model chunks must not disarm the outer
-		// RunHub guard while the actual conversation compression is silent.
-		results <- result{err: maintainMemory(modelstream.IsolateFirstOutputTimeout(taskCtx))}
+		// Memory maintenance is best-effort enrichment, not the output owner
+		// of the compaction run. A deterministic memory output-limit or patch
+		// validation failure must not cancel a usable conversation checkpoint.
+		results <- result{memory: true, err: maintainMemory(modelstream.IsolateFirstOutputTimeout(taskCtx))}
 	}()
 	go func() {
 		checkpoint, err := compact(taskCtx)
@@ -1312,18 +1313,28 @@ func runCompactionTasks(ctx context.Context, maintainMemory func(context.Context
 	}()
 
 	first := <-results
-	if first.err != nil {
-		cancel()
-		<-results
-		return nil, first.err
+	if !first.memory {
+		if first.err != nil {
+			cancel()
+			<-results
+			return nil, first.err
+		}
+		<-results // memory errors are already audited and do not block compaction.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return first.checkpoint, nil
 	}
+
+	// A memory-only failure is intentionally non-fatal. Wait for the actual
+	// compaction owner; if it fails, its error remains authoritative.
 	second := <-results
 	if second.err != nil {
 		cancel()
 		return nil, second.err
 	}
-	if first.checkpoint != nil {
-		return first.checkpoint, nil
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	return second.checkpoint, nil
 }

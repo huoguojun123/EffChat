@@ -766,22 +766,27 @@ func TestLoadPostRunMemorySessionUsesDetachedContext(t *testing.T) {
 	}
 }
 
-func TestRunCompactionTasksCancelsCompactionAfterMemoryFailure(t *testing.T) {
+func TestRunCompactionTasksKeepsCompactionAfterMemoryFailure(t *testing.T) {
 	compactionCanceled := make(chan struct{}, 1)
-	_, err := runCompactionTasks(context.Background(), func(context.Context) error {
+	checkpoint := &agent.CompressionCheckpoint{SummaryData: []byte("summary")}
+	got, err := runCompactionTasks(context.Background(), func(context.Context) error {
 		return errors.New("memory failed")
 	}, func(ctx context.Context) (*agent.CompressionCheckpoint, error) {
-		<-ctx.Done()
-		compactionCanceled <- struct{}{}
-		return nil, ctx.Err()
+		select {
+		case <-ctx.Done():
+			compactionCanceled <- struct{}{}
+			return nil, ctx.Err()
+		default:
+			return checkpoint, nil
+		}
 	})
-	if err == nil || err.Error() != "memory failed" {
-		t.Fatalf("error = %v, want memory failure", err)
+	if err != nil || got != checkpoint {
+		t.Fatalf("checkpoint=%#v err=%v, want memory failure to be non-fatal", got, err)
 	}
 	select {
 	case <-compactionCanceled:
-	case <-time.After(time.Second):
-		t.Fatal("compaction was not canceled after memory failure")
+		t.Fatal("compaction was canceled after memory failure")
+	default:
 	}
 }
 

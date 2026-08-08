@@ -53,7 +53,7 @@ func TestValidateModelInput(t *testing.T) {
 	}
 }
 
-func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicModel(t *testing.T) {
+func TestModelService_DeleteHardRemovesAndDefaultValidationRequiresRunnablePublicModel(t *testing.T) {
 	db := setupMessageTestDB(t)
 	defer db.Close()
 	suffix := time.Now().UnixNano()
@@ -82,11 +82,11 @@ func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicMo
 		t.Fatalf("validate runnable public default: %v", err)
 	}
 	if err := svc.Delete(context.Background(), modelID); err != nil {
-		t.Fatalf("disable model: %v", err)
+		t.Fatalf("delete model: %v", err)
 	}
 	stored, err := modelRepo.Get(modelID)
-	if err != nil || stored == nil || stored.Enabled {
-		t.Fatalf("deleted model = %#v, err=%v; want retained disabled model", stored, err)
+	if err != nil || stored != nil {
+		t.Fatalf("deleted model = %#v, err=%v; want hard deletion", stored, err)
 	}
 	if err := svc.ValidateDefaultModel(modelID); err == nil {
 		t.Fatal("disabled model accepted as default")

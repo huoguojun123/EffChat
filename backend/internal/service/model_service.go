@@ -240,11 +240,14 @@ func modelPatchFromRequest(req *UpdateModelRequest) repository.ModelPatch {
 	}
 }
 
-// Delete transitions a model to disabled so existing sessions fail with a clear,
-// recoverable model state instead of losing their configured model reference.
+// Delete permanently removes the model row. Enable/disable is a separate
+// Update operation; conflating the DELETE endpoint with that toggle makes an
+// administrator believe a model was removed while it reappears after reload.
+// Existing sessions keep their historical model_id in messages/session data;
+// runtime resolution reports the missing model explicitly instead of silently
+// resurrecting or rewriting the deleted catalog entry.
 func (s *ModelService) Delete(ctx context.Context, id string) error {
-	disabled := false
-	_, err := s.modelRepo.UpdateFields(ctx, id, repository.ModelPatch{Enabled: &disabled}, nil)
+	err := s.modelRepo.Delete(id)
 	if errors.Is(err, repository.ErrNotFound) {
 		return ErrModelNotFound
 	}

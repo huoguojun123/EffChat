@@ -174,6 +174,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				sessions.POST("/:id/messages/:message_id/retry", RetryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
 				sessions.POST("/:id/messages/:message_id/edit-retry", EditRetryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
 				sessions.POST("/:id/answer-attempts/:attempt_id/select", SelectAnswerAttemptHandler(messageService, sessionService, authService, einoAgent))
+				sessions.DELETE("/:id/answer-attempts/:attempt_id", DeleteAnswerAttemptHandler(messageService, sessionService, authService, einoAgent))
 				sessions.POST("/:id/compact", CompactSessionHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
 				sessions.POST("/:id/compact/undo", UndoCompactionHandler(messageService))
 				sessions.GET("/:id/messages", ListMessagesHandler(messageService))

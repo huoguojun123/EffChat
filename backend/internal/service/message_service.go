@@ -545,6 +545,13 @@ func (s *MessageService) SelectAnswerAttempt(ctx context.Context, sessionID, use
 	return s.answerAttemptRepo.SelectForActiveSession(ctx, sessionID, userID, attemptID)
 }
 
+func (s *MessageService) DeleteAnswerAttempt(ctx context.Context, sessionID, userID, attemptID int64) (*repository.AnswerAttemptDeletion, error) {
+	if s.answerAttemptRepo == nil {
+		return nil, fmt.Errorf("answer attempt deletion is unavailable")
+	}
+	return s.answerAttemptRepo.DeleteForActiveSession(ctx, sessionID, userID, attemptID)
+}
+
 func (s *MessageService) messageResponses(ctx context.Context, messages []*model.Message) ([]*MessageResponse, error) {
 	result := make([]*MessageResponse, len(messages))
 	lastAssistantMessageByAttempt := make(map[int64]int64)

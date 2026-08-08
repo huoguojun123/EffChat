@@ -1,9 +1,8 @@
 import { defineConfig, devices } from "@playwright/test"
 
-// E2E 守护最脆弱的前端链路（停止生成 / 附件上传 / 压缩撤销）。
-// 这些用例需要真实运行的全栈（前端 5173 + 后端 8080 + DB + 可用模型），
-// 因此默认指向本地 start.sh 起的服务；服务不可达时各 spec 自行 skip，不阻断主验证。
-// 运行：先 `./start.sh`，再 `cd frontend && npm run e2e`。
+// 真实全栈用例由 scripts/run-isolated-playwright.sh 启动独立 Compose/DB 和确定性模型 stub。
+// 普通 mocked UI spec 仍可指向显式 E2E_BASE_URL；CI 强制 E2E_REQUIRE_STACK=1，readiness
+// 或凭据失败必须报错，不能以整组 skip 形成零执行绿灯。
 const BASE_URL = process.env.E2E_BASE_URL || "http://localhost:5173"
 
 export default defineConfig({
@@ -15,6 +14,7 @@ export default defineConfig({
   reporter: [["list"]],
   use: {
     baseURL: BASE_URL,
+    browserName: "chromium",
     trace: "retain-on-failure",
   },
   projects: [

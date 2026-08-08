@@ -1,10 +1,10 @@
 import { test as base, expect, type Page } from "@playwright/test"
 
-// 这些 e2e 需要真实全栈（前端 + 后端 + DB + 可用模型），用环境变量提供登录凭据：
-//   E2E_USERNAME / E2E_PASSWORD（默认 admin / 见下），可选 E2E_BASE_URL。
-// 服务不可达或登录失败时整组用例 skip——本地未起服务时不应让 CI/本地校验失败。
+// CI 的隔离栈设置 E2E_REQUIRE_STACK=1；readiness 或登录失败必须直接失败。
+// 本地临时指向未启动服务时仍允许 skip，避免 mocked UI 用例被真实栈绑死。
 const USERNAME = process.env.E2E_USERNAME || "admin"
 const PASSWORD = process.env.E2E_PASSWORD || "admin123456"
+const REQUIRE_STACK = process.env.E2E_REQUIRE_STACK === "1"
 
 export { expect }
 
@@ -54,9 +54,11 @@ async function newChat(page: Page) {
 export const test = base.extend<{ authed: Page }>({
   authed: async ({ page }, runTest, testInfo) => {
     if (!(await serverUp(page))) {
+      if (REQUIRE_STACK) throw new Error("required E2E stack is not reachable")
       testInfo.skip(true, "no running stack (start.sh) — skipping e2e")
     }
     if (!(await authOK(page))) {
+      if (REQUIRE_STACK) throw new Error("required E2E credentials were rejected")
       testInfo.skip(true, "E2E_USERNAME/E2E_PASSWORD not valid for this stack — skipping e2e")
     }
     await login(page)

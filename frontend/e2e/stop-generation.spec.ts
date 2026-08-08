@@ -7,19 +7,14 @@ test("stop generation recovers the UI and syncs from server", async ({ authed: p
   await newChat(page)
 
   const input = page.getByTestId("chat-input")
-  await input.fill("请用中文写一篇约 1200 字、分多个段落的长文，详细介绍 Go 语言的并发模型与调度器。")
+  await input.fill("E2E_STOP_AFTER_FIRST_DELTA")
   await page.getByTestId("send-button").click()
 
   // 进入流式：停止按钮出现（流式期间正文在 streaming buffer 中，尚未落为 message-item）。
   const stop = page.getByTestId("stop-button")
   await expect(stop).toBeVisible({ timeout: 20_000 })
 
-  // 给后端一点时间产出并能落库部分内容，再停止（不等流式自然结束）。
-  await page.waitForTimeout(2500)
-  if (!(await stop.isVisible())) {
-    test.skip(true, "generation finished before stop could be exercised (model too fast/short)")
-    return
-  }
+  await expect(page.getByText("首包已经到达，后续内容必须由用户停止。")).toBeVisible({ timeout: 20_000 })
   await stop.click()
 
   // 关键断言：停止后 UI 从流式态恢复（发送按钮回来），不卡在 streaming/syncing。
@@ -29,4 +24,7 @@ test("stop generation recovers the UI and syncs from server", async ({ authed: p
   await expect(
     page.locator('[data-testid="message-item"][data-role="user"]').last(),
   ).toBeVisible({ timeout: 15_000 })
+
+  await page.reload()
+  await expect(page.getByText("首包已经到达，后续内容必须由用户停止。")).toBeVisible({ timeout: 20_000 })
 })

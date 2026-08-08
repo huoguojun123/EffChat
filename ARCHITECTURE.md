@@ -59,6 +59,8 @@ backend (Gin)
 - `src/api`：REST API 封装和文件 blob 鉴权下载。
 - `src/lib/sseProtocol.ts` / `runReconciliation.ts`：纯 SSE 帧解析、错误归一化和有界运行对账；`useSSE` 继续负责 React 生命周期、发送、停止、重试与 store 协调。
 
+外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面紧凑断点（包括 1080p/125% 下约 1536×864 CSS viewport）只收窄侧栏、管理导航、设置框和欢迎引文，不改变用户可调的聊天正文字号；移动端保持抽屉式侧栏和无横向溢出。
+
 ## 发送消息链路
 
 1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；只保存每个会话的草稿文本，不持久化像素高度。

@@ -198,7 +198,11 @@ function applyAppearance(theme: AppearanceMode, lightTheme: ColorThemeId, darkTh
   }
 
   const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-  if (!animate || reducedMotion || typeof document.startViewTransition !== "function") {
+  // Chromium root view transitions can temporarily detach Radix dialog portals
+  // from the interactive tree. Apply tokens directly while a modal is open so
+  // appearance controls do not dismiss the dialog they are rendered inside.
+  const hasOpenDialog = document.querySelector('[role="dialog"][data-state="open"]') !== null
+  if (!animate || reducedMotion || hasOpenDialog || typeof document.startViewTransition !== "function") {
     update()
     return
   }

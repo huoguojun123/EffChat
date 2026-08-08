@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button"
 import { MotionView } from "@/components/ui/motion"
 import { useUIStore } from "@/stores/ui"
-import { ACCENTS, COLOR_THEMES, colorTheme, type ColorThemeId } from "@/lib/themes"
+import { ACCENTS, COLOR_THEMES, THEME_PREVIEW_COLORS, accentPreviewColor, type ColorThemeId } from "@/lib/themes"
 import { cn } from "@/lib/utils"
 import { UserAvatar } from "@/components/UserAvatar"
 import { EditorOwnership } from "@/components/admin/editorOwnership"
@@ -64,7 +64,7 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
 
   return (
     <Dialog open={open} onOpenChange={(next) => next ? onOpenChange(true) : close()}>
-      <DialogContent className="max-h-[min(90dvh,680px)] max-w-[600px] overflow-hidden p-0">
+      <DialogContent className="max-h-[min(90dvh,680px)] max-w-[var(--settings-dialog-width)] overflow-hidden p-0">
         <DialogHeader>
           <DialogTitle className="border-b border-border px-5 py-4">设置</DialogTitle>
           <DialogDescription className="sr-only">配置个人资料、密码和界面外观。</DialogDescription>
@@ -85,7 +85,7 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 rounded-lg"
+            className="shrink-0 rounded-lg text-sm"
             onClick={() => {
               leaveCurrentForm(() => {
                 onOpenChange(false)
@@ -145,7 +145,7 @@ function AppearanceSettings() {
                 "relative h-7 w-7 rounded-full ring-offset-2 ring-offset-background transition-transform motion-control hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 accent === item.id && "ring-2 ring-foreground/70"
               )}
-              style={{ background: item.color }}
+              style={{ background: accentPreviewColor(item.id) }}
               title={item.label}
               aria-label={`强调色：${item.label}`}
               aria-pressed={accent === item.id}
@@ -176,7 +176,7 @@ function ModeButton({ active, icon, label, onClick }: { active: boolean; icon: R
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-muted-foreground transition-[background-color,color,box-shadow] motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-background/50",
+        "flex h-8 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium text-muted-foreground transition-[background-color,color,box-shadow] motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-background/50",
         active && "bg-background text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.05)] hover:bg-background"
       )}
     >
@@ -187,12 +187,14 @@ function ModeButton({ active, icon, label, onClick }: { active: boolean; icon: R
 }
 
 function ThemeSelect({ value, mode, onChange }: { value: ColorThemeId; mode: "light" | "dark"; onChange: (value: ColorThemeId) => void }) {
-  const selected = colorTheme(value)
-  const swatches = mode === "light" ? selected.lightSwatches : selected.darkSwatches
   return (
     <label className="relative flex h-9 items-center rounded-lg border border-input bg-popover pl-2 pr-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow,background-color] motion-control hover:border-input/80 focus-within:border-input/80 focus-within:ring-2 focus-within:ring-ring/60">
-      <span className="mr-2 flex overflow-hidden rounded-sm border border-black/10 dark:border-white/10" aria-hidden="true">
-        {swatches.map((color) => <span key={color} className="h-4 w-3" style={{ backgroundColor: color }} />)}
+      <span
+        data-color-theme={value}
+        className={cn("theme-preview mr-2 flex overflow-hidden rounded-sm border border-black/10", mode === "dark" && "dark border-white/10")}
+        aria-hidden="true"
+      >
+        {THEME_PREVIEW_COLORS.map((color) => <span key={color} className="h-4 w-3" style={{ backgroundColor: color }} />)}
       </span>
       <select
         value={value}

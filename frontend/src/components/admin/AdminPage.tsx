@@ -234,7 +234,7 @@ export function AdminPage() {
         </Button>
       </header>
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[var(--admin-nav-width)_minmax(0,1fr)]">
         <nav className="hidden min-h-0 overflow-y-auto border-r border-border/70 px-3 py-4 lg:block" aria-label="管理后台导航">
           {ADMIN_NAV.map((group) => (
             <section key={group.key} className="mb-5 last:mb-0">

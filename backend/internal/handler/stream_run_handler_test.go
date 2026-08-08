@@ -790,6 +790,18 @@ func TestRunCompactionTasksKeepsCompactionAfterMemoryFailure(t *testing.T) {
 	}
 }
 
+func TestRunCompactionTasksKeepsCompactionAfterMissingMemoryRetryInput(t *testing.T) {
+	checkpoint := &agent.CompressionCheckpoint{SummaryData: []byte("summary")}
+	got, err := runCompactionTasks(context.Background(), func(context.Context) error {
+		return errors.New("no user message available for memory retry")
+	}, func(context.Context) (*agent.CompressionCheckpoint, error) {
+		return checkpoint, nil
+	})
+	if err != nil || got != checkpoint {
+		t.Fatalf("checkpoint=%#v err=%v, want missing memory retry input to remain non-fatal", got, err)
+	}
+}
+
 func TestRunCompactionTasksCancelsMemoryAfterCompactionFailure(t *testing.T) {
 	memoryCanceled := make(chan struct{}, 1)
 	_, err := runCompactionTasks(context.Background(), func(ctx context.Context) error {

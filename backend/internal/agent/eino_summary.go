@@ -40,11 +40,17 @@ const compactionPreamble = `This conversation continues from a compressed checkp
 // recentVerbatimCount 摘要后附带的最近原始消息条数，降低近期信息损失。
 const recentVerbatimCount = 10
 
-// compactionSummaryMaxChars 是压缩摘要落库前的硬上限。
+// compactionSummaryMaxChars 是压缩摘要落库前的兼容字符上限。
 //
 // 压缩的目的就是降低后续上下文体积；如果模型生成的摘要过长，宁可保留前部结构化信息
 // 并追加截断提示，也不能让“摘要”再次成为触发压缩的巨大消息。
 const compactionSummaryMaxChars = 24000
+
+// compactionSummaryMaxTokens is the actual shared context budget for the
+// persisted checkpoint body. The existing character ceiling is retained as a
+// defensive storage bound, but token accounting decides how much summary and
+// recent verbatim context may enter the body.
+const compactionSummaryMaxTokens = 8000
 
 const (
 	contextSafetyMarginDivisor   = 20
@@ -297,21 +303,146 @@ func buildCompactionSummaryBody(rawSummary string, messages []*model.Message) st
 		summaryText = "本次压缩未能生成有效摘要。请根据最近的原始对话继续。"
 	}
 
-	body := compactionPreamble + "\n\n" + summaryText
-	if recent := renderRecentVerbatim(messages, recentVerbatimCount); recent != "" {
-		body += "\n\n--- 最近的原始对话（保留原文以供参考）---\n\n" + recent
+	preamble := compactionPreamble + "\n\n"
+	separator := "\n\n--- 最近的原始对话（保留原文以供参考）---\n\n"
+	fixedTokens := estimateTextTokens(preamble + separator)
+	availableTokens := compactionSummaryMaxTokens - fixedTokens
+	if availableTokens < 1 {
+		availableTokens = 1
 	}
-	if len([]rune(body)) <= compactionSummaryMaxChars {
-		return body
+
+	// Reserve the remaining budget for the ten-message window. The summary is
+	// allowed to use most of the budget, but it can never evict the whole recent
+	// window or make the final checkpoint exceed the context ceiling.
+	summaryBudget := availableTokens
+	recent := renderRecentVerbatimWithinTokenBudget(messages, recentVerbatimCount, availableTokens-estimateTextTokens(summaryText))
+	if recent != "" {
+		recentTokens := estimateTextTokens(recent)
+		if recentTokens > 0 {
+			summaryBudget = availableTokens - recentTokens
+		}
 	}
-	runes := []rune(body)
-	truncated := string(runes[:compactionSummaryMaxChars])
-	log.Printf("[eino] 压缩摘要超过上限，已裁剪: chars=%d limit=%d", len(runes), compactionSummaryMaxChars)
-	return truncated + "\n\n[系统提示：压缩摘要因长度超过上限已截断。]"
+	if summaryBudget < 1 {
+		summaryBudget = 1
+	}
+	summaryText = truncateTextToTokens(summaryText, summaryBudget)
+
+	body := preamble + summaryText
+	if recent != "" {
+		body += separator + recent
+	}
+	if estimateTextTokens(body) > compactionSummaryMaxTokens {
+		// This is a final defensive guard for estimator rounding. Truncate only
+		// the recent window; the summary remains the higher-value continuity data.
+		allowedRecent := compactionSummaryMaxTokens - estimateTextTokens(preamble+summaryText+separator)
+		if allowedRecent > 0 {
+			recent = truncateTextToTokens(recent, allowedRecent)
+			body = preamble + summaryText + separator + recent
+		} else {
+			body = truncateTextToTokens(preamble+summaryText, compactionSummaryMaxTokens)
+		}
+	}
+	if len([]rune(body)) > compactionSummaryMaxChars {
+		body = truncateTextToTokens(body, compactionSummaryMaxTokens)
+		log.Printf("[eino] 压缩摘要达到字符防线，按 token 预算收口: chars=%d limit=%d", len([]rune(body)), compactionSummaryMaxChars)
+	}
+	return body
 }
 
-// renderRecentVerbatim 把最近 n 条消息渲染成「角色: 正文」的纯文本块，附在摘要后。
-// 仅取 user/assistant 的文本内容；空内容（如纯工具调用消息）跳过，避免噪声。
+// renderRecentVerbatimWithinTokenBudget keeps at most n recent messages while
+// giving every non-empty message an equal allowance. This conservative first
+// pass intentionally leaves a small safety margin for provider tokenizer
+// differences, so one pasted message cannot evict the rest of the recent
+// conversation. Every selected message remains represented, even when its
+// content must be truncated.
+func renderRecentVerbatimWithinTokenBudget(messages []*model.Message, n, budget int) string {
+	if len(messages) == 0 || n <= 0 || budget <= 0 {
+		return ""
+	}
+	start := len(messages) - n
+	if start < 0 {
+		start = 0
+	}
+	type recentPart struct{ label, content string }
+	parts := make([]recentPart, 0, n)
+	for _, msg := range messages[start:] {
+		if msg == nil {
+			continue
+		}
+		var data struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(msg.MessageData, &data); err != nil {
+			continue
+		}
+		content := strings.TrimSpace(data.Content)
+		if content == "" {
+			continue
+		}
+		label := data.Role
+		switch data.Role {
+		case "user":
+			label = "用户"
+		case "assistant":
+			label = "助手"
+		case "tool":
+			label = "工具结果"
+		}
+		parts = append(parts, recentPart{label: label, content: content})
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	overhead := 0
+	for _, part := range parts {
+		overhead += estimateTextTokens(part.label + "：")
+	}
+	overhead += estimateTextTokens(strings.Repeat("\n\n", len(parts)-1))
+	contentBudget := budget - overhead
+	if contentBudget < len(parts) {
+		contentBudget = len(parts)
+	}
+	perPart := contentBudget / len(parts)
+	if perPart < 1 {
+		perPart = 1
+	}
+	result := make([]string, len(parts))
+	for i, part := range parts {
+		text := truncateTextToTokens(part.content, perPart)
+		result[i] = part.label + "：" + text
+	}
+	return strings.Join(result, "\n\n")
+}
+
+// truncateTextToTokens truncates only at rune boundaries and never exceeds the
+// conservative local token estimator. This is intentionally tokenizer-agnostic
+// because the checkpoint must stay within a shared bound across providers.
+func truncateTextToTokens(text string, budget int) string {
+	if budget <= 0 || text == "" {
+		return ""
+	}
+	if estimateTextTokens(text) <= budget {
+		return text
+	}
+	if budget == 1 {
+		return "…"
+	}
+	runes := []rune(text)
+	lo, hi := 0, len(runes)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if estimateTextTokens(string(runes[:mid])) <= budget-1 {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return string(runes[:lo]) + "…"
+}
+
+// renderRecentVerbatim is retained for focused tests and compatibility with
+// callers that need the historical unbounded rendering behavior.
 func renderRecentVerbatim(messages []*model.Message, n int) string {
 	if len(messages) == 0 || n <= 0 {
 		return ""

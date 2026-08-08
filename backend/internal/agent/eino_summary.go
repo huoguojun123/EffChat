@@ -407,12 +407,35 @@ func renderRecentVerbatimWithinTokenBudget(messages []*model.Message, n, budget 
 	if perPart < 1 {
 		perPart = 1
 	}
-	result := make([]string, len(parts))
-	for i, part := range parts {
-		text := truncateTextToTokens(part.content, perPart)
-		result[i] = part.label + "：" + text
+	allocations := make([]int, len(parts))
+	for i := range allocations {
+		allocations[i] = perPart
 	}
-	return strings.Join(result, "\n\n")
+	render := func() string {
+		result := make([]string, len(parts))
+		for i, part := range parts {
+			result[i] = part.label + "：" + truncateTextToTokens(part.content, allocations[i])
+		}
+		return strings.Join(result, "\n\n")
+	}
+
+	// Return unused budget to newer messages. Binary-search each message's
+	// largest safe allocation so tokenizer rounding cannot push the joined
+	// window over its total budget.
+	for i := len(parts) - 1; i >= 0; i-- {
+		low, high := allocations[i], estimateTextTokens(parts[i].content)
+		for low < high {
+			mid := (low + high + 1) / 2
+			allocations[i] = mid
+			if estimateTextTokens(render()) <= budget {
+				low = mid
+			} else {
+				high = mid - 1
+			}
+		}
+		allocations[i] = low
+	}
+	return render()
 }
 
 // truncateTextToTokens truncates only at rune boundaries and never exceeds the

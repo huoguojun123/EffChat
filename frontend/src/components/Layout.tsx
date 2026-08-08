@@ -122,7 +122,7 @@ export function Layout() {
         inert={!sidebarOpen ? true : undefined}
         className={`
           ${isMobile ? "fixed inset-y-0 left-0 z-50" : "relative"}
-          ${isMobile ? "w-[min(84vw,300px)] transform-gpu transition-transform motion-surface" : `${sidebarOpen ? "w-[280px]" : "w-0"} transition-[width,border-color] motion-panel`}
+          ${isMobile ? "w-[min(84vw,300px)] transform-gpu transition-transform motion-surface" : `${sidebarOpen ? "w-[var(--desktop-sidebar-width)]" : "w-0"} transition-[width,border-color] motion-panel`}
           shrink-0 overflow-hidden overscroll-none
           border-r will-change-transform
           ${isMobile ? (sidebarOpen ? "pointer-events-auto translate-x-0 border-border" : "pointer-events-none -translate-x-[calc(100%+1px)] border-transparent") : ""}

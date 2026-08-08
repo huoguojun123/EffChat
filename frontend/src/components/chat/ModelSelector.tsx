@@ -68,11 +68,11 @@ export function ModelSelector() {
             {formatModelName(currentModel, currentModelId)}
           </span>
           {currentModel ? (
-            <span className="hidden shrink-0 rounded-lg bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium leading-none text-muted-foreground/80 sm:inline">
+            <span className="hidden shrink-0 rounded-lg bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium leading-none text-muted-foreground/80 sm:inline">
               {formatChannelName(currentModel)}
             </span>
           ) : currentModelId ? (
-            <span className="shrink-0 rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-700 dark:text-amber-300">
+            <span className="shrink-0 rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-amber-700 dark:text-amber-300">
               模型不可用
             </span>
           ) : null}

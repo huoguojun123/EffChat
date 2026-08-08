@@ -119,8 +119,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - Tool/Skill catalog mutation 使用追加式治理事件记录 actor、before/after、原因、包版本和回滚来源；管理员的 metadata、package/import 与 delete 均在同一数据库事务中写入治理事件。事件只保存非正文状态；Skill 包正文继续位于受管存储，import record 的不可变文件引用保留未来版本。legacy active package（含 builtin）首次进入治理路径时会建立文件引用快照，删除保留 tombstone。回滚必须确认当前状态仍等于原事件的 after，并校验 retained files manifest 后恢复受管文件引用，再提交目标状态与新的反向事件；不能改写历史，也不能重新依赖 Git/Zip 上游。
 - 工具自身返回的受控业务失败保持结构化结果。repository、持久化或受管文件 I/O 等内部失败必须作为 wrapped Go error 交给 Tool governance，不能伪装成成功 envelope 内的 `error` 字段；治理边界也会把带显式公共 `message` 的结构化失败改写为该公共文案。模型、RunHub 和消息树只接收稳定失败，原始 repository、路径或 provider 原因仅进入受控内部诊断；已有 `error_code` 的网页 typed 失败继续由网页工具自己的分类器负责。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
-- 网页提取链路由管理员为 Firecrawl、Jina、Tavily 和 Exa 独立配置并排序；Basic 固定为最后兜底。
-- 网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。前端工具树把 clean、degraded/truncated 和 hard error 分别呈现为成功、安静 warning 和错误；warning 通过稳定中文文案说明提炼或截断原因，同时保留 fallback 正文和来源链接，流式、RunHub 恢复与历史消息共享同一 renderer。
+- 网页提取默认使用内置 Basic 读取器作为低延迟首选；管理员为 Firecrawl、Jina、Tavily 和 Exa 配置的顺序保持不变，但只在 Basic 无法取得可用正文时作为有界 fallback。provider 规范化必须保留运行时顺序且只补缺失的 Basic，不能把首选顺序静默改回第三方优先。
+- Basic 成功后直接返回受 `detail` 与正文上限约束的 readable text，不再无条件调用小模型；第三方 fallback 成功后仍可按既有 policy 执行 refinement。网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算；第三方抓取成功但提炼不可用或正文仍需截断时返回带原因的 degraded 结果。前端工具树把 clean、degraded/truncated 和 hard error 分别呈现为成功、安静 warning 和错误；warning 通过稳定中文文案说明提炼或截断原因，同时保留 fallback 正文和来源链接，流式、RunHub 恢复与历史消息共享同一 renderer。
 - 网页提炼开关与模型 ID 属于内容外发 policy：成功解析的值成为进程内 last-known-good snapshot；短暂查询/解析故障只复用该快照，冷启动无可信值时保守关闭二次提炼，不构造 utility model，也不把 crawler 正文发给模型。accepted runtime snapshot v4 固定实际生效策略、`ready` / `disabled` / `unavailable` 状态和已解析的模型/渠道依赖，执行阶段不重新读取 live config。
 - 工具调用日志不做持久化后台页面；排障依靠容器日志和用量统计。
 

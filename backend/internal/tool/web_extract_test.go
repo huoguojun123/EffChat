@@ -452,6 +452,29 @@ func TestWebExtractTool_FallbackToBasic(t *testing.T) {
 	}
 }
 
+func TestWebExtractTool_BasicFastPathSkipsRefinement(t *testing.T) {
+	pageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><head><title>Local</title></head><body><article><p>locally readable content</p></article></body></html>"))
+	}))
+	defer pageServer.Close()
+
+	mock := &mockSummarizer{summary: "should not run"}
+	tool := allowLoopback(NewWebExtractTool(WebExtractConfig{
+		CrawlerProviders: []string{"basic", "jina"},
+		Summarizer:       mock,
+		SummaryEnabled:   true,
+	}))
+	output := runExtract(t, tool, WebExtractInput{URL: pageServer.URL, Goal: "find the content"})
+
+	if !output.OK || output.Source != "basic" || output.Content != "Local\nlocally readable content" {
+		t.Fatalf("output = %#v, want direct basic result", output)
+	}
+	if mock.called || output.RefinementAttempted || output.Summarized || output.Degraded {
+		t.Fatalf("basic fast path invoked refinement: output=%#v called=%t", output, mock.called)
+	}
+}
+
 func TestWebExtractTool_TavilyAndExaContracts(t *testing.T) {
 	tests := []struct {
 		name      string

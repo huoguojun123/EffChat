@@ -322,6 +322,23 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		}
 		return output, nil
 	}
+	if output.Source == "basic" {
+		// Basic is the default low-latency guarantee. Once local readable text is
+		// available, return it directly rather than adding an unconditional model
+		// refinement call. External providers can still refine when the local
+		// reader fails and the configured fallback chain reaches them.
+		before := toolLogRuneCount(output.Content)
+		var truncated bool
+		output.Content, truncated = truncateRunesWithStatus(output.Content, limit)
+		output.Truncated = output.Truncated || truncated
+		if output.Truncated {
+			log.Printf("[web_extract] content_truncated url_chars=%d source=%s before_chars=%d after_chars=%d", toolLogRuneCount(output.URL), output.Source, before, toolLogRuneCount(output.Content))
+		}
+		if cause := toolParentCause(ctx); cause != nil {
+			return output, cause
+		}
+		return output, nil
+	}
 	if t.summaryEnabled && t.summarizer != nil {
 		sourceTruncated := output.Truncated
 		output.RefinementAttempted = true
@@ -817,13 +834,16 @@ func normalizeCrawlerProviders(providers []string, fallback string) []string {
 	normalized := make([]string, 0, len(providers))
 	for _, item := range providers {
 		item = strings.ToLower(strings.TrimSpace(item))
-		if item == "" || item == "basic" || seen[item] {
+		if item == "" || seen[item] {
 			continue
 		}
 		seen[item] = true
 		normalized = append(normalized, item)
 	}
-	return append(normalized, "basic")
+	if !seen["basic"] {
+		normalized = append(normalized, "basic")
+	}
+	return normalized
 }
 
 func (o WebExtractOutput) failureSummary() string {

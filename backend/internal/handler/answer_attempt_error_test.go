@@ -27,7 +27,6 @@ func TestWriteAnswerAttemptSelectionErrorContract(t *testing.T) {
 	}{
 		{name: "session missing", err: repository.ErrNotFound, status: http.StatusNotFound, code: "session_not_found"},
 		{name: "attempt missing", err: repository.ErrAnswerAttemptNotFound, status: http.StatusNotFound, code: "answer_attempt_not_found"},
-		{name: "not latest", err: repository.ErrAnswerAttemptNotLatest, status: http.StatusConflict, code: "answer_attempt_not_latest"},
 		{name: "not selectable", err: repository.ErrAnswerAttemptNotSelectable, status: http.StatusConflict, code: "answer_attempt_not_selectable"},
 		{name: "internal", err: errors.New("postgres://fixture:secret@db.example/effchat /srv/private/attempts"), status: http.StatusInternalServerError, code: "answer_attempt_select_failed", retryable: true, requestID: true},
 	}
@@ -39,6 +38,39 @@ func TestWriteAnswerAttemptSelectionErrorContract(t *testing.T) {
 			ctx.Set("request_id", "req-answer-attempt")
 
 			writeAnswerAttemptSelectionError(ctx, tc.err)
+
+			assertAnswerAttemptErrorResponse(t, recorder, tc.status, tc.code, tc.retryable, tc.requestID)
+			if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/srv/private") {
+				t.Fatalf("response leaked internal cause: %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestWriteAnswerAttemptDeletionErrorContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name      string
+		err       error
+		status    int
+		code      string
+		retryable bool
+		requestID bool
+	}{
+		{name: "session missing", err: repository.ErrNotFound, status: http.StatusNotFound, code: "session_not_found"},
+		{name: "attempt missing", err: repository.ErrAnswerAttemptNotFound, status: http.StatusNotFound, code: "answer_attempt_not_found"},
+		{name: "not selectable", err: repository.ErrAnswerAttemptNotSelectable, status: http.StatusConflict, code: "answer_attempt_not_selectable"},
+		{name: "last remaining", err: repository.ErrAnswerAttemptLastRemaining, status: http.StatusConflict, code: "answer_attempt_last_remaining"},
+		{name: "internal", err: errors.New("postgres://fixture:secret@db.example/effchat /srv/private/delete-attempt"), status: http.StatusInternalServerError, code: "answer_attempt_delete_failed", retryable: true, requestID: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/1/answer-attempts/2", nil)
+			ctx.Set("request_id", "req-answer-attempt-delete")
+
+			writeAnswerAttemptDeletionError(ctx, tc.err)
 
 			assertAnswerAttemptErrorResponse(t, recorder, tc.status, tc.code, tc.retryable, tc.requestID)
 			if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/srv/private") {

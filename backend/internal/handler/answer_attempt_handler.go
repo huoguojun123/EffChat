@@ -44,18 +44,65 @@ func SelectAnswerAttemptHandler(messageService *service.MessageService, sessionS
 	}
 }
 
+func DeleteAnswerAttemptHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, einoAgent *agent.EinoAgent) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := middleware.GetUserID(c)
+		sessionID, ok := parseSessionID(c)
+		if !ok {
+			return
+		}
+		attemptID, err := strconv.ParseInt(c.Param("attempt_id"), 10, 64)
+		if err != nil || attemptID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "answer_attempt_invalid", "invalid answer attempt id", false)
+			return
+		}
+
+		deletion, err := messageService.DeleteAnswerAttempt(c.Request.Context(), sessionID, userID, attemptID)
+		if err != nil {
+			writeAnswerAttemptDeletionError(c, err)
+			return
+		}
+		memoryReconciliationStarted := false
+		selectedAttemptID := int64(0)
+		if deletion.SelectedAttempt != nil {
+			selectedAttemptID = deletion.SelectedAttempt.ID
+			memoryReconciliationStarted = startAnswerSelectionMemoryReconciliation(c, messageService, sessionService, authService, einoAgent, sessionID, userID, deletion.SelectedAttempt)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"deleted_attempt_id":            deletion.DeletedAttemptID,
+			"selected_attempt_id":           selectedAttemptID,
+			"selection_changed":             deletion.SelectionChanged,
+			"answer_selection_revision":     deletion.SelectionRevision,
+			"memory_reconciliation_started": memoryReconciliationStarted,
+		})
+	}
+}
+
 func writeAnswerAttemptSelectionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
 		writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotFound):
 		writePublicError(c, http.StatusNotFound, "answer_attempt_not_found", "answer attempt not found", false)
-	case errors.Is(err, repository.ErrAnswerAttemptNotLatest):
-		writePublicError(c, http.StatusConflict, "answer_attempt_not_latest", "只能切换当前最后一轮的回答", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotSelectable):
 		writePublicError(c, http.StatusConflict, "answer_attempt_not_selectable", "该回答不可切换", false)
 	default:
 		writeServerError(c, http.StatusInternalServerError, "answer_attempt_select_failed", "切换回答失败，请重试", err)
+	}
+}
+
+func writeAnswerAttemptDeletionError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
+	case errors.Is(err, repository.ErrAnswerAttemptNotFound):
+		writePublicError(c, http.StatusNotFound, "answer_attempt_not_found", "answer attempt not found", false)
+	case errors.Is(err, repository.ErrAnswerAttemptNotSelectable):
+		writePublicError(c, http.StatusConflict, "answer_attempt_not_selectable", "该回答不可删除", false)
+	case errors.Is(err, repository.ErrAnswerAttemptLastRemaining):
+		writePublicError(c, http.StatusConflict, "answer_attempt_last_remaining", "每轮至少需要保留一个回答", false)
+	default:
+		writeServerError(c, http.StatusInternalServerError, "answer_attempt_delete_failed", "删除回答失败，请重试", err)
 	}
 }
 

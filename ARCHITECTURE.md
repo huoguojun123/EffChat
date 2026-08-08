@@ -94,7 +94,7 @@ run admission 已发现 durable terminal，或 BeginExecution 已被另一 obser
 
 accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request ID、run ID 和 `retryable=true`，提示稍后恢复；既有 run replay 发生 scope/not-found 时保留同样关联字段并使用 `retryable=false`。内部 RunHub cause 只进入日志，不能进入 SSE；这两条旁路不取消 worker、不重放 provider，也不改变 durable terminal。
 
-回答版本切换复用会话归属与 answer attempt 事务边界：无效 ID 为 400，会话或 attempt 缺失为 404，目标不属于最后一轮或没有可选择输出为 409，repository/transaction 故障为带 request ID 的 retryable 5xx。该公共错误契约不改变选择 revision、可见消息导航或选择成功后的单会话记忆重整行为。
+每个用户 turn 的 answer attempts 都保留独立输出树；不论该 turn 后面是否已经产生新消息，用户都可在仍有可选择输出的 attempts 之间切换。选择只更新该 user message 的 selected attempt 与会话级 `answer_selection_revision`，后续 Agent、压缩和记忆上下文继续只读取 selected 输出，不复制消息或改写其他 turn。删除当前 attempt 会在同一 session row lock 事务中硬删除其 assistant/tool 输出；若删除的是 selected attempt，事务先选择相邻的可用 attempt 并推进 revision，每个 turn 至少保留一个可选择 attempt。无效 ID 为 400，会话或 attempt 缺失为 404，不可选择或只剩最后一个为 409，repository/transaction 故障为带 request ID 的 retryable 5xx；选择或 replacement 成功后复用单会话记忆重整。
 
 会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。
 

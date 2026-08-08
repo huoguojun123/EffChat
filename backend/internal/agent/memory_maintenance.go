@@ -47,9 +47,17 @@ type PreparedMemoryMaintenanceResult struct {
 }
 
 type memoryMaintenanceDecision struct {
-	Action  string `json:"action"`
-	Content string `json:"content"`
-	Summary string `json:"summary"`
+	Action     string                `json:"action"`
+	Content    string                `json:"content"` // legacy full-card compatibility
+	Operations []memoryMaintenanceOp `json:"operations"`
+	Summary    string                `json:"summary"`
+}
+
+type memoryMaintenanceOp struct {
+	Op      string `json:"op"`      // add|update|delete
+	Section string `json:"section"` // fixed section key
+	Match   string `json:"match"`   // exact existing item for update/delete
+	Content string `json:"content"` // new item for add/update
 }
 
 const (
@@ -67,7 +75,13 @@ const memoryMaintenanceInstructionTemplate = `You maintain one conversation-scop
 The memory card is not a transcript and not a profile. It is a compact continuity aid so future turns can feel informed by shared context while remaining genuinely useful. Preserve only what a future assistant should be able to apply naturally, like a human colleague using shared history without narrating retrieval.
 
 Return strict JSON only:
-{"action":"none|update","content":"fixed-section markdown","summary":"short change summary"}
+{"action":"none|patch","operations":[{"op":"add|update|delete","section":"section_key","match":"exact existing item","content":"new item"}],"summary":"short change summary"}
+
+For patch, return only the smallest required operations. The match field must copy the
+current item exactly for update/delete; add does not use match. The content field is one
+concise bullet body, not a complete memory card. The program applies and validates
+the patch atomically. For compatibility, a full-card action=update response is
+accepted but should not be used for ordinary maintenance.
 
 Fixed sections:
 ## User Background
@@ -398,7 +412,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return nil
 	}
-	if !strings.EqualFold(decision.Action, "update") {
+	if !strings.EqualFold(decision.Action, "update") && !strings.EqualFold(decision.Action, "patch") {
 		err = fmt.Errorf("unsupported memory maintenance action %q", decision.Action)
 		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
@@ -419,7 +433,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return err
 	}
-	normalized, normalizedDoc, err := sessionmemory.NormalizeWithLimits(decision.Content, limits)
+	normalized, normalizedDoc, err := applyMemoryMaintenanceDecision(current, decision, limits)
 	if err != nil {
 		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
@@ -902,6 +916,74 @@ func parseMemoryMaintenanceDecision(raw string) (memoryMaintenanceDecision, erro
 		return memoryMaintenanceDecision{}, fmt.Errorf("decode memory maintenance decision: %w", lastErr)
 	}
 	return memoryMaintenanceDecision{}, fmt.Errorf("memory maintenance returned non-json output")
+}
+
+func applyMemoryMaintenanceDecision(current string, decision memoryMaintenanceDecision, limits sessionmemory.Limits) (string, sessionmemory.Document, error) {
+	if strings.EqualFold(decision.Action, "patch") || len(decision.Operations) > 0 {
+		doc, err := sessionmemory.Parse(current)
+		if err != nil {
+			return "", sessionmemory.Document{}, err
+		}
+		for _, operation := range decision.Operations {
+			sectionKey := sessionmemory.NormalizeSectionKey(operation.Section)
+			sectionIndex := -1
+			for i := range doc.Sections {
+				if doc.Sections[i].Key == sectionKey {
+					sectionIndex = i
+					break
+				}
+			}
+			if sectionIndex < 0 {
+				return "", sessionmemory.Document{}, fmt.Errorf("memory patch section %q is invalid", operation.Section)
+			}
+			op := strings.ToLower(strings.TrimSpace(operation.Op))
+			match := strings.TrimSpace(operation.Match)
+			content := strings.TrimSpace(operation.Content)
+			switch op {
+			case "add":
+				if content == "" {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch add content is required")
+				}
+				doc.Sections[sectionIndex].Items = append(doc.Sections[sectionIndex].Items, content)
+			case "update":
+				if match == "" || content == "" {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch update requires match and content")
+				}
+				updated := false
+				for i, item := range doc.Sections[sectionIndex].Items {
+					if strings.TrimSpace(item) == match {
+						doc.Sections[sectionIndex].Items[i] = content
+						updated = true
+						break
+					}
+				}
+				if !updated {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch update target not found")
+				}
+			case "delete", "remove":
+				if match == "" {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch delete requires match")
+				}
+				removed := false
+				items := doc.Sections[sectionIndex].Items
+				for i, item := range items {
+					if strings.TrimSpace(item) == match {
+						doc.Sections[sectionIndex].Items = append(items[:i], items[i+1:]...)
+						removed = true
+						break
+					}
+				}
+				if !removed {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch delete target not found")
+				}
+			default:
+				return "", sessionmemory.Document{}, fmt.Errorf("memory patch operation %q is invalid", operation.Op)
+			}
+		}
+		normalized, normalizedDoc, err := sessionmemory.NormalizeWithLimits(sessionmemory.Serialize(doc), limits)
+		return normalized, normalizedDoc, err
+	}
+	return sessionmemory.NormalizeWithLimits(decision.Content, limits)
 }
 
 func fencedJSONCandidates(raw string) []string {

@@ -412,6 +412,37 @@ func TestParseMemoryMaintenanceDecision(t *testing.T) {
 	}
 }
 
+func TestApplyMemoryMaintenanceDecisionUsesAtomicCompatiblePatchShape(t *testing.T) {
+	before := "## User Preferences\n- 使用中文。\n\n## Project Context\n- EffChat 是个人 AI workbench。"
+	decision := memoryMaintenanceDecision{
+		Action: "patch",
+		Operations: []memoryMaintenanceOp{
+			{Op: "update", Section: "user_preferences", Match: "使用中文。", Content: "回答使用简体中文，先给结论。"},
+			{Op: "add", Section: "current_progress", Content: "当前正在修复 Korea 线上反馈。"},
+		},
+	}
+	normalized, doc, err := applyMemoryMaintenanceDecision(before, decision, sessionmemory.DefaultLimits())
+	if err != nil {
+		t.Fatalf("apply patch: %v", err)
+	}
+	if !strings.Contains(normalized, "回答使用简体中文，先给结论。") || !strings.Contains(normalized, "当前正在修复 Korea 线上反馈。") {
+		t.Fatalf("patched memory missing expected items: %s", normalized)
+	}
+	if len(doc.Sections) != len(sessionmemory.SectionDefs) {
+		t.Fatalf("section count = %d, want %d", len(doc.Sections), len(sessionmemory.SectionDefs))
+	}
+}
+
+func TestApplyMemoryMaintenanceDecisionRejectsStalePatchTarget(t *testing.T) {
+	_, _, err := applyMemoryMaintenanceDecision("## User Preferences\n- 使用中文。", memoryMaintenanceDecision{
+		Action:     "patch",
+		Operations: []memoryMaintenanceOp{{Op: "delete", Section: "user_preferences", Match: "已经不存在。"}},
+	}, sessionmemory.DefaultLimits())
+	if err == nil || !strings.Contains(err.Error(), "target not found") {
+		t.Fatalf("expected stale target rejection, got %v", err)
+	}
+}
+
 func TestGenerateMemoryMaintenanceTextStreamsChunks(t *testing.T) {
 	model := &memoryMaintenanceStreamModel{chunks: []*schema.Message{
 		{Role: schema.Assistant, Content: `{"action":"`},

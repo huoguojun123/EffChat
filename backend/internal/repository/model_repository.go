@@ -316,7 +316,7 @@ func (r *ModelRepository) Delete(id string) error {
 		return fmt.Errorf("failed to delete model: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("model not found: %s", id)
+		return ErrNotFound
 	}
 	return nil
 }

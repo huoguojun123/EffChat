@@ -508,7 +508,7 @@ var AdminEditableConfig = map[string]AdminConfigMeta{
 		Default:     json.RawMessage(`5`),
 	},
 	"extract_summary_enabled": {
-		DisplayName: "网页提炼（小模型）",
+		DisplayName: "长网页提炼（小模型）",
 		Category:    "联网与提取",
 		SortOrder:   50,
 		ConfigType:  "boolean",

@@ -42,6 +42,9 @@ inherit a fallback automatically.
 | Anthropic Go SDK | MIT | <https://github.com/anthropics/anthropic-sdk-go> |
 | CloudWeGo Eino and Eino extensions | Apache-2.0 | <https://github.com/cloudwego/eino> |
 | OpenAI Go SDK | Apache-2.0 | <https://github.com/openai/openai-go> |
+| Readeck Go Readability | MIT | <https://codeberg.org/readeck/go-readability> |
+| Bleve Segment | Apache-2.0 | <https://github.com/blevesearch/segment> |
+| Townsend-Merino Aikit BM25 | MIT; upstream NOTICE retained in the generated backend archive | <https://github.com/townsendmerino/aikit> |
 | Local Eino Claude adapter patch (`backend/third_party/eino-claude`) | Apache-2.0 | Upstream `components/model/claude` v0.1.20; original license and patch scope retained in that directory |
 | Gin and gin-contrib/cors | MIT | <https://github.com/gin-gonic/gin> |
 | golang-jwt/jwt | MIT | <https://github.com/golang-jwt/jwt> |

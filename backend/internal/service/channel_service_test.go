@@ -352,11 +352,11 @@ func TestBuildSearchRuntimeConfigUsesPersistedProviderOrder(t *testing.T) {
 	if !reflect.DeepEqual(cfg.SearchProviders, []string{"searxng", "tavily"}) {
 		t.Fatalf("SearchProviders = %#v, want searxng,tavily", cfg.SearchProviders)
 	}
-	if cfg.CrawlerImpl != "basic" {
-		t.Fatalf("CrawlerImpl = %q, want basic", cfg.CrawlerImpl)
+	if cfg.CrawlerImpl != "jina" {
+		t.Fatalf("CrawlerImpl = %q, want jina", cfg.CrawlerImpl)
 	}
-	if !reflect.DeepEqual(cfg.CrawlerProviders, []string{"basic", "jina", "firecrawl"}) {
-		t.Fatalf("CrawlerProviders = %#v, want basic,jina,firecrawl", cfg.CrawlerProviders)
+	if !reflect.DeepEqual(cfg.CrawlerProviders, []string{"jina", "firecrawl", "basic"}) {
+		t.Fatalf("CrawlerProviders = %#v, want jina,firecrawl,basic", cfg.CrawlerProviders)
 	}
 }
 
@@ -373,7 +373,7 @@ func TestBuildSearchRuntimeConfigKeepsSearchAndExtractKeysIndependent(t *testing
 	if cfg.TavilySearchAPIKey != "search-key" || cfg.TavilyExtractAPIKey != "extract-key" {
 		t.Fatalf("tavily keys should remain independent: %#v", cfg)
 	}
-	if !reflect.DeepEqual(cfg.CrawlerProviders, []string{"basic", "tavily", "exa"}) {
+	if !reflect.DeepEqual(cfg.CrawlerProviders, []string{"tavily", "exa", "basic"}) {
 		t.Fatalf("CrawlerProviders = %#v", cfg.CrawlerProviders)
 	}
 }
@@ -417,11 +417,11 @@ func TestBuildSearchRuntimeConfigSkipsDisabledServices(t *testing.T) {
 	if !reflect.DeepEqual(cfg.SearchProviders, []string{"searxng"}) {
 		t.Fatalf("SearchProviders = %#v, want only searxng", cfg.SearchProviders)
 	}
-	if cfg.CrawlerImpl != "basic" {
-		t.Fatalf("CrawlerImpl = %q, want basic", cfg.CrawlerImpl)
+	if cfg.CrawlerImpl != "jina" {
+		t.Fatalf("CrawlerImpl = %q, want jina", cfg.CrawlerImpl)
 	}
-	if !reflect.DeepEqual(cfg.CrawlerProviders, []string{"basic", "jina"}) {
-		t.Fatalf("CrawlerProviders = %#v, want basic,jina", cfg.CrawlerProviders)
+	if !reflect.DeepEqual(cfg.CrawlerProviders, []string{"jina", "basic"}) {
+		t.Fatalf("CrawlerProviders = %#v, want jina,basic", cfg.CrawlerProviders)
 	}
 }
 

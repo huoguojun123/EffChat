@@ -387,8 +387,8 @@ func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writ
 			tools = append(tools, webSearchTool)
 		}
 		if toolRuntime.IsEnabled("web_extract") {
-			// 网页提炼：默认用独立小模型把抓取正文按 goal 提炼成要点（仿 Claude Code），
-			// 避免整页正文塞满上下文。配置关闭或小模型构造失败时降级到截断（工具内默认 4000）。
+			// Basic 短正文直接返回；超限正文先本地筛选，再按现有开关交给独立小模型提炼。
+			// 配置关闭或模型不可用时仍返回受限的相关原文，不把 refinement 变成可用性前提。
 			summarizer, summaryEnabled, err := a.buildExtractSummarizer(setupCtx, req)
 			if err != nil {
 				return nil, fmt.Errorf("prepare web extract refinement: %w", err)

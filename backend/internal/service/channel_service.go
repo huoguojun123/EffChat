@@ -345,11 +345,10 @@ func BuildSearchRuntimeConfigWithState(services []*model.ExternalService) (Searc
 	if len(cfg.SearchProviders) > 0 {
 		cfg.SearchProvider = cfg.SearchProviders[0]
 	}
-	// The built-in reader is the dependable personal-instance fast path. Keep
-	// administrator-ordered external crawlers as bounded fallbacks instead of
-	// paying their network latency before trying content we can read locally.
-	cfg.CrawlerProviders = append([]string{"basic"}, cfg.CrawlerProviders...)
-	cfg.CrawlerImpl = "basic"
+	// External crawlers keep the exact administrator-defined order. Basic is
+	// not persisted as an external service and remains the final local fallback.
+	cfg.CrawlerProviders = append(cfg.CrawlerProviders, "basic")
+	cfg.CrawlerImpl = cfg.CrawlerProviders[0]
 	return cfg, SearchRuntimeConfigState{
 		Search:  externalServiceRuntimeState(ServiceKindSearch, services, len(cfg.SearchProviders) > 0),
 		Extract: externalServiceRuntimeState(ServiceKindCrawler, services, len(cfg.CrawlerProviders) > 1),

@@ -834,16 +834,13 @@ func normalizeCrawlerProviders(providers []string, fallback string) []string {
 	normalized := make([]string, 0, len(providers))
 	for _, item := range providers {
 		item = strings.ToLower(strings.TrimSpace(item))
-		if item == "" || seen[item] {
+		if item == "" || item == "basic" || seen[item] {
 			continue
 		}
 		seen[item] = true
 		normalized = append(normalized, item)
 	}
-	if !seen["basic"] {
-		normalized = append(normalized, "basic")
-	}
-	return normalized
+	return append(normalized, "basic")
 }
 
 func (o WebExtractOutput) failureSummary() string {

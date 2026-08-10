@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,26 @@ func TestWebExtractConfiguresHTTPTimeout(t *testing.T) {
 	}
 	if tool.basicClient.Timeout != 4*time.Second {
 		t.Fatalf("basic client timeout = %s, want 4s", tool.basicClient.Timeout)
+	}
+}
+
+func TestNormalizeCrawlerProvidersKeepsExternalOrderAndBasicLast(t *testing.T) {
+	tests := []struct {
+		name      string
+		providers []string
+		fallback  string
+		want      []string
+	}{
+		{name: "configured order", providers: []string{"jina", "firecrawl"}, fallback: "jina", want: []string{"jina", "firecrawl", "basic"}},
+		{name: "early and duplicate basic", providers: []string{"basic", "jina", "basic", "firecrawl", "jina"}, fallback: "jina", want: []string{"jina", "firecrawl", "basic"}},
+		{name: "no external provider", fallback: "basic", want: []string{"basic"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeCrawlerProviders(tt.providers, tt.fallback); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("normalizeCrawlerProviders() = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 

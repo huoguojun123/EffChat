@@ -76,7 +76,7 @@ type WebExtractTool struct {
 	basicWireLimit    int64             // Basic 压缩前响应上限，防止异常传输体无限读取
 	basicDecodedLimit int64             // Basic 解压后响应上限，与最终模型正文预算解耦
 	basicParsedLimit  int               // Basic DOM 解析后的本地正文上限，限制单次长页的内存与排序工作量
-	maxContent        int               // 最终返回给模型的正文上限（提炼失败/关闭提炼时的截断阈值）
+	maxContent        int               // summary 模式最终返回给主模型的正文预算
 	rawContentLimit   int               // 抓取阶段保留的原文上限（喂给提炼小模型），远大于 maxContent
 	summarizer        Summarizer        // 非 nil 且 summaryEnabled 时，用小模型按 goal 提炼正文
 	summaryEnabled    bool
@@ -303,9 +303,9 @@ func (t *WebExtractTool) InvokableRun(ctx context.Context, argumentsInJSON strin
 	})
 }
 
-// finalizeContent 把抓取到的原文收口为最终返回正文：
-// 开启提炼且有提炼器时，用小模型按 goal 提炼成要点；提炼失败或关闭提炼时，
-// 降级到按 maxContent 截断。两条路径都保证返回体量可控，不再单页塞满上下文。
+// finalizeContent 把抓取到的原文收口为最终返回正文。Basic 短正文直接返回；
+// 超限正文先在本地选择相关原文，再按策略选择流式提炼或相关原文回退。
+// 第三方 provider 保持既有提炼与截断契约，两条路径都保证返回体量可控。
 //
 // 只有 refinement 自己的 provider/transport/首包失败允许降级。父 context
 // 表示用户停止、RunHub service drain 或运行失效，必须原样作为 Go error 向上传播，
@@ -315,13 +315,21 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		return output, cause
 	}
 	output.Detail = detail
+	selectionQuery := strings.TrimSpace(goal)
+	if selectionQuery == "" {
+		selectionQuery = strings.TrimSpace(output.Title)
+	}
 	limit := t.maxContent
 	if detail == extractDetailDetailed {
 		limit = detailedContentLimit
 	}
 	if detail == extractDetailSource {
 		var truncated bool
-		output.Content, truncated = truncateRunesWithStatus(output.Content, sourceContentLimit)
+		if output.Source == "basic" {
+			output.Content, truncated = selectBasicContent(output.Content, selectionQuery, sourceContentLimit)
+		} else {
+			output.Content, truncated = truncateRunesWithStatus(output.Content, sourceContentLimit)
+		}
 		output.Truncated = output.Truncated || truncated
 		if cause := toolParentCause(ctx); cause != nil {
 			return output, cause
@@ -329,28 +337,28 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		return output, nil
 	}
 	if output.Source == "basic" {
-		// Basic is the default low-latency guarantee. Once local readable text is
-		// available, return it directly rather than adding an unconditional model
-		// refinement call. External providers can still refine when the local
-		// reader fails and the configured fallback chain reaches them.
-		before := toolLogRuneCount(output.Content)
-		var truncated bool
-		output.Content, truncated = truncateRunesWithStatus(output.Content, limit)
-		output.Truncated = output.Truncated || truncated
-		if output.Truncated {
-			log.Printf("[web_extract] content_truncated url_chars=%d source=%s before_chars=%d after_chars=%d", toolLogRuneCount(output.URL), output.Source, before, toolLogRuneCount(output.Content))
+		// Short local body text is already the lowest-latency result and must not pay for
+		// another model call. Only over-limit Basic content enters refinement.
+		if toolLogRuneCount(output.Content) <= limit {
+			return output, nil
 		}
-		if cause := toolParentCause(ctx); cause != nil {
-			return output, cause
+	}
+	refinementInput := output.Content
+	if output.Source == "basic" {
+		candidateLimit := min(t.rawContentLimit, limit*2)
+		if toolLogRuneCount(refinementInput) > candidateLimit {
+			refinementInput, _ = selectBasicContent(refinementInput, selectionQuery, candidateLimit)
 		}
-		return output, nil
 	}
 	if t.summaryEnabled && t.summarizer != nil {
 		sourceTruncated := output.Truncated
 		output.RefinementAttempted = true
 		summarizeStarted := time.Now()
-		log.Printf("[web_extract] summarize_start url_chars=%d source=%s detail=%s goal_chars=%d input_chars=%d", toolLogRuneCount(output.URL), output.Source, detail, toolLogRuneCount(goal), toolLogRuneCount(output.Content))
-		summary, err := t.summarizer.Summarize(ctx, goal, output.Title, output.Content, detail)
+		if output.Source == "basic" {
+			log.Printf("[web_extract] basic_refine_called url_chars=%d detail=%s goal_chars=%d input_chars=%d", toolLogRuneCount(output.URL), detail, toolLogRuneCount(goal), toolLogRuneCount(refinementInput))
+		}
+		log.Printf("[web_extract] summarize_start url_chars=%d source=%s detail=%s goal_chars=%d input_chars=%d", toolLogRuneCount(output.URL), output.Source, detail, toolLogRuneCount(goal), toolLogRuneCount(refinementInput))
+		summary, err := t.summarizer.Summarize(ctx, goal, output.Title, refinementInput, detail)
 		if cause := toolParentCause(ctx); cause != nil {
 			log.Printf("[web_extract] summarize_canceled url_chars=%d source=%s duration_ms=%d error_type=canceled", toolLogRuneCount(output.URL), output.Source, toolLogDurationMS(summarizeStarted))
 			return output, cause
@@ -358,6 +366,8 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		if err == nil && strings.TrimSpace(summary) != "" {
 			var summaryTruncated bool
 			output.Content, summaryTruncated = truncateRunesWithStatus(strings.TrimSpace(summary), limit)
+			// Reducing a complete source to a relevant model candidate is normal
+			// processing, not evidence that the returned summary is incomplete.
 			output.Truncated = sourceTruncated || summaryTruncated
 			output.Summarized = true
 			if sourceTruncated {
@@ -373,8 +383,8 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 		if errorType == "" {
 			errorType = "empty_result"
 		}
-		log.Printf("[web_extract] summarize_failed url_chars=%d source=%s duration_ms=%d error_type=%s fallback=truncate", toolLogRuneCount(output.URL), output.Source, toolLogDurationMS(summarizeStarted), errorType)
-	} else {
+		log.Printf("[web_extract] summarize_failed url_chars=%d source=%s duration_ms=%d error_type=%s fallback=local_content", toolLogRuneCount(output.URL), output.Source, toolLogDurationMS(summarizeStarted), errorType)
+	} else if output.Source != "basic" || t.summaryEnabled {
 		output.Degraded = true
 		if t.summaryEnabled {
 			output.DegradationReason = RefinementUnavailable
@@ -384,7 +394,11 @@ func (t *WebExtractTool) finalizeContent(ctx context.Context, output WebExtractO
 	}
 	before := toolLogRuneCount(output.Content)
 	var truncated bool
-	output.Content, truncated = truncateRunesWithStatus(output.Content, limit)
+	if output.Source == "basic" {
+		output.Content, truncated = selectBasicContent(output.Content, selectionQuery, limit)
+	} else {
+		output.Content, truncated = truncateRunesWithStatus(output.Content, limit)
+	}
 	output.Truncated = output.Truncated || truncated
 	if output.Truncated {
 		log.Printf("[web_extract] content_truncated url_chars=%d source=%s before_chars=%d after_chars=%d", toolLogRuneCount(output.URL), output.Source, before, toolLogRuneCount(output.Content))

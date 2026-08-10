@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/anthropics/anthropic-sdk-go v1.26.0
+	github.com/blevesearch/segment v0.9.1
 	github.com/cloudwego/eino v0.9.13
 	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.20
@@ -18,6 +19,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/lib/pq v1.10.9
 	github.com/openai/openai-go/v3 v3.35.0
+	github.com/townsendmerino/aikit v1.16.0
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/crypto v0.51.0
 	golang.org/x/image v0.43.0
@@ -121,9 +123,9 @@ require (
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
 	google.golang.org/api v0.197.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect

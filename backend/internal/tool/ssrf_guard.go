@@ -100,6 +100,10 @@ func newGuardedHTTPClient(timeout time.Duration, resolver ipResolver, blocked fu
 	}
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{
+		// Basic requests gzip explicitly so the fetcher can enforce independent
+		// compressed and decoded limits instead of accepting Transport's implicit
+		// transparent decompression boundary.
+		DisableCompression: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {

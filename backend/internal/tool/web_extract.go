@@ -59,25 +59,28 @@ func IsRefinementReason(err error, reason string) bool {
 }
 
 type WebExtractTool struct {
-	crawlerImpl      string
-	crawlerProviders []string
-	firecrawlAPIKey  string
-	firecrawlBaseURL string
-	jinaAPIKey       string
-	jinaBaseURL      string
-	tavilyAPIKey     string
-	tavilyBaseURL    string
-	exaAPIKey        string
-	exaBaseURL       string
-	client           *http.Client
-	basicClient      *http.Client // SSRF 加固客户端，仅 basic 爬虫直连任意 URL 时使用
-	basicResolver    ipResolver
-	ipBlocked        func(net.IP) bool // IP 拦截策略；生产用 isBlockedIP，测试可放宽以访问本地 mock
-	maxContent       int               // 最终返回给模型的正文上限（提炼失败/关闭提炼时的截断阈值）
-	rawContentLimit  int               // 抓取阶段保留的原文上限（喂给提炼小模型），远大于 maxContent
-	summarizer       Summarizer        // 非 nil 且 summaryEnabled 时，用小模型按 goal 提炼正文
-	summaryEnabled   bool
-	timeout          time.Duration
+	crawlerImpl       string
+	crawlerProviders  []string
+	firecrawlAPIKey   string
+	firecrawlBaseURL  string
+	jinaAPIKey        string
+	jinaBaseURL       string
+	tavilyAPIKey      string
+	tavilyBaseURL     string
+	exaAPIKey         string
+	exaBaseURL        string
+	client            *http.Client
+	basicClient       *http.Client // SSRF 加固客户端，仅 basic 爬虫直连任意 URL 时使用
+	basicResolver     ipResolver
+	ipBlocked         func(net.IP) bool // IP 拦截策略；生产用 isBlockedIP，测试可放宽以访问本地 mock
+	basicWireLimit    int64             // Basic 压缩前响应上限，防止异常传输体无限读取
+	basicDecodedLimit int64             // Basic 解压后响应上限，与最终模型正文预算解耦
+	basicParsedLimit  int               // Basic DOM 解析后的本地正文上限，限制单次长页的内存与排序工作量
+	maxContent        int               // 最终返回给模型的正文上限（提炼失败/关闭提炼时的截断阈值）
+	rawContentLimit   int               // 抓取阶段保留的原文上限（喂给提炼小模型），远大于 maxContent
+	summarizer        Summarizer        // 非 nil 且 summaryEnabled 时，用小模型按 goal 提炼正文
+	summaryEnabled    bool
+	timeout           time.Duration
 }
 
 type WebExtractConfig struct {
@@ -150,7 +153,7 @@ func NewWebExtractTool(cfg WebExtractConfig) *WebExtractTool {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 20 * time.Second
 	}
-	resolver := net.DefaultResolver
+	resolver := newBasicResolver()
 	return &WebExtractTool{
 		crawlerImpl:      cfg.CrawlerImpl,
 		crawlerProviders: crawlerProviders,
@@ -165,14 +168,17 @@ func NewWebExtractTool(cfg WebExtractConfig) *WebExtractTool {
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		basicClient:     newGuardedHTTPClient(cfg.Timeout, resolver, isBlockedIP),
-		basicResolver:   resolver,
-		ipBlocked:       isBlockedIP,
-		maxContent:      cfg.MaxContent,
-		rawContentLimit: rawContentLimit,
-		summarizer:      cfg.Summarizer,
-		summaryEnabled:  cfg.SummaryEnabled,
-		timeout:         cfg.Timeout,
+		basicClient:       newGuardedHTTPClient(cfg.Timeout, resolver, isBlockedIP),
+		basicResolver:     resolver,
+		ipBlocked:         isBlockedIP,
+		basicWireLimit:    basicWireLimitBytes,
+		basicDecodedLimit: basicDecodedLimitBytes,
+		basicParsedLimit:  basicParsedContentLimit,
+		maxContent:        cfg.MaxContent,
+		rawContentLimit:   rawContentLimit,
+		summarizer:        cfg.Summarizer,
+		summaryEnabled:    cfg.SummaryEnabled,
+		timeout:           cfg.Timeout,
 	}
 }
 
@@ -447,54 +453,6 @@ func ProbeWebExtractService(ctx context.Context, cfg WebExtractConfig) error {
 		return fmt.Errorf("%s: %s", crawler, output.failureSummary())
 	}
 	return fmt.Errorf("no configured extraction provider")
-}
-
-func (t *WebExtractTool) extractWithBasic(ctx context.Context, pageURL string) WebExtractOutput {
-	// SSRF 前置校验：解析所有 IP 拒私网/环回/元数据；拨号时由 basicClient 复核防 rebind。
-	if err := validatePublicURL(ctx, t.basicResolver, t.ipBlocked, pageURL); err != nil {
-		log.Printf("[web_extract] blocked_by_url_policy url_chars=%d crawler=basic error_type=%s", toolLogRuneCount(pageURL), WebErrorCodeURLBlocked)
-		return WebExtractOutput{OK: false, URL: pageURL, Error: "该地址被安全策略拦截"}
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", pageURL, nil)
-	if err != nil {
-		return WebExtractOutput{OK: false, URL: pageURL, Error: err.Error()}
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; EffChat/1.0)")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
-
-	resp, err := t.basicClient.Do(req)
-	if err != nil {
-		return WebExtractOutput{
-			OK:    false,
-			URL:   pageURL,
-			Error: err.Error(),
-		}
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return WebExtractOutput{
-			OK:         false,
-			URL:        pageURL,
-			StatusCode: resp.StatusCode,
-			Error:      fmt.Sprintf("page returned status %d", resp.StatusCode),
-		}
-	}
-
-	limited := io.LimitReader(resp.Body, int64(t.rawContentLimit*8))
-	body, err := io.ReadAll(limited)
-	if err != nil {
-		return WebExtractOutput{OK: false, URL: pageURL, Error: err.Error()}
-	}
-
-	html := string(body)
-	content, truncated := extractReadableTextWithStatus(html, t.rawContentLimit)
-	return WebExtractOutput{
-		OK:        true,
-		URL:       pageURL,
-		Title:     extractTitle(html),
-		Content:   content,
-		Truncated: truncated,
-	}
 }
 
 func (t *WebExtractTool) extractWithJina(ctx context.Context, pageURL string) WebExtractOutput {

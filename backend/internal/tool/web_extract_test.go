@@ -488,7 +488,7 @@ func TestWebExtractTool_BasicFastPathSkipsRefinement(t *testing.T) {
 	}))
 	output := runExtract(t, tool, WebExtractInput{URL: pageServer.URL, Goal: "find the content"})
 
-	if !output.OK || output.Source != "basic" || output.Content != "Local\nlocally readable content" {
+	if !output.OK || output.Source != "basic" || output.Title != "Local" || output.Content != "locally readable content" {
 		t.Fatalf("output = %#v, want direct basic result", output)
 	}
 	if mock.called || output.RefinementAttempted || output.Summarized || output.Degraded {

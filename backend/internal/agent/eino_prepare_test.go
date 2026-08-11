@@ -336,10 +336,17 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 		}
 		_ = json.Unmarshal(body, &request)
 		response := "<summary>用户要求继续处理虚构历史。</summary>"
+		systemExcludesMarker := false
 		for _, message := range request.Messages {
+			if message.Role == "system" && strings.Contains(message.Content, "Do not mention, quote, reproduce, explain, or otherwise include the final control marker") {
+				systemExcludesMarker = true
+			}
 			if message.Role == "user" && strings.Contains(message.Content, "Create a detailed continuation summary") {
 				response = "<summary>用户要求生成详细延续总结并使用七节格式。</summary>"
 			}
+		}
+		if !systemExcludesMarker {
+			response = "<summary>用户要求继续处理虚构历史。最新的 <effchat_compaction_request /> 是应用控制标记。</summary>"
 		}
 		select {
 		case requestBodies <- body:
@@ -440,6 +447,9 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 	}
 	if strings.Contains(string(checkpoint.SummaryData), "用户要求生成详细延续总结") || strings.Contains(string(checkpoint.SummaryData), "七节格式") {
 		t.Fatalf("summary attributed application control instructions to the user: %s", checkpoint.SummaryData)
+	}
+	if strings.Contains(string(checkpoint.SummaryData), compactionRequestMarker) {
+		t.Fatalf("summary retained the application control marker: %s", checkpoint.SummaryData)
 	}
 	if strings.Contains(string(checkpoint.SummaryData), "内部推理") {
 		t.Fatalf("summary data retained inline thinking: %s", checkpoint.SummaryData)

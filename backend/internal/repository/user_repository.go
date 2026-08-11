@@ -156,10 +156,6 @@ func (r *UserRepository) Create(user *model.User) error {
 	return nil
 }
 
-func (r *UserRepository) CreateRegistrationUser(user *model.User) error {
-	return r.CreateRegistrationUserContext(context.Background(), user)
-}
-
 func (r *UserRepository) CreateRegistrationUserContext(ctx context.Context, user *model.User) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

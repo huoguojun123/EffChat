@@ -343,16 +343,6 @@ func NormalizeSectionKey(value string) string {
 	return ""
 }
 
-func SectionTitle(key string) string {
-	key = NormalizeSectionKey(key)
-	for _, def := range SectionDefs {
-		if def.Key == key {
-			return def.Title
-		}
-	}
-	return ""
-}
-
 func Summary(before, after string) string {
 	beforeStats := StatsFor(before)
 	afterStats := StatsFor(after)

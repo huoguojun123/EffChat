@@ -319,14 +319,3 @@ func sessionContextError(ctx context.Context, err error) error {
 	}
 	return err
 }
-
-// CountByUser 统计用户的会话数量
-func (r *SessionRepository) CountByUser(userID int64) (int, error) {
-	var count int
-	query := `SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND deleted_at IS NULL`
-	err := r.db.QueryRow(query, userID).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("failed to count sessions: %w", err)
-	}
-	return count, nil
-}

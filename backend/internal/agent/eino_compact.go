@@ -23,22 +23,6 @@ type PreparedCompactionRun struct {
 	boundary       int64
 }
 
-// CompactConversation 手动压缩：对当前会话历史做一次性总结，返回压缩检查点。
-//
-// 与自动压缩（summarization 中间件，按阈值在对话轮中触发）不同，这是用户主动
-// 通过 /compact 指令触发的一次性操作：不产生新的助手回复，只生成摘要并标记边界。
-// 摘要消息格式与中间件产出保持一致（role=user，extra._eino_summarization_content_type=summary），
-// 因此加载、标题统计等逻辑无需区分两种来源。
-//
-// 返回 nil checkpoint 表示无需压缩（历史为空或不足以压缩）。
-func (a *EinoAgent) CompactConversation(ctx context.Context, req *ChatRequest) (*CompressionCheckpoint, error) {
-	prepared, err := a.PrepareCompaction(ctx, req)
-	if err != nil || prepared == nil {
-		return nil, err
-	}
-	return a.RunPreparedCompaction(ctx, prepared)
-}
-
 // PrepareCompaction resolves the provider and converts the source history
 // while the caller still owns a bounded setup context.
 func (a *EinoAgent) PrepareCompaction(setupCtx context.Context, req *ChatRequest) (*PreparedCompactionRun, error) {

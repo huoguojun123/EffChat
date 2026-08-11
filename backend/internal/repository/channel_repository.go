@@ -40,10 +40,6 @@ func scanAIChannel(s interface {
 	return item, nil
 }
 
-func (r *ChannelRepository) ListAIChannels(includeDisabled bool) ([]*model.AIChannel, error) {
-	return r.ListAIChannelsContext(context.Background(), includeDisabled)
-}
-
 func (r *ChannelRepository) ListAIChannelsContext(ctx context.Context, includeDisabled bool) ([]*model.AIChannel, error) {
 	query := `SELECT ` + aiChannelColumns + ` FROM ai_channels WHERE deleted_at IS NULL`
 	if !includeDisabled {
@@ -156,10 +152,6 @@ func scanExternalService(s interface {
 	return item, nil
 }
 
-func (r *ChannelRepository) ListExternalServices(includeDisabled bool) ([]*model.ExternalService, error) {
-	return r.ListExternalServicesContext(context.Background(), includeDisabled)
-}
-
 func (r *ChannelRepository) ListExternalServicesContext(ctx context.Context, includeDisabled bool) ([]*model.ExternalService, error) {
 	query := `SELECT ` + externalServiceColumns + ` FROM external_services WHERE deleted_at IS NULL`
 	if !includeDisabled {
@@ -184,10 +176,6 @@ func (r *ChannelRepository) ListExternalServicesContext(ctx context.Context, inc
 		return nil, fmt.Errorf("iterate external services: %w", channelContextError(ctx, err))
 	}
 	return out, nil
-}
-
-func (r *ChannelRepository) GetExternalService(key string) (*model.ExternalService, error) {
-	return r.GetExternalServiceContext(context.Background(), key)
 }
 
 func (r *ChannelRepository) GetExternalServiceContext(ctx context.Context, key string) (*model.ExternalService, error) {
@@ -291,10 +279,6 @@ func (r *ChannelRepository) DeleteExternalService(key string) error {
 		return fmt.Errorf("external service not found: %w", ErrNotFound)
 	}
 	return nil
-}
-
-func (r *ChannelRepository) ReorderExternalServices(kind string, keys []string) error {
-	return r.ReorderExternalServicesContext(context.Background(), kind, keys)
 }
 
 func (r *ChannelRepository) ReorderExternalServicesContext(ctx context.Context, kind string, keys []string) error {

@@ -425,21 +425,6 @@ func attachMessageMetadata(data map[string]interface{}, patch map[string]interfa
 	data["metadata"] = meta
 }
 
-// ListBySession 获取会话的所有消息（前端展示用，含已压缩消息以支持历史回溯）
-func (s *MessageService) ListBySession(sessionID, userID int64) ([]*MessageResponse, error) {
-	_, err := s.sessionRepo.GetByID(sessionID, userID)
-	if err != nil {
-		return nil, sessionLookupError(err)
-	}
-
-	messages, err := s.messageRepo.ListAllBySession(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list messages: %w", err)
-	}
-
-	return s.messageResponses(context.Background(), messages)
-}
-
 // ListBySessionPaged 游标分页获取展示用消息，返回 (本页消息, 是否还有更早的消息)。
 // beforeID<=0 取最新一页；否则取更早一页。消息按时间升序返回。
 func (s *MessageService) ListBySessionPaged(sessionID, userID int64, limit int, beforeID int64) ([]*MessageResponse, bool, error) {
@@ -1213,11 +1198,6 @@ func markCompactionSummary(summaryData []byte, kind string, beforeMessageID int6
 		return out
 	}
 	return summaryData
-}
-
-// GetMessageCount 获取会话的消息数量
-func (s *MessageService) GetMessageCount(sessionID int64) (int, error) {
-	return s.messageRepo.CountBySession(sessionID)
 }
 
 // UndoLastCompaction 撤销会话最近一次压缩检查点：恢复被压消息、软删摘要。

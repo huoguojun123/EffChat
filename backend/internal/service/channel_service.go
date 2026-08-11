@@ -220,19 +220,9 @@ type MinerUOCRConfig struct {
 	MaxConcurrency int
 }
 
-func (s *ChannelService) ResolveSearchRuntimeConfig() SearchRuntimeConfig {
-	cfg, _ := s.ResolveSearchRuntimeConfigContext(context.Background())
-	return cfg
-}
-
 func (s *ChannelService) ResolveSearchRuntimeConfigWithState() (SearchRuntimeConfig, SearchRuntimeConfigState) {
 	cfg, state, _ := s.ResolveSearchRuntimeConfigWithStateContext(context.Background())
 	return cfg, state
-}
-
-func (s *ChannelService) ResolveSearchRuntimeConfigContext(ctx context.Context) (SearchRuntimeConfig, error) {
-	cfg, _, err := s.ResolveSearchRuntimeConfigWithStateContext(ctx)
-	return cfg, err
 }
 
 func (s *ChannelService) ResolveSearchRuntimeConfigWithStateContext(ctx context.Context) (SearchRuntimeConfig, SearchRuntimeConfigState, error) {

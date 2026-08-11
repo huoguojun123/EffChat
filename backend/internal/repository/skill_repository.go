@@ -17,10 +17,6 @@ func NewSkillRepository(db *sql.DB) *SkillRepository {
 	return &SkillRepository{db: db}
 }
 
-func (r *SkillRepository) UpsertPackage(skill *model.Skill, files []model.SkillFile) error {
-	return r.UpsertPackageWithRecord(skill, files, nil)
-}
-
 func (r *SkillRepository) UpsertPackageWithRecord(skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {
 	return r.UpsertPackageWithRecordContext(context.Background(), skill, files, record)
 }
@@ -168,21 +164,6 @@ func (r *SkillRepository) Get(id string, includeDisabled bool) (*model.Skill, er
 	}
 	skill.Files = files
 	return skill, nil
-}
-
-func (r *SkillRepository) Delete(id string) error {
-	result, err := r.db.Exec(`UPDATE skills SET deleted_at = NOW(), enabled = false, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
-	if err != nil {
-		return fmt.Errorf("failed to delete skill: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get deleted skill count: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("skill not found: %w", ErrNotFound)
-	}
-	return nil
 }
 
 func (r *SkillRepository) ListFiles(skillID string) ([]model.SkillFile, error) {

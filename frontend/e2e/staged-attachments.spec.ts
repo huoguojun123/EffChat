@@ -135,6 +135,13 @@ async function expectPointerActionable(locator: Locator) {
   })).toBe(true)
 }
 
+async function expectMinimumTouchTarget(locator: Locator, minimum = 44) {
+  const box = await locator.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.width).toBeGreaterThanOrEqual(minimum)
+  expect(box!.height).toBeGreaterThanOrEqual(minimum)
+}
+
 test("staged attachments batch, persist selection, and move only sent files", async ({ page }) => {
   await mockAttachmentChat(page, 0)
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -216,6 +223,12 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     await expectPointerActionable(upload)
     await expectPointerActionable(refresh)
     await expectPointerActionable(close)
+    if (viewport.width <= 430) {
+      await expectMinimumTouchTarget(upload)
+      await expectMinimumTouchTarget(refresh)
+      await expectMinimumTouchTarget(close)
+      await expectMinimumTouchTarget(drawer.getByRole("button", { name: "删除暂存附件：screen-1.png" }))
+    }
 
     await expect(upload).toBeFocused()
     await page.keyboard.press("Tab")

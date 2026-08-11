@@ -67,7 +67,7 @@ export function SkillImportDialog({
         <div className="grid gap-2 border-b border-border/70 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder="搜索名称、ID、路径" className="h-8 pl-8 text-sm" />
+            <Input value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder="搜索名称、ID、路径" aria-label="搜索可导入 Skill" className="h-11 pl-8 text-sm sm:h-8" />
           </div>
           <div className="flex flex-wrap gap-1">
             <Button size="sm" variant="outline" onClick={onSelectAll}>

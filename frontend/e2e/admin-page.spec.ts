@@ -28,6 +28,13 @@ test("admin route loads only the model page dependencies and opens mobile naviga
   expect(requested).not.toContain("/api/v1/admin/users?limit=100&offset=0")
   expect(requested).not.toContain("/api/v1/admin/config")
 
+  for (const name of ["返回聊天", "刷新当前页面", "打开管理导航"]) {
+    const box = await page.getByRole("button", { name }).boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.width).toBeGreaterThanOrEqual(44)
+    expect(box!.height).toBeGreaterThanOrEqual(44)
+  }
+
   await page.getByRole("button", { name: "打开管理导航" }).click()
   const mobileNavigation = page.getByRole("navigation", { name: "管理后台导航" }).last()
   await expect(mobileNavigation).toBeVisible()
@@ -36,6 +43,9 @@ test("admin route loads only the model page dependencies and opens mobile naviga
   expect(mobileNavigationBox).not.toBeNull()
   expect((mobileNavigationBox?.y || 0) + (mobileNavigationBox?.height || 0)).toBeGreaterThan(820)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  const close = page.getByRole("button", { name: "关闭管理导航" })
+  await expect.poll(async () => (await close.boundingBox())?.width || 0).toBeGreaterThanOrEqual(43.5)
+  await expect.poll(async () => (await close.boundingBox())?.height || 0).toBeGreaterThanOrEqual(43.5)
 })
 
 test("non-admin users are returned to chat before the admin page loads", async ({ page }) => {

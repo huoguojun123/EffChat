@@ -71,13 +71,13 @@ export function AdminModelsListPane({
               }`}
             >
               <div className="flex items-start justify-between gap-4">
-                <button className="min-w-0 flex-1 text-left outline-none" onClick={() => onStartEdit(model)}>
+                <button className="min-w-0 flex-1 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => onStartEdit(model)}>
                   <div className="truncate text-sm font-medium leading-5">{model.display_name}</div>
                   <div className="mt-0.5 truncate text-xs text-muted-foreground">{model.id}</div>
                 </button>
                 <SwitchButton checked={model.enabled} onClick={() => void onToggleEnabled(model)} disabled={saving === `model-${model.id}`} />
               </div>
-              <button className="mt-1.5 flex w-full items-center gap-3 text-left text-xs text-muted-foreground" onClick={() => onStartEdit(model)}>
+              <button className="mt-1.5 flex w-full items-center gap-3 rounded-md text-left text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => onStartEdit(model)}>
                 <span className="shrink-0">{formatContext(model.context_window)}</span>
                 <CapabilityDots model={model} />
                 <span className="ml-auto shrink-0">{lifecycleStatusLabel(model.lifecycle_status)}</span>

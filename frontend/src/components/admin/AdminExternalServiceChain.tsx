@@ -371,6 +371,7 @@ export function AdminExternalServiceChain({
                 draft.display_name ||
                 "服务配置"}
             </DialogTitle>
+            <DialogDescription className="sr-only">编辑外部服务地址、凭据、并发和启用状态。</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
             <Field label="Base URL">
@@ -644,7 +645,7 @@ function SortableServiceRow({
     >
       <button
         type="button"
-        className="flex h-8 w-7 shrink-0 cursor-grab items-center justify-center touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-11 min-h-11 w-11 min-w-11 shrink-0 cursor-grab items-center justify-center touch-none rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:min-h-8 sm:w-8 sm:min-w-8"
         aria-label={`调整 ${preset?.label || service.display_name} 顺序`}
         disabled={disabled}
         {...attributes}
@@ -655,7 +656,7 @@ function SortableServiceRow({
       <StatusIcon status={status} />
       <button
         type="button"
-        className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-50"
+        className="min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={onEdit}
         disabled={disabled}
       >
@@ -673,7 +674,7 @@ function SortableServiceRow({
         type="button"
         variant="ghost"
         size="icon"
-        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+        className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8"
         aria-label={`删除 ${preset?.label || service.display_name}`}
         title={`删除 ${preset?.label || service.display_name}`}
         onClick={onDelete}
@@ -728,7 +729,7 @@ function OCRSection({
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8"
               aria-label="删除 MinerU 精准解析"
               title="删除 MinerU 精准解析"
               onClick={() => onDelete(service)}

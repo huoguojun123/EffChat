@@ -4,7 +4,7 @@ import * as sessionsApi from "@/api/sessions"
 import { useChatStore } from "@/stores/chat"
 import { useAuthStore } from "@/stores/auth"
 import type { Prompt } from "@/types"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { MotionView } from "@/components/ui/motion"
 import { Check, Search } from "lucide-react"
@@ -96,6 +96,7 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
       <DialogContent className="max-w-[880px] gap-0 overflow-hidden p-0 sm:rounded-lg">
         <DialogHeader className="border-b border-border px-5 py-4">
           <DialogTitle>选择系统提示词</DialogTitle>
+          <DialogDescription className="sr-only">搜索、预览并为当前会话选择系统提示词。</DialogDescription>
         </DialogHeader>
         <div className="grid h-[560px] grid-cols-[260px_minmax(0,1fr)]">
           <div className="min-h-0 border-r border-border">
@@ -106,7 +107,8 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="搜索提示词"
-                  className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-foreground"
+                  aria-label="搜索提示词"
+                  className="h-11 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-foreground focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-9"
                 />
               </div>
             </div>
@@ -123,7 +125,7 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
                       <button
                         key={prompt.id}
                         onClick={() => setSelected(prompt)}
-                        className={`w-full rounded-md px-3 py-2 text-left transition-colors motion-control ${
+                        className={`w-full rounded-md px-3 py-2 text-left transition-colors motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 ${
                           selected?.id === prompt.id ? "bg-muted text-foreground" : "hover:bg-muted"
                         }`}
                       >

@@ -65,6 +65,8 @@ backend (Gin)
 
 `/chat/:sessionId` 只接受不带符号、前导零、小数或指数形式的正十进制安全整数。非法参数在发起会话详情请求前以 replace 导航回根页并清空 active session；合法但当前列表未加载的 ID 仍沿既有鉴权详情查询确认存在性，查询失败同样回到可达的空会话 shell。
 
+移动端高频管理、文件和暂存附件动作使用至少约 44 CSS px 的实际命中盒，同时保持 14–16 px 图标视觉尺寸；原生 list/范围按钮显式复用 `focus-visible` ring，搜索输入提供稳定 accessible name。Radix Dialog 要么提供 `DialogDescription`，要么显式关闭描述关联，避免把 console warning 当作无害噪声。会话记忆继续保存英文 section key 与原始 title，但已知分区在中文界面使用中文展示标签，所有记忆时间统一以 `zh-CN` 24 小时格式显示。
+
 ## 发送消息链路
 
 1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；只保存每个会话的草稿文本，不持久化像素高度。

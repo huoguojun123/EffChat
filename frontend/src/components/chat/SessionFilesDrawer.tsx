@@ -191,7 +191,7 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                     role="option"
                     aria-selected={selectedId === file.id}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-[background-color,color] motion-control",
+                      "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-[background-color,color,box-shadow] motion-control focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
                       selectedId === file.id
                         ? "bg-accent/80 text-accent-foreground"
                         : "hover:bg-muted/60"
@@ -232,10 +232,10 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                       {selected.tokenEstimate ? ` · ${formatTokens(selected.tokenEstimate)}` : ""}
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-md" onClick={() => filesApi.downloadBlob(selected.id, selected.filename)} aria-label={`下载文件：${selected.filename}`}>
+                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md sm:h-8 sm:w-8" onClick={() => filesApi.downloadBlob(selected.id, selected.filename)} aria-label={`下载文件：${selected.filename}`}>
                     <Download className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-md text-rose-500 hover:text-rose-600" onClick={() => {
+                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md text-rose-500 hover:text-rose-600 sm:h-8 sm:w-8" onClick={() => {
                     if (window.confirm("删除后，历史消息中的预览、下载和重新发送将不可用。确定删除吗？")) void deleteFile(selected)
                   }} aria-label={`删除文件：${selected.filename}`}>
                     <Trash2 className="h-4 w-4" />

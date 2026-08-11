@@ -49,9 +49,15 @@ async function installRoutes(page: Page) {
 
 test("external service save and test responses stay with their draft", async ({ page }) => {
   await installRoutes(page)
+  await page.setViewportSize({ width: 390, height: 844 })
   await page.goto("/admin/channels")
 
+  const handleBox = await page.getByRole("button", { name: "调整 Tavily 顺序" }).boundingBox()
+  expect(handleBox).not.toBeNull()
+  expect(handleBox!.width).toBeGreaterThanOrEqual(43.5)
+  expect(handleBox!.height).toBeGreaterThanOrEqual(43.5)
   await page.getByText("Tavily", { exact: true }).click()
+  await expect(page.getByRole("dialog", { name: "Tavily" })).toHaveAccessibleDescription("编辑外部服务地址、凭据、并发和启用状态。")
   const baseURL = page.getByLabel("Base URL")
   await baseURL.fill("https://saved.example.invalid/search")
   await page.getByRole("button", { name: "保存", exact: true }).click()

@@ -187,9 +187,11 @@ func TestClassifyModelProbeOutputRequiresExactOK(t *testing.T) {
 
 func TestPreparedModelProbeRejectsMissingLifecycleInputs(t *testing.T) {
 	einoAgent := &EinoAgent{}
+	//lint:ignore SA1012 nil is the lifecycle boundary under test.
 	if _, err := einoAgent.PrepareModelProbe(nil, &ChatRequest{}); err == nil {
 		t.Fatal("PrepareModelProbe accepted a nil setup context")
 	}
+	//lint:ignore SA1012 nil is the lifecycle boundary under test.
 	if _, err := einoAgent.RunPreparedModelProbe(nil, &PreparedModelProbe{}); err == nil {
 		t.Fatal("RunPreparedModelProbe accepted a nil run context")
 	}

@@ -1120,14 +1120,14 @@ func TestRunHubFirstOutputTimeoutStopsAfterMeaningfulModelOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runContext, ok := hub.Context(run.RunID)
+	_, ok := hub.Context(run.RunID)
 	if !ok {
 		t.Fatal("run context missing")
 	}
 	if err := hub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("PersistDurable() error = %v", err)
 	}
-	runContext, err = hub.BeginExecution(run.RunID)
+	runContext, err := hub.BeginExecution(run.RunID)
 	if err != nil {
 		t.Fatalf("BeginExecution() error = %v", err)
 	}
@@ -1159,14 +1159,14 @@ func TestRunHubTransitionHonorsFirstOutputTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runContext, ok := hub.Context(run.RunID)
+	_, ok := hub.Context(run.RunID)
 	if !ok {
 		t.Fatal("run context missing")
 	}
 	if err := hub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("PersistDurable() error = %v", err)
 	}
-	runContext, err = hub.BeginExecution(run.RunID)
+	runContext, err := hub.BeginExecution(run.RunID)
 	if err != nil {
 		t.Fatalf("BeginExecution() error = %v", err)
 	}

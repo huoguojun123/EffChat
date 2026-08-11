@@ -381,7 +381,7 @@ func (r *SkillRepository) RollbackFiles(eventID int64) (string, []model.SkillImp
 		return "", nil, fmt.Errorf("decode Skill rollback package: %w", err)
 	}
 	if state.ImportRecordID <= 0 {
-		return "", nil, fmt.Errorf("%w: Skill rollback target has no retained package", ErrGovernanceConflict)
+		return "", nil, fmt.Errorf("%w: skill rollback target has no retained package", ErrGovernanceConflict)
 	}
 	files, err := r.ListImportRecordFiles(state.ImportRecordID)
 	return event.ResourceKey, files, err
@@ -389,7 +389,7 @@ func (r *SkillRepository) RollbackFiles(eventID int64) (string, []model.SkillImp
 
 func validateSkillGovernanceMutation(mutation SkillGovernanceMutation) error {
 	if mutation.ActorUserID <= 0 || mutation.ActorType == "" || mutation.Reason == "" || mutation.Action == "" {
-		return fmt.Errorf("Skill governance actor, action, and reason are required")
+		return fmt.Errorf("skill governance actor, action, and reason are required")
 	}
 	return nil
 }
@@ -420,7 +420,7 @@ func getSkillPackageForUpdateTx(ctx context.Context, tx *sql.Tx, id string) (*mo
 		return nil, nil, fmt.Errorf("skill not found: %w", ErrNotFound)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("get Skill for update: %w", err)
+		return nil, nil, fmt.Errorf("get skill for update: %w", err)
 	}
 	files, err := listSkillFilesTx(ctx, tx, id)
 	if err != nil {
@@ -447,10 +447,10 @@ func mergeSkillPackage(current, incoming *model.Skill, patch SkillMetadataPatch)
 
 func validateSkillMetadata(skill *model.Skill) error {
 	if strings.TrimSpace(skill.Name) == "" {
-		return fmt.Errorf("Skill name is required")
+		return fmt.Errorf("skill name is required")
 	}
 	if skill.MinGroupLevel < 0 {
-		return fmt.Errorf("Skill min_group_level must be >= 0")
+		return fmt.Errorf("skill min_group_level must be >= 0")
 	}
 	return nil
 }

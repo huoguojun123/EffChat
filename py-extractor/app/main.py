@@ -19,10 +19,9 @@ from urllib import request as urlrequest
 
 import pdfplumber
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
-from openpyxl import load_workbook
 from starlette.concurrency import run_in_threadpool
 
-from app import docx_content, markdown_table, pptx_content, resource_limits
+from app import docx_content, markdown_table, pptx_content, resource_limits, xlsx_content
 
 
 app = FastAPI(title="EffChat Extractor", version="0.3.4")
@@ -539,26 +538,12 @@ def extract_pptx(data: bytes, filename: str) -> ExtractedDocument:
 
 def extract_xlsx(data: bytes, filename: str) -> ExtractedDocument:
     resource_limits.validate_office_archive(data)
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    sections: list[str] = []
-    table_count = 0
-    try:
-        for sheet in wb.worksheets:
-            rows: list[list[str]] = []
-            for row in sheet.iter_rows(values_only=True):
-                values = ["" if value is None else str(value) for value in row]
-                if any(cell.strip() for cell in values):
-                    rows.append(values)
-            if rows:
-                sections.append(f"## {sheet.title}\n\n{markdown_table.serialize(rows)}")
-                table_count += 1
-    finally:
-        wb.close()
+    content = xlsx_content.extract(data)
     return ExtractedDocument(
-        text="\n\n".join(sections),
+        text=content.text,
         parser="openpyxl",
-        table_count=table_count,
-        paragraph_count=len(sections),
+        table_count=content.table_count,
+        paragraph_count=content.paragraph_count,
     )
 
 

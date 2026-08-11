@@ -49,26 +49,37 @@ func selectBasicContent(content, query string, limit int) (string, bool) {
 	separator := "\n\n[…]\n\n"
 	selected := make(map[int]bool, len(hits)*3)
 	used := 0
+	addBlock := func(index int) bool {
+		if index < 0 || index >= len(blocks) || selected[index] {
+			return false
+		}
+		cost := len([]rune(blocks[index]))
+		if used > 0 {
+			cost += len([]rune(separator))
+		}
+		if used+cost > limit {
+			return false
+		}
+		selected[index] = true
+		used += cost
+		return true
+	}
+
+	// Ranked passages own the budget. Context is useful only after the actual
+	// BM25 hits are retained; otherwise a neighbor of the first hit can evict a
+	// later, independently relevant passage under a tight detail limit.
 	for _, hit := range hits {
 		index := documentIndexes[hit.Doc]
-		for _, candidate := range []int{index, index - 1, index + 1} {
-			if candidate < 0 || candidate >= len(blocks) || selected[candidate] {
-				continue
-			}
-			cost := len([]rune(blocks[candidate]))
-			if candidate == index && len(selected) == 0 && cost > limit {
-				selectedBlock, _ := truncateRunesWithStatus(blocks[candidate], limit)
-				return selectedBlock, true
-			}
-			if used > 0 {
-				cost += len([]rune(separator))
-			}
-			if used+cost > limit {
-				continue
-			}
-			selected[candidate] = true
-			used += cost
+		if len(selected) == 0 && len([]rune(blocks[index])) > limit {
+			selectedBlock, _ := truncateRunesWithStatus(blocks[index], limit)
+			return selectedBlock, true
 		}
+		addBlock(index)
+	}
+	for _, hit := range hits {
+		index := documentIndexes[hit.Doc]
+		addBlock(index - 1)
+		addBlock(index + 1)
 	}
 	if len(selected) == 0 {
 		index := documentIndexes[hits[0].Doc]

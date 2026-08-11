@@ -281,7 +281,6 @@ export interface Prompt {
   group_id?: number | null
   group_name: string
   is_public: boolean
-  use_count: number
   created_at: string
   updated_at: string
 }

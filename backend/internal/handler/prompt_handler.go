@@ -21,7 +21,6 @@ type publicPromptResponse struct {
 	GroupID     *int64    `json:"group_id,omitempty"`
 	GroupName   string    `json:"group_name"`
 	IsPublic    bool      `json:"is_public"`
-	UseCount    int       `json:"use_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -166,7 +165,6 @@ func ListPublicPromptsHandler(promptRepo *repository.PromptRepository) gin.Handl
 				GroupID:     prompt.GroupID,
 				GroupName:   prompt.GroupName,
 				IsPublic:    prompt.IsPublic,
-				UseCount:    prompt.UseCount,
 				CreatedAt:   prompt.CreatedAt,
 				UpdatedAt:   prompt.UpdatedAt,
 			})
@@ -204,7 +202,6 @@ func GetPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 				GroupID:     p.GroupID,
 				GroupName:   p.GroupName,
 				IsPublic:    p.IsPublic,
-				UseCount:    p.UseCount,
 				CreatedAt:   p.CreatedAt,
 				UpdatedAt:   p.UpdatedAt,
 			})

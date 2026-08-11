@@ -161,6 +161,9 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - PPTX 本地解析按 slide/shape 原顺序递归 group；普通文本与原生 table 进入同一
   sidecar，table 复用共享 GFM serializer 并累计 `table_count`。Chart、SmartArt/
   diagram 和 OLE 不伪装成已提取内容，只返回去重的有界 warning。
+- DOCX 本地解析按 `w:body` 顶层 child 原顺序交替输出 paragraph 与 table；空段落
+  不制造正文，table 继续复用共享 GFM serializer，避免“全部段落后再附全部表格”
+  破坏条件、单位、注释与数据之间的相邻关系。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。
 - 暂存附件抽屉通过 Radix Dialog Portal 脱离聊天 composer 的 stacking context；模态层统一拥有 overlay、焦点约束、Escape 关闭和安全区，关闭后焦点返回实际触发入口。上传队列、附件选择与发送协议仍由原有 ChatInput 状态负责。
 - 上传大小、会话文件数、MIME allowlist、附件提取开关、timeout 和输出上限共用 typed policy reader。长期安装缺少较新的配置行时采用公开配置 schema 的权威默认值并建立可信快照；查询失败或非法存储值不会被误判为缺失。已成功读取的严格值在暂时故障中继续生效并标记 `policy_degraded`；冷启动无可信值时上传/处理入口返回稳定 503，不恢复调用方宽默认。空 allowlist 和空元素在管理员写入边界直接拒绝。

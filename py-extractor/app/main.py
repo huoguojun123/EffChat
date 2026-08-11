@@ -18,12 +18,11 @@ from urllib.parse import urlsplit
 from urllib import request as urlrequest
 
 import pdfplumber
-from docx import Document
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from openpyxl import load_workbook
 from starlette.concurrency import run_in_threadpool
 
-from app import markdown_table, pptx_content, resource_limits
+from app import docx_content, markdown_table, pptx_content, resource_limits
 
 
 app = FastAPI(title="EffChat Extractor", version="0.3.4")
@@ -516,24 +515,12 @@ def extract_pdf_with_pdfplumber(data: bytes) -> ExtractedDocument:
 
 def extract_docx(data: bytes, filename: str) -> ExtractedDocument:
     resource_limits.validate_office_archive(data)
-    doc = Document(io.BytesIO(data))
-    blocks: list[str] = []
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if text:
-            blocks.append(text)
-    table_count = 0
-    for table in doc.tables:
-        rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-        md = markdown_table.serialize(rows)
-        if md:
-            blocks.append(md)
-            table_count += 1
+    content = docx_content.extract(data)
     return ExtractedDocument(
-        text="\n\n".join(blocks),
+        text=content.text,
         parser="python-docx",
-        paragraph_count=len([p for p in doc.paragraphs if p.text.strip()]),
-        table_count=table_count,
+        paragraph_count=content.paragraph_count,
+        table_count=content.table_count,
     )
 
 

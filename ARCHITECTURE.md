@@ -63,6 +63,8 @@ backend (Gin)
 
 聊天区域的通用 shell 与当前是否已有 active session 解耦：欢迎页、readiness 检查中、检查失败和无可用模型状态都继续渲染唯一的侧栏 opener，使移动抽屉或桌面持久化收起后的历史会话、账号菜单和设置仍可到达。模型选择、文件、导出、输入框、会话文件抽屉和拖放上传只在 active session 存在时渲染；隐藏侧栏继续由 `aria-hidden`、`inert` 和 pointer-events 共同隔离，不复制第二套 opener 或侧栏状态。
 
+`/chat/:sessionId` 只接受不带符号、前导零、小数或指数形式的正十进制安全整数。非法参数在发起会话详情请求前以 replace 导航回根页并清空 active session；合法但当前列表未加载的 ID 仍沿既有鉴权详情查询确认存在性，查询失败同样回到可达的空会话 shell。
+
 ## 发送消息链路
 
 1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；只保存每个会话的草稿文本，不持久化像素高度。

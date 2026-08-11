@@ -328,6 +328,19 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(body, &request)
+		response := "<summary>用户要求继续处理虚构历史。</summary>"
+		for _, message := range request.Messages {
+			if message.Role == "user" && strings.Contains(message.Content, "Create a detailed continuation summary") {
+				response = "<summary>用户要求生成详细延续总结并使用七节格式。</summary>"
+			}
+		}
 		select {
 		case requestBodies <- body:
 		default:
@@ -338,7 +351,8 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"<think>内部推理\"},\"finish_reason\":null}]}\n\n")
-		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"过程</think>to be written in Chinese</analysis>\\n\\n<summary>继续上下文</summary>\"},\"finish_reason\":\"stop\"}]}\n\n")
+		encodedResponse, _ := json.Marshal("过程</think>to be written in Chinese</analysis>\n\n" + response)
+		_, _ = fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-compaction-boundary\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-ai/DeepSeek-V4-Flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":%s},\"finish_reason\":\"stop\"}]}\n\n", encodedResponse)
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -395,11 +409,37 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 	if !ok || thinking["type"] != "disabled" {
 		t.Fatalf("provider thinking = %#v, want disabled", providerRequest["thinking"])
 	}
+	messages, ok := providerRequest["messages"].([]interface{})
+	if !ok || len(messages) != 3 {
+		t.Fatalf("provider messages = %#v, want system + source history + control marker", providerRequest["messages"])
+	}
+	messageAt := func(index int) map[string]interface{} {
+		message, _ := messages[index].(map[string]interface{})
+		return message
+	}
+	if first := messageAt(0); first["role"] != "system" || !strings.Contains(fmt.Sprint(first["content"]), compactionInstruction) {
+		t.Fatalf("compaction contract must be a system instruction: %#v", first)
+	}
+	if source := messageAt(1); source["role"] != "user" || source["content"] != "需要压缩的历史" {
+		t.Fatalf("source conversation changed: %#v", source)
+	}
+	if marker := messageAt(2); marker["role"] != "user" || marker["content"] != compactionRequestMarker {
+		t.Fatalf("final compaction marker = %#v", marker)
+	}
+	for _, raw := range messages[1:] {
+		message, _ := raw.(map[string]interface{})
+		if strings.Contains(fmt.Sprint(message["content"]), "Create a detailed continuation summary") {
+			t.Fatalf("compaction contract leaked into source/user messages: %#v", message)
+		}
+	}
 	if checkpoint == nil || checkpoint.CompressBefore != 42 || checkpoint.Provider != req.Provider || checkpoint.ModelID != req.ModelID {
 		t.Fatalf("checkpoint = %#v", checkpoint)
 	}
-	if !strings.Contains(string(checkpoint.SummaryData), "继续上下文") {
+	if !strings.Contains(string(checkpoint.SummaryData), "继续处理虚构历史") {
 		t.Fatalf("summary data = %s", checkpoint.SummaryData)
+	}
+	if strings.Contains(string(checkpoint.SummaryData), "用户要求生成详细延续总结") || strings.Contains(string(checkpoint.SummaryData), "七节格式") {
+		t.Fatalf("summary attributed application control instructions to the user: %s", checkpoint.SummaryData)
 	}
 	if strings.Contains(string(checkpoint.SummaryData), "内部推理") {
 		t.Fatalf("summary data retained inline thinking: %s", checkpoint.SummaryData)

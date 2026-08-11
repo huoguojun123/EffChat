@@ -186,7 +186,11 @@ func TestEstimateTextTokensUsesConservativeUTF8Approximation(t *testing.T) {
 
 func TestInferKindDetectsCompressionInstruction(t *testing.T) {
 	kind := inferKind(KindChat, []*schema.Message{{
+		Role:    schema.System,
 		Content: "Create a detailed continuation summary for this conversation and put the final result in <summary>.",
+	}, {
+		Role:    schema.User,
+		Content: "<effchat_compaction_request />",
 	}})
 
 	if kind != KindCompression {

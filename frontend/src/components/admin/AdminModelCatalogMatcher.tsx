@@ -37,7 +37,7 @@ export function AdminModelCatalogMatcher({
         </Button>
       </div>
       <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
-        <Input type="search" name="effchat-model-catalog-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={catalogQuery} onChange={(e) => setCatalogQuery(e.target.value)} placeholder="搜索官方模型" />
+        <Input type="search" name="effchat-model-catalog-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={catalogQuery} onChange={(e) => setCatalogQuery(e.target.value)} placeholder="搜索官方模型" aria-label="搜索官方模型" />
         <Select value={selectedCatalogKey} onChange={setSelectedCatalogKey}>
           <option value="">不匹配</option>
           {filteredCatalogModels.map((model) => (

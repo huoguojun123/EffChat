@@ -50,6 +50,15 @@ const sectionTones: Record<string, {
   do_not_remember: { icon: ShieldOff },
 }
 
+const sectionLabels: Record<string, string> = {
+  user_background: "用户背景",
+  user_preferences: "用户偏好",
+  project_context: "项目背景",
+  current_progress: "当前进度",
+  decisions: "决策",
+  do_not_remember: "不要记住",
+}
+
 const fallbackTone = {
   icon: ListChecks,
 }
@@ -413,7 +422,7 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
               </div>
               {data?.last_auto_updated_at ? (
                 <div className="min-w-0 truncate text-xs text-muted-foreground">
-                  自动更新 {new Date(data.last_auto_updated_at).toLocaleString()}
+                  自动更新 {formatDateTime(data.last_auto_updated_at)}
                 </div>
               ) : null}
             </div>
@@ -565,8 +574,8 @@ function MemorySection({
             <Icon className="h-3.5 w-3.5" />
           </span>
           <div className="flex min-w-0 items-baseline gap-2">
-            <h3 className="truncate text-sm font-semibold tracking-tight">{section.title}</h3>
-            <div className="shrink-0 text-xs text-muted-foreground">{filledCount > 0 ? `${filledCount} 条` : "空 section"}</div>
+            <h3 className="truncate text-sm font-semibold tracking-tight">{sectionLabels[section.key] || section.title}</h3>
+            <div className="shrink-0 text-xs text-muted-foreground">{filledCount > 0 ? `${filledCount} 条` : "暂无条目"}</div>
           </div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onAdd} disabled={saving} className="h-7 shrink-0 px-2">
@@ -895,7 +904,7 @@ function displayChangeSummary(change: SessionMemoryChange) {
 function formatDateTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return "-"
-  return date.toLocaleString()
+  return date.toLocaleString("zh-CN", { hour12: false })
 }
 
 function formatChangeStamp(value: string) {
@@ -904,14 +913,14 @@ function formatChangeStamp(value: string) {
     return { date: "-", time: "-", full: "-" }
   }
   return {
-    date: date.toLocaleDateString([], { month: "numeric", day: "numeric" }),
-    time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    full: date.toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+    date: date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }),
+    time: date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    full: date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }),
   }
 }
 
 function formatTime(date: Date) {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
 }
 
 function formatDuration(ms: number) {

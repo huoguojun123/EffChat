@@ -7,7 +7,7 @@ import { useAuthedBlobUrl } from "@/hooks/useAuthedBlobUrl"
 import { formatBytes } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { ImageLightbox } from "@/components/message/ImageLightbox"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DocumentPreview } from "@/components/files/DocumentPreview"
 import { WorkspaceWindow } from "@/components/ui/workspace-window"
 
@@ -55,13 +55,13 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
           >
             <header className="flex min-h-12 items-center gap-2 border-b border-border/70 px-3 pt-[env(safe-area-inset-top)]">
               <DialogPrimitive.Title className="min-w-0 flex-1 text-sm font-medium">暂存附件</DialogPrimitive.Title>
-              <Button variant="ghost" size="sm" className="h-8 gap-1.5 px-2" onClick={onUpload} disabled={uploading}>
+              <Button variant="ghost" size="sm" className="h-11 gap-1.5 px-2 sm:h-8" onClick={onUpload} disabled={uploading}>
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                 上传
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
               <DialogPrimitive.Close asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
               </DialogPrimitive.Close>
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
@@ -77,8 +77,10 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
       <StagedFilePreview file={previewFile} onOpenChange={(nextOpen) => !nextOpen && setPreviewFile(null)} />
       <Dialog open={!!pendingDelete} onOpenChange={(nextOpen) => !nextOpen && setPendingDelete(null)}>
         <DialogContent className="max-w-[calc(100vw-1.5rem)] sm:max-w-sm">
-          <DialogHeader><DialogTitle>删除暂存附件？</DialogTitle></DialogHeader>
-          <p className="text-sm leading-6 text-muted-foreground">“{pendingDelete?.filename}”会被永久删除，无法恢复。</p>
+          <DialogHeader>
+            <DialogTitle>删除暂存附件？</DialogTitle>
+            <DialogDescription>“{pendingDelete?.filename}”会被永久删除，无法恢复。</DialogDescription>
+          </DialogHeader>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={() => setPendingDelete(null)}>取消</Button>
             <Button type="button" variant="destructive" onClick={() => {
@@ -109,8 +111,8 @@ function StagedFile({ file, selectedOrder, onToggle, onDelete, onRetry, onPrevie
       </button>
       <button type="button" onClick={onPreview} className="absolute inset-x-1 bottom-[3.4rem] flex h-7 items-center justify-center rounded-md bg-background/80 text-[11px] text-foreground opacity-100 shadow-sm backdrop-blur-sm transition-[background-color,opacity] motion-control hover:bg-background sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100" aria-label={`预览附件：${file.filename}`}>预览</button>
       {selectedOrder ? <span className="absolute left-1.5 top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-medium text-primary-foreground shadow-sm">{selectedOrder}</span> : null}
-      {canRetryOCR(file) ? <button type="button" disabled={retrying} onClick={async () => { setRetrying(true); try { await onRetry() } finally { setRetrying(false) } }} className="absolute bottom-1 right-1 flex h-6 w-6 items-center justify-center rounded-md bg-background/85 text-muted-foreground shadow-sm hover:text-primary" aria-label={`重试解析：${file.filename}`}><RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} /></button> : null}
-      <button type="button" onClick={onDelete} className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md bg-background/85 text-muted-foreground shadow-sm hover:text-rose-600" aria-label={`删除暂存附件：${file.filename}`} title="删除附件"><Trash2 className="h-3.5 w-3.5" /></button>
+      {canRetryOCR(file) ? <button type="button" disabled={retrying} onClick={async () => { setRetrying(true); try { await onRetry() } finally { setRetrying(false) } }} className="absolute bottom-0 right-0 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" aria-label={`重试解析：${file.filename}`}><span className="flex h-6 w-6 items-center justify-center rounded-md bg-background/85 shadow-sm"><RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} /></span></button> : null}
+      <button type="button" onClick={onDelete} className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" aria-label={`删除暂存附件：${file.filename}`} title="删除附件"><span className="flex h-6 w-6 items-center justify-center rounded-md bg-background/85 shadow-sm"><Trash2 className="h-3.5 w-3.5" /></span></button>
     </div>
   )
 }

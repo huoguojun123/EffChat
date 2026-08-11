@@ -220,16 +220,16 @@ export function AdminPage() {
   return (
     <div className="flex h-[100dvh] min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/70 px-3 sm:px-5">
-        <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{currentTab.label}</h1>
         </div>
-        <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={refreshCurrent} disabled={busy} aria-label="刷新当前页面" title="刷新当前页面">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={refreshCurrent} disabled={busy} aria-label="刷新当前页面" title="刷新当前页面">
           <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin motion-reduce:animate-none" : ""}`} />
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="打开管理导航" title="管理导航">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="打开管理导航" title="管理导航">
           <Menu className="h-4 w-4" />
         </Button>
       </header>
@@ -261,7 +261,7 @@ export function AdminPage() {
           <DialogHeader className="flex-row items-center border-b border-border/70 px-4 py-3">
             <DialogTitle className="text-sm">管理后台</DialogTitle>
             <DialogDescription className="sr-only">选择管理后台栏目。</DialogDescription>
-            <Button type="button" variant="ghost" size="icon" className="ml-auto h-9 w-9" onClick={() => setMobileNavOpen(false)} aria-label="关闭管理导航">
+            <Button type="button" variant="ghost" size="icon" className="ml-auto h-11 min-h-11 w-11 min-w-11 shrink-0" onClick={() => setMobileNavOpen(false)} aria-label="关闭管理导航">
               <X className="h-4 w-4" />
             </Button>
           </DialogHeader>

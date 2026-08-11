@@ -312,7 +312,8 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setPage(1) }}
                 placeholder="搜索账号 / 昵称 / 邮箱"
-                className="h-8 pl-8 text-sm"
+                aria-label="搜索用户"
+                className="h-11 pl-8 text-sm sm:h-8"
               />
             </div>
           </div>
@@ -361,17 +362,21 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
             <span>共 {filtered.length} 人{query ? `（自 ${users.length} 人筛选）` : ""}</span>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-8"
+                aria-label="上一页用户"
               >
                 <ChevronLeft className="h-3.5 w-3.5" />
               </button>
               <span className="tabular-nums">{safePage} / {totalPages}</span>
               <button
+                type="button"
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-8"
+                aria-label="下一页用户"
               >
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>

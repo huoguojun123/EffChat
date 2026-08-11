@@ -55,7 +55,7 @@ export const test = base.extend<{ authed: Page }>({
   authed: async ({ page }, runTest, testInfo) => {
     if (!(await serverUp(page))) {
       if (REQUIRE_STACK) throw new Error("required E2E stack is not reachable")
-      testInfo.skip(true, "no running stack (start.sh) — skipping e2e")
+      testInfo.skip(true, "no running E2E stack — skipping e2e")
     }
     if (!(await authOK(page))) {
       if (REQUIRE_STACK) throw new Error("required E2E credentials were rejected")

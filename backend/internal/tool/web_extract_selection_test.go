@@ -57,6 +57,25 @@ func TestSelectBasicContentKeepsOversizedTopHit(t *testing.T) {
 	}
 }
 
+func TestSelectBasicContentKeepsRankedHitsBeforeNeighbors(t *testing.T) {
+	content := strings.Join([]string{
+		"neighbor context with no matching terms",
+		"quota alpha primary ranked passage",
+		"another unrelated neighbor context",
+		"ordinary document spacer",
+		"quota beta second ranked passage",
+	}, "\n\n")
+	selected, truncated := selectBasicContent(content, "quota", 76)
+	if !truncated || len([]rune(selected)) > 76 {
+		t.Fatalf("selected=%q truncated=%t", selected, truncated)
+	}
+	for _, want := range []string{"quota alpha", "quota beta"} {
+		if !strings.Contains(selected, want) {
+			t.Fatalf("ranked passage %q was displaced by a neighbor: %q", want, selected)
+		}
+	}
+}
+
 func TestFinalizeBasicLongContentRefinesBM25Candidate(t *testing.T) {
 	logs := captureToolLog(t)
 	mock := &mockSummarizer{summary: "focused summary"}
@@ -85,6 +104,20 @@ func TestFinalizeBasicLongContentRefinesBM25Candidate(t *testing.T) {
 		t.Fatalf("refinement input was not a bounded relevant candidate: %q", mock.gotContent)
 	}
 	requireToolLogContains(t, logs.String(), "basic_refine_called", "input_chars=")
+}
+
+func TestFinalizeBasicSuccessfulSummaryPreservesSourceTruncation(t *testing.T) {
+	mock := &mockSummarizer{summary: "focused summary"}
+	tool := NewWebExtractTool(WebExtractConfig{MaxContent: 80, Summarizer: mock, SummaryEnabled: true})
+	output, err := tool.finalizeContent(t.Context(), WebExtractOutput{
+		OK: true, Source: "basic", Title: "Fixture", Content: strings.Repeat("quota recovery source ", 20), Truncated: true,
+	}, "quota recovery", extractDetailSummary)
+	if err != nil {
+		t.Fatalf("finalizeContent() error = %v", err)
+	}
+	if !output.Summarized || !output.Truncated || !output.Degraded || output.DegradationReason != RefinementSourceTruncated {
+		t.Fatalf("output=%#v, want summarized source-truncated result", output)
+	}
 }
 
 func TestFinalizeBasicLongContentUsesLocalFallbackWhenRefinementFails(t *testing.T) {

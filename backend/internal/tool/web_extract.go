@@ -59,28 +59,25 @@ func IsRefinementReason(err error, reason string) bool {
 }
 
 type WebExtractTool struct {
-	crawlerImpl       string
-	crawlerProviders  []string
-	firecrawlAPIKey   string
-	firecrawlBaseURL  string
-	jinaAPIKey        string
-	jinaBaseURL       string
-	tavilyAPIKey      string
-	tavilyBaseURL     string
-	exaAPIKey         string
-	exaBaseURL        string
-	client            *http.Client
-	basicClient       *http.Client // SSRF 加固客户端，仅 basic 爬虫直连任意 URL 时使用
-	basicResolver     ipResolver
-	ipBlocked         func(net.IP) bool // IP 拦截策略；生产用 isBlockedIP，测试可放宽以访问本地 mock
-	basicWireLimit    int64             // Basic 压缩前响应上限，防止异常传输体无限读取
-	basicDecodedLimit int64             // Basic 解压后响应上限，与最终模型正文预算解耦
-	basicParsedLimit  int               // Basic DOM 解析后的本地正文上限，限制单次长页的内存与排序工作量
-	maxContent        int               // summary 模式最终返回给主模型的正文预算
-	rawContentLimit   int               // 抓取阶段保留的原文上限（喂给提炼小模型），远大于 maxContent
-	summarizer        Summarizer        // 非 nil 且 summaryEnabled 时，用小模型按 goal 提炼正文
-	summaryEnabled    bool
-	timeout           time.Duration
+	crawlerImpl      string
+	crawlerProviders []string
+	firecrawlAPIKey  string
+	firecrawlBaseURL string
+	jinaAPIKey       string
+	jinaBaseURL      string
+	tavilyAPIKey     string
+	tavilyBaseURL    string
+	exaAPIKey        string
+	exaBaseURL       string
+	client           *http.Client
+	basicClient      *http.Client // SSRF 加固客户端，仅 basic 爬虫直连任意 URL 时使用
+	basicResolver    ipResolver
+	ipBlocked        func(net.IP) bool // IP 拦截策略；生产用 isBlockedIP，测试可放宽以访问本地 mock
+	maxContent       int               // summary 模式最终返回给主模型的正文预算
+	rawContentLimit  int               // 抓取阶段保留的原文上限（喂给提炼小模型），远大于 maxContent
+	summarizer       Summarizer        // 非 nil 且 summaryEnabled 时，用小模型按 goal 提炼正文
+	summaryEnabled   bool
+	timeout          time.Duration
 }
 
 type WebExtractConfig struct {
@@ -168,17 +165,14 @@ func NewWebExtractTool(cfg WebExtractConfig) *WebExtractTool {
 		client: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		basicClient:       newGuardedHTTPClient(cfg.Timeout, resolver, isBlockedIP),
-		basicResolver:     resolver,
-		ipBlocked:         isBlockedIP,
-		basicWireLimit:    basicWireLimitBytes,
-		basicDecodedLimit: basicDecodedLimitBytes,
-		basicParsedLimit:  basicParsedContentLimit,
-		maxContent:        cfg.MaxContent,
-		rawContentLimit:   rawContentLimit,
-		summarizer:        cfg.Summarizer,
-		summaryEnabled:    cfg.SummaryEnabled,
-		timeout:           cfg.Timeout,
+		basicClient:     newGuardedHTTPClient(cfg.Timeout, resolver, isBlockedIP),
+		basicResolver:   resolver,
+		ipBlocked:       isBlockedIP,
+		maxContent:      cfg.MaxContent,
+		rawContentLimit: rawContentLimit,
+		summarizer:      cfg.Summarizer,
+		summaryEnabled:  cfg.SummaryEnabled,
+		timeout:         cfg.Timeout,
 	}
 }
 

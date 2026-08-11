@@ -308,12 +308,14 @@ func TestStreamChatCompatibilityWrapperUsesSingleContext(t *testing.T) {
 
 func TestPreparedChatRejectsMissingLifecycleInputs(t *testing.T) {
 	einoAgent := &EinoAgent{}
+	//lint:ignore SA1012 nil is the lifecycle boundary under test.
 	if _, err := einoAgent.PrepareChat(nil, &ChatRequest{}, &preparedChatEventWriter{}); err == nil {
 		t.Fatal("PrepareChat accepted a nil setup context")
 	}
 	if _, err := einoAgent.PrepareChat(t.Context(), &ChatRequest{}, nil); err == nil {
 		t.Fatal("PrepareChat accepted a nil event writer")
 	}
+	//lint:ignore SA1012 nil is the lifecycle boundary under test.
 	if _, err := einoAgent.RunPreparedChat(nil, &PreparedChatRun{}); err == nil {
 		t.Fatal("RunPreparedChat accepted a nil durable context")
 	}
@@ -467,12 +469,14 @@ func TestPrepareCompactionDoesNotRetainCanceledSetupContext(t *testing.T) {
 
 func TestPreparedCompactionRejectsMissingLifecycleInputs(t *testing.T) {
 	einoAgent := &EinoAgent{}
+	//lint:ignore SA1012 nil is the lifecycle boundary under test.
 	if _, err := einoAgent.PrepareCompaction(nil, &ChatRequest{}); err == nil {
 		t.Fatal("PrepareCompaction accepted a nil setup context")
 	}
 	if _, err := einoAgent.PrepareCompaction(t.Context(), nil); err == nil {
 		t.Fatal("PrepareCompaction accepted a nil request")
 	}
+	//lint:ignore SA1012 nil is the lifecycle boundary under test.
 	if _, err := einoAgent.RunPreparedCompaction(nil, &PreparedCompactionRun{}); err == nil {
 		t.Fatal("RunPreparedCompaction accepted a nil durable context")
 	}

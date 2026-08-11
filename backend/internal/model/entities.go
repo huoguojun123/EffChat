@@ -282,7 +282,6 @@ type Prompt struct {
 	GroupID     *int64    `json:"group_id,omitempty"`
 	GroupName   string    `json:"group_name"`
 	IsPublic    bool      `json:"is_public"`
-	UseCount    int       `json:"use_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

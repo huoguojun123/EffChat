@@ -852,17 +852,3 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 		c.JSON(http.StatusOK, payload)
 	}
 }
-
-func parseBoundedPositiveInt(raw string, fallback, min, max int) int {
-	n, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	if n < min {
-		return min
-	}
-	if n > max {
-		return max
-	}
-	return n
-}

@@ -14,7 +14,6 @@ function prompt(id: number, title: string, content: string) {
     group_id: null,
     group_name: "默认分组",
     is_public: true,
-    use_count: 0,
     created_at: timestamp,
     updated_at: timestamp,
   }

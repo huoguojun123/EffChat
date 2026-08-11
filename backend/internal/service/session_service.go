@@ -618,11 +618,6 @@ func (s *SessionService) DeleteContext(ctx context.Context, sessionID, userID in
 	return nil
 }
 
-// GetSessionCount 获取用户会话数量
-func (s *SessionService) GetSessionCount(userID int64) (int, error) {
-	return s.sessionRepo.CountByUser(userID)
-}
-
 func (s *SessionService) validateFolderID(userID int64, folderID *int64) (*int64, error) {
 	if folderID == nil {
 		return nil, nil

@@ -100,12 +100,6 @@ func fromAgenticMessage(message *schema.AgenticMessage, state *responseState) (*
 	return out, terminalErr
 }
 
-// FromAgenticMessage normalizes one typed Agent assistant message into the
-// stable product message contract used by SSE, persistence, and RunHub.
-func FromAgenticMessage(message *schema.AgenticMessage) (*schema.Message, error) {
-	return NewMessageConverter().Convert(message)
-}
-
 // ToolResultMessage converts Eino's typed local Tool event to the classic Tool
 // message expected by EffChat's SSE and persistence layers. Product Tools
 // currently return text; rejecting other blocks avoids silently flattening a

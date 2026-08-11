@@ -267,10 +267,6 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 	return &trimmed, nil
 }
 
-func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest) error {
-	return s.ResetPasswordContext(context.Background(), userID, req)
-}
-
 func (s *UserAdminService) ResetPasswordContext(ctx context.Context, userID int64, req *ResetPasswordRequest) error {
 	if err := validateUserPassword(req.Password); err != nil {
 		return fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)

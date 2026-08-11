@@ -332,11 +332,6 @@ func (s *AuthService) GetProfileContext(ctx context.Context, userID int64) (*mod
 	return user, nil
 }
 
-// UpdateProfile 更新用户个人信息
-func (s *AuthService) UpdateProfile(userID int64, req *UpdateProfileRequest) (*model.User, error) {
-	return s.UpdateProfileContext(context.Background(), userID, req)
-}
-
 func (s *AuthService) UpdateProfileContext(ctx context.Context, userID int64, req *UpdateProfileRequest) (*model.User, error) {
 	if err := validateUserNickname(req.Nickname); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUserProfileInvalid, err)

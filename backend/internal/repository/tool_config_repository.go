@@ -42,10 +42,6 @@ func scanToolConfig(s interface {
 	return item, nil
 }
 
-func (r *ToolConfigRepository) List() ([]*model.ToolConfig, error) {
-	return r.ListContext(context.Background())
-}
-
 func (r *ToolConfigRepository) ListContext(ctx context.Context) ([]*model.ToolConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -77,30 +73,6 @@ func (r *ToolConfigRepository) ListContext(ctx context.Context) ([]*model.ToolCo
 		return nil, fmt.Errorf("iterate tool configs: %w", err)
 	}
 	return out, nil
-}
-
-func (r *ToolConfigRepository) Upsert(item *model.ToolConfig) (*model.ToolConfig, error) {
-	if item == nil {
-		return nil, fmt.Errorf("tool config is required")
-	}
-	if err := r.db.QueryRow(`
-		INSERT INTO tool_configs (tool_key, display_name, enabled, timeout_seconds, sort_order)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (tool_key) DO UPDATE SET
-			display_name = EXCLUDED.display_name,
-			enabled = EXCLUDED.enabled,
-			timeout_seconds = EXCLUDED.timeout_seconds,
-			sort_order = EXCLUDED.sort_order,
-			updated_at = NOW()
-		RETURNING `+toolConfigColumns,
-		item.Key, item.DisplayName, item.Enabled, item.TimeoutSeconds, item.SortOrder,
-	).Scan(
-		&item.ID, &item.Key, &item.DisplayName, &item.Enabled, &item.TimeoutSeconds,
-		&item.SortOrder, &item.CreatedAt, &item.UpdatedAt,
-	); err != nil {
-		return nil, fmt.Errorf("upsert tool config: %w", err)
-	}
-	return item, nil
 }
 
 // SaveGoverned owns both the catalog write and its audit event. Keeping them in

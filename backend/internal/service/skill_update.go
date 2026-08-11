@@ -136,10 +136,6 @@ func (s *SkillService) UpdateGit(ctx context.Context, userID int64, id string, r
 	return s.persistSkillUpdate(ctx, userID, current, parsed[0], report, SkillSourceGit, &sourceURL, sourceRef)
 }
 
-func (s *SkillService) UpdateZip(userID int64, id string, data []byte, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
-	return s.UpdateZipContext(context.Background(), userID, id, data, req)
-}
-
 func (s *SkillService) UpdateZipContext(ctx context.Context, userID int64, id string, data []byte, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
 	current, err := s.skillRepo.Get(id, true)
 	if err != nil {

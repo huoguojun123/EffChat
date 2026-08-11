@@ -175,10 +175,6 @@ func (r *MessageRepository) CreateForActiveSession(ctx context.Context, sessionI
 	return r.createBatchForActiveSession(ctx, sessionID, userID, "", []*model.Message{message})
 }
 
-func (r *MessageRepository) CreateBatchForActiveSession(ctx context.Context, sessionID, userID int64, messages []*model.Message) error {
-	return r.createBatchForActiveSession(ctx, sessionID, userID, "", messages)
-}
-
 func (r *MessageRepository) CreateBatchForActiveRun(ctx context.Context, sessionID, userID int64, runID string, messages []*model.Message) error {
 	return r.createBatchForActiveSession(ctx, sessionID, userID, strings.TrimSpace(runID), messages)
 }
@@ -1032,24 +1028,6 @@ func (r *MessageRepository) messageWindowTurnIDs(sessionID int64, mode MessageWi
 	return ids, nil
 }
 
-// CountBySession 统计会话的消息数量
-func (r *MessageRepository) CountBySession(sessionID int64) (int, error) {
-	var count int
-	query := `
-		SELECT COUNT(*)
-		FROM messages m
-		LEFT JOIN answer_attempts a ON a.id = m.answer_attempt_id
-		WHERE m.session_id = $1
-		  AND m.deleted_at IS NULL
-		  AND (m.answer_attempt_id IS NULL OR a.selected)
-	`
-	err := r.db.QueryRow(query, sessionID).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("failed to count messages: %w", err)
-	}
-	return count, nil
-}
-
 // CountBySessions 批量统计多个会话的消息数。
 //
 // 侧边栏一次默认加载 100 个会话；如果逐个 CountBySession，会把一次列表请求放大成
@@ -1334,35 +1312,6 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		return 0, fmt.Errorf("failed to commit undo tx: %w", err)
 	}
 	return restored, nil
-}
-
-func (r *MessageRepository) DeleteAfter(sessionID, afterMessageID int64) (int64, error) {
-	query := `
-		UPDATE messages
-		SET deleted_at = NOW()
-		WHERE session_id = $1
-		  AND id > $2
-		  AND deleted_at IS NULL
-		RETURNING id
-	`
-	rows, err := r.db.Query(query, sessionID, afterMessageID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to delete messages after id %d: %w", afterMessageID, err)
-	}
-	defer rows.Close()
-
-	var count int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return count, fmt.Errorf("failed to scan deleted message id: %w", err)
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		return count, fmt.Errorf("failed to iterate deleted message ids: %w", err)
-	}
-	return count, nil
 }
 
 // ParseMessageData 解析 message_data JSONB 为 map

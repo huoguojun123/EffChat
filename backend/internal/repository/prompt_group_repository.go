@@ -57,22 +57,6 @@ func (r *PromptGroupRepository) Create(userID int64, name string) (*model.Prompt
 	return group, nil
 }
 
-func (r *PromptGroupRepository) GetByID(id int64, userID int64) (*model.PromptGroup, error) {
-	group := &model.PromptGroup{}
-	err := r.db.QueryRow(`
-		SELECT id, user_id, name, created_at, updated_at
-		FROM prompt_groups
-		WHERE id = $1 AND user_id = $2
-	`, id, userID).Scan(&group.ID, &group.UserID, &group.Name, &group.CreatedAt, &group.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get prompt group: %w", err)
-	}
-	return group, nil
-}
-
 func (r *PromptGroupRepository) Update(id int64, userID int64, name string) (*model.PromptGroup, error) {
 	return r.UpdateContext(context.Background(), id, userID, name)
 }

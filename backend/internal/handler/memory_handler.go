@@ -141,14 +141,6 @@ func SaveSessionMemoryHandler(sessionService *service.SessionService, memoryRepo
 	}
 }
 
-func answerSelectionChangedPayload() gin.H {
-	return gin.H{
-		"error":     "回答版本已变化，请重新执行记忆维护",
-		"code":      "answer_selection_changed",
-		"retryable": true,
-	}
-}
-
 func sessionMemoryConflictPayload() gin.H {
 	return gin.H{
 		"error":     "会话记忆已在后台更新，请重新加载后再操作",

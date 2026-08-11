@@ -427,7 +427,7 @@ func (s *SkillService) Delete(userID int64, id string) error {
 
 func (s *SkillService) ListHistory(id string) ([]*model.GovernanceEvent, error) {
 	if s == nil || s.governanceRepo == nil {
-		return nil, fmt.Errorf("Skill governance repository is not available")
+		return nil, fmt.Errorf("skill governance repository is not available")
 	}
 	return s.governanceRepo.List(context.Background(), "skill", normalizeSkillID(id), 50)
 }

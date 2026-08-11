@@ -58,11 +58,11 @@ func (r *PromptRepository) CreateContext(ctx context.Context, p *model.Prompt) e
 	query := `
 		INSERT INTO prompts (user_id, title, content, description, tags, group_id, group_name, is_public)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, use_count, created_at, updated_at
+		RETURNING id, created_at, updated_at
 	`
 	err = tx.QueryRowContext(ctx,
 		query, p.UserID, p.Title, p.Content, p.Description, pq.Array(p.Tags), p.GroupID, groupName, p.IsPublic,
-	).Scan(&p.ID, &p.UseCount, &p.CreatedAt, &p.UpdatedAt)
+	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create prompt: %w", promptContextError(ctx, err))
 	}
@@ -76,13 +76,13 @@ func (r *PromptRepository) CreateContext(ctx context.Context, p *model.Prompt) e
 func (r *PromptRepository) GetByID(id, userID int64) (*model.Prompt, error) {
 	p := &model.Prompt{}
 	query := `
-		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
+		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, created_at, updated_at
 		FROM prompts
 		WHERE id = $1 AND (user_id = $2 OR is_public = true)
 	`
 	err := r.db.QueryRow(query, id, userID).Scan(
 		&p.ID, &p.UserID, &p.Title, &p.Content, &p.Description,
-		pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.UseCount, &p.CreatedAt, &p.UpdatedAt,
+		pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("prompt not found: %w", ErrNotFound)
@@ -95,7 +95,7 @@ func (r *PromptRepository) GetByID(id, userID int64) (*model.Prompt, error) {
 
 func (r *PromptRepository) ListByUser(userID int64, limit, offset int) ([]*model.Prompt, error) {
 	query := `
-		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
+		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, created_at, updated_at
 		FROM prompts
 		WHERE user_id = $1
 		ORDER BY updated_at DESC, id DESC
@@ -114,10 +114,10 @@ func (r *PromptRepository) CountByUser(userID int64) (int, error) {
 
 func (r *PromptRepository) ListPublic(limit, offset int) ([]*model.Prompt, error) {
 	query := `
-		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
+		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, created_at, updated_at
 		FROM prompts
 		WHERE is_public = true
-		ORDER BY use_count DESC, updated_at DESC, id DESC
+		ORDER BY updated_at DESC, id DESC
 		LIMIT $1 OFFSET $2
 	`
 	return r.scanPrompts(query, limit, offset)
@@ -133,7 +133,7 @@ func (r *PromptRepository) CountPublic() (int, error) {
 
 func (r *PromptRepository) ListShared(limit, offset int) ([]*model.Prompt, error) {
 	query := `
-		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
+		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, created_at, updated_at
 		FROM prompts
 		WHERE is_public = true
 		ORDER BY updated_at DESC, id DESC
@@ -149,13 +149,13 @@ func (r *PromptRepository) CountShared() (int, error) {
 func (r *PromptRepository) GetSharedByID(id int64) (*model.Prompt, error) {
 	p := &model.Prompt{}
 	query := `
-		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
+		SELECT id, user_id, title, content, description, tags, group_id, COALESCE(group_name, '默认分组'), is_public, created_at, updated_at
 		FROM prompts
 		WHERE id = $1 AND is_public = true
 	`
 	err := r.db.QueryRow(query, id).Scan(
 		&p.ID, &p.UserID, &p.Title, &p.Content, &p.Description,
-		pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.UseCount, &p.CreatedAt, &p.UpdatedAt,
+		pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("prompt not found: %w", ErrNotFound)
@@ -299,11 +299,6 @@ func (r *PromptRepository) DeleteShared(id int64) error {
 	return nil
 }
 
-func (r *PromptRepository) IncrementUseCount(id int64) error {
-	_, err := r.db.Exec(`UPDATE prompts SET use_count = use_count + 1 WHERE id = $1`, id)
-	return err
-}
-
 func (r *PromptRepository) scanPrompts(query string, args ...interface{}) ([]*model.Prompt, error) {
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
@@ -316,7 +311,7 @@ func (r *PromptRepository) scanPrompts(query string, args ...interface{}) ([]*mo
 		p := &model.Prompt{}
 		if err := rows.Scan(
 			&p.ID, &p.UserID, &p.Title, &p.Content, &p.Description,
-			pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.UseCount, &p.CreatedAt, &p.UpdatedAt,
+			pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.CreatedAt, &p.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan prompt: %w", err)
 		}
@@ -331,7 +326,7 @@ func (r *PromptRepository) scanPrompts(query string, args ...interface{}) ([]*mo
 func getPromptForUpdateTx(ctx context.Context, tx *sql.Tx, id, userID int64, shared bool) (*model.Prompt, error) {
 	query := `
 		SELECT id, user_id, title, content, description, tags, group_id,
-		       COALESCE(group_name, '默认分组'), is_public, use_count, created_at, updated_at
+		       COALESCE(group_name, '默认分组'), is_public, created_at, updated_at
 		FROM prompts WHERE id = $1`
 	args := []interface{}{id}
 	if shared {
@@ -344,7 +339,7 @@ func getPromptForUpdateTx(ctx context.Context, tx *sql.Tx, id, userID int64, sha
 	p := &model.Prompt{}
 	err := tx.QueryRowContext(ctx, query, args...).Scan(
 		&p.ID, &p.UserID, &p.Title, &p.Content, &p.Description,
-		pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.UseCount, &p.CreatedAt, &p.UpdatedAt,
+		pq.Array(&p.Tags), &p.GroupID, &p.GroupName, &p.IsPublic, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("prompt not found or access denied: %w", ErrNotFound)

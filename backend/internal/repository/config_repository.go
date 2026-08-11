@@ -695,12 +695,6 @@ func (r *ConfigRepository) GetStringContext(ctx context.Context, key, fallback s
 	return fallback, fmt.Errorf("config %s is not a valid string", key)
 }
 
-// GetBool 读取布尔配置，兼容 JSON true/false 与字符串 "true"/"1"。
-func (r *ConfigRepository) GetBool(key string, fallback bool) bool {
-	value, _ := r.GetBoolContext(context.Background(), key, fallback)
-	return value
-}
-
 func (r *ConfigRepository) GetBoolContext(ctx context.Context, key string, fallback bool) (bool, error) {
 	item, err := r.GetContext(ctx, key)
 	if err != nil {
@@ -723,11 +717,6 @@ func (r *ConfigRepository) GetBoolContext(ctx context.Context, key string, fallb
 		}
 	}
 	return fallback, fmt.Errorf("config %s is not a valid boolean", key)
-}
-
-func (r *ConfigRepository) GetStringSlice(key string, fallback []string) []string {
-	values, _ := r.GetStringSliceContext(context.Background(), key, fallback)
-	return values
 }
 
 func (r *ConfigRepository) GetStringSliceContext(ctx context.Context, key string, fallback []string) ([]string, error) {

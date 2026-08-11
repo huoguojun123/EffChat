@@ -134,10 +134,6 @@ func (s *QuotaService) CheckBeforeRun(ctx context.Context, userID int64, check Q
 	return nil
 }
 
-func (s *QuotaService) CheckBeforeOCR(ctx context.Context, userID int64, pages int) error {
-	return s.checkOCRQuota(ctx, userID, pages, true)
-}
-
 func (s *QuotaService) CheckOCRFile(ctx context.Context, userID int64) error {
 	return s.checkOCRQuota(ctx, userID, 0, true)
 }

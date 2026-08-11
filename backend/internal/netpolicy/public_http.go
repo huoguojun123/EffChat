@@ -42,11 +42,6 @@ func IsBlockedIP(ip net.IP) bool {
 	return false
 }
 
-func ValidatePublicHTTPURL(ctx context.Context, resolver IPResolver, raw string) error {
-	_, err := ResolvePublicHTTPURL(ctx, resolver, raw)
-	return err
-}
-
 func ResolvePublicHTTPURL(ctx context.Context, resolver IPResolver, raw string) (PublicHTTPResolution, error) {
 	var resolution PublicHTTPResolution
 	parsed, err := url.Parse(raw)

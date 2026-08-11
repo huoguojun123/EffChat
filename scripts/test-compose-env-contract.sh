@@ -80,4 +80,11 @@ config_output="$(ENV_FILE="$TEST_ROOT/.env" "$ROOT/scripts/docker-build.sh" conf
 grep -Fq -- "$ROOT/./single quoted data/postgres" <<<"$config_output"
 grep -Fq -- "$ROOT/./single quoted data/storage" <<<"$config_output"
 
+# Omitting DATA_DIR must preserve the same sibling-data default used by the
+# public template and Compose fallback, regardless of the checkout name.
+grep -v '^DATA_DIR=' "$TEST_ROOT/.env" > "$TEST_ROOT/.env-no-data-dir"
+config_output="$(ENV_FILE="$TEST_ROOT/.env-no-data-dir" "$ROOT/scripts/docker-build.sh" config)"
+grep -Fq -- "$ROOT/../data/postgres" <<<"$config_output"
+grep -Fq -- "$ROOT/../data/storage" <<<"$config_output"
+
 echo "Compose environment contract checks passed."

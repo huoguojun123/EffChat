@@ -12,7 +12,7 @@ EffChat 是一个面向小团队自托管的 AI agent workbench。目标是比�
 当前预发布版按“小团队自托管 agent workbench”收口：
 
 - 管理员网页配置模型渠道、API key、搜索、网页提取服务和 MinerU 精准 OCR；OpenAI 渠道可明确选择 Chat Completions 兼容协议或 Responses 协议。
-- Docker 部署继续使用 `.env.docker`；环境变量文件只保留数据库、JWT、端口、存储路径、加密密钥、Python extractor 内部地址等基础设施项。
+- Docker 部署继续使用 `.env.docker`；环境变量文件只保留数据库凭据、JWT secret、端口、存储路径、Python extractor 内部地址和构建/网络等基础设施项。模型渠道、服务 API key 等业务配置由管理员页面保存。
 - 聊天运行、回答重试和断线恢复使用持久化 run/attempt 事实；浏览器连接中断后，后端仍可继续生成并在恢复时对账同一轮回答。
 - 现有工具支持后台启停、超时控制和上下文预算；错误作为结构化结果回传，降级单独计入管理统计；工具调用过程在消息内展示，Alpha 不做持久化工具审计日志。
 - 文件工作区按需读取解析文本，PDF 可优先走 MinerU 精准 OCR 并由本地解析兜底，支持磁盘删除、管理员手动清理遗留文件和大文件多窗口搜索。

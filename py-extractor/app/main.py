@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import csv
+import asyncio
 import html
 import http.client
 import importlib
@@ -25,6 +25,8 @@ from openpyxl import load_workbook
 from pptx import Presentation
 from starlette.concurrency import run_in_threadpool
 
+from app import resource_limits
+
 
 app = FastAPI(title="EffChat Extractor", version="0.3.4")
 logger = logging.getLogger("uvicorn.error")
@@ -36,6 +38,9 @@ MINERU_MAX_PAGES = 200
 MINERU_MAX_ZIP_BYTES = int(os.getenv("MINERU_MAX_ZIP_BYTES", str(100 * 1024 * 1024)))
 MINERU_UPLOAD_TIMEOUT_SECONDS = int(os.getenv("MINERU_UPLOAD_TIMEOUT_SECONDS", "300"))
 MINERU_DEFAULT_BASE_URL = "https://mineru.net"
+LOCAL_PARSE_CONCURRENCY = 2
+LOCAL_PARSE_QUEUE_TIMEOUT_SECONDS = 5.0
+LOCAL_PARSE_SLOTS = asyncio.Semaphore(LOCAL_PARSE_CONCURRENCY)
 
 
 @dataclass
@@ -94,8 +99,17 @@ async def extract(
     parser_name = getattr(parser, "__name__", "unknown")
 
     try:
-        doc = parser(data, safe_name)
-    except HTTPException:
+        doc = await run_local_parser(parser, data, safe_name)
+    except HTTPException as exc:
+        logger.warning(
+            "[py-extractor] extract rejected filename=%s parser=%s reason=%s status=%d bytes=%d duration_ms=%d",
+            safe_name,
+            parser_name,
+            exc.detail,
+            exc.status_code,
+            len(data),
+            elapsed_ms(started_at),
+        )
         raise
     except Exception as exc:
         logger.exception(
@@ -151,6 +165,25 @@ async def extract(
         "table_count": doc.table_count,
         "warnings": doc.warnings,
     }
+
+
+async def run_local_parser(
+    parser: Callable[[bytes, str], ExtractedDocument],
+    data: bytes,
+    safe_name: str,
+) -> ExtractedDocument:
+    # Office/PDF/CSV parsers are synchronous and may spend meaningful time in
+    # Python or native libraries. Two slots keep that work off the sole uvicorn
+    # event loop without allowing the default thread pool to multiply each
+    # request's bounded memory across dozens of simultaneous parsers.
+    try:
+        await asyncio.wait_for(LOCAL_PARSE_SLOTS.acquire(), timeout=LOCAL_PARSE_QUEUE_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="extractor_busy") from exc
+    try:
+        return await run_in_threadpool(parser, data, safe_name)
+    finally:
+        LOCAL_PARSE_SLOTS.release()
 
 
 @app.post("/ocr/mineru/start")
@@ -484,6 +517,7 @@ def extract_pdf_with_pdfplumber(data: bytes) -> ExtractedDocument:
 
 
 def extract_docx(data: bytes, filename: str) -> ExtractedDocument:
+    resource_limits.validate_office_archive(data)
     doc = Document(io.BytesIO(data))
     blocks: list[str] = []
     for para in doc.paragraphs:
@@ -506,6 +540,7 @@ def extract_docx(data: bytes, filename: str) -> ExtractedDocument:
 
 
 def extract_pptx(data: bytes, filename: str) -> ExtractedDocument:
+    resource_limits.validate_office_archive(data)
     prs = Presentation(io.BytesIO(data))
     slides: list[str] = []
     for index, slide in enumerate(prs.slides, start=1):
@@ -524,6 +559,7 @@ def extract_pptx(data: bytes, filename: str) -> ExtractedDocument:
 
 
 def extract_xlsx(data: bytes, filename: str) -> ExtractedDocument:
+    resource_limits.validate_office_archive(data)
     wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     sections: list[str] = []
     table_count = 0
@@ -549,13 +585,7 @@ def extract_xlsx(data: bytes, filename: str) -> ExtractedDocument:
 
 def extract_csv(data: bytes, filename: str) -> ExtractedDocument:
     text = decode_text(data)
-    sample = text[:4096]
-    try:
-        dialect = csv.Sniffer().sniff(sample)
-    except csv.Error:
-        dialect = csv.excel
-    reader = csv.reader(io.StringIO(text), dialect)
-    rows = [row for row in reader if any(cell.strip() for cell in row)]
+    rows = resource_limits.read_bounded_csv(text, MAX_OUTPUT_BYTES)
     return ExtractedDocument(
         text=markdown_table(rows),
         parser="python-csv",

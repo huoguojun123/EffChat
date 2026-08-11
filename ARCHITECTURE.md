@@ -11,7 +11,14 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 - Database：PostgreSQL 17。
 - Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理；镜像以固定
   `10001:10001` 运行，应用与依赖层保持 root-owned，只使用容器内标准 `/tmp`
-  处理临时文件，不挂载宿主机活动存储。
+  处理临时文件，不挂载宿主机活动存储。普通 PDF/Office/CSV 解析通过线程池
+  离开 uvicorn event loop，并限制为 2 个并发解析槽；排队 5 秒仍无空位返回稳定
+  `extractor_busy`，health 不占解析槽。Office ZIP 在构造标准库 archive reader 前预检 EOCD，
+  并限制条目数、central directory、单项/总解压大小和压缩比（4,096 项、4 MiB
+  directory、单项 32 MiB、总计 64 MiB、100:1），CSV 只接受
+  逗号、Tab、分号和竖线，并限制单 field 1,048,576 字符、100,000 行、256
+  列、500,000 个 cell 及当前输出字节预算，避免小压缩包或异常表格占满
+  512 MiB sidecar。
 - Deploy：Docker Compose，包含 `postgres`、`migrate`、`backend`、`py-extractor`、`web`。
 
 ## 当前边界

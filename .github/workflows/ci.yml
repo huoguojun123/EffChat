@@ -153,6 +153,8 @@ jobs:
         run: scripts/test-isolated-restore-contract.sh
       - name: Test Docker context boundary
         run: scripts/test-docker-context-boundary.sh
+      - name: Test Git ignore boundary
+        run: scripts/test-gitignore-boundary.sh
       - name: Test BUILD_REF inputs
         run: scripts/test-build-ref-inputs.sh
       - name: Test release ref gate

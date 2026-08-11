@@ -167,5 +167,10 @@ jobs:
         run: docker compose --env-file .env.docker.example config
       - name: Build application images
         run: docker compose --env-file .env.docker.example build backend web py-extractor
+      - name: Verify extractor runtime user
+        run: |
+          test "$(docker image inspect effchat-py-extractor:local --format '{{.Config.User}}')" = '10001:10001'
+          docker run --rm --entrypoint python effchat-py-extractor:local -c \
+            'import os; assert (os.getuid(), os.getgid()) == (10001, 10001)'
       - name: Verify image license archives
         run: scripts/check-image-licenses.sh effchat-backend:local effchat-web:local effchat-py-extractor:local

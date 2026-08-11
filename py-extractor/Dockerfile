@@ -19,11 +19,20 @@ COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/effchat/
 RUN python /tmp/license-tools/collect-third-party-licenses.py collect python \
     --root /app \
     --output /usr/share/licenses/effchat/third-party/python \
-  && rm -rf /tmp/license-tools
+  && rm -rf /tmp/license-tools \
+  && groupadd --gid 10001 extractor \
+  && useradd --uid 10001 --gid 10001 --no-create-home \
+    --home-dir /nonexistent --shell /usr/sbin/nologin extractor
 
 EXPOSE 8090
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).read()" || exit 1
+
+# Application and dependency layers stay root-owned and read-only to the
+# runtime process. Parsers only need the image's standard 1777 /tmp for their
+# bounded temporary files, so uploaded documents never require a writable app
+# directory or a host mount.
+USER 10001:10001
 
 CMD ["sh", "-c", "uvicorn app.main:app --host ${EXTRACTOR_HOST} --port ${EXTRACTOR_PORT} --workers 1"]

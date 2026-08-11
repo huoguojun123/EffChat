@@ -9,7 +9,9 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 - Backend：Go 1.26.5、Gin、Eino v0.9.13、eino-ext openai/claude/gemini adapters。Claude adapter v0.1.20 通过 `backend/third_party/eino-claude` 保留一处可审计的上游 race 修正，待官方发布等价修复后移除本地 replace。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
-- Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理。
+- Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理；镜像以固定
+  `10001:10001` 运行，应用与依赖层保持 root-owned，只使用容器内标准 `/tmp`
+  处理临时文件，不挂载宿主机活动存储。
 - Deploy：Docker Compose，包含 `postgres`、`migrate`、`backend`、`py-extractor`、`web`。
 
 ## 当前边界

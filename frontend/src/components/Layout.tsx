@@ -46,8 +46,13 @@ export function Layout() {
   }, [loadSessionCreateReadiness])
 
   useEffect(() => {
-    const routedId = sessionId ? Number(sessionId) : null
-    if (routedId) {
+    if (sessionId) {
+      const routedId = Number(sessionId)
+      if (!/^[1-9]\d*$/.test(sessionId) || !Number.isSafeInteger(routedId)) {
+        setActiveSession(null)
+        navigate("/", { replace: true })
+        return
+      }
       if (!sessionsLoaded || isLoadingSessions) return
       if (!sessions.some((item) => item.id === routedId)) {
         if (routeLookupRef.current === routedId) return

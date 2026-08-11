@@ -125,3 +125,22 @@ for (const readiness of ["pending", "error", "blocked"] as const) {
     await expect(page.getByRole("complementary", { name: "侧边栏" })).toHaveAttribute("aria-hidden", "false")
   })
 }
+
+test("invalid session route parameters return to the reachable empty state without a detail lookup", async ({ page }) => {
+  const sessionDetailRequests: string[] = []
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname
+    if (/^\/api\/v1\/sessions\/[^/]+$/.test(path) && path !== "/api/v1/sessions/readiness") {
+      sessionDetailRequests.push(path)
+    }
+  })
+  await mockAccount(page)
+
+  for (const value of ["not-a-number", "0", "-1", "1.5", "1e3", "9007199254740992"]) {
+    await page.goto(`/chat/${value}`)
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.locator('button[aria-controls="app-sidebar"]')).toHaveAccessibleName("打开侧边栏")
+  }
+
+  expect(sessionDetailRequests).toEqual([])
+})

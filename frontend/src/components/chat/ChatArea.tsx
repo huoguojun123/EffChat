@@ -158,21 +158,20 @@ export function ChatArea({
   }
 
   const showBlockingMessageLoadError = Boolean(messageLoadError && messages.length === 0 && !isStreamingDisplayActive(streamingStatus))
+  let emptySessionContent = null
   if (!activeSessionId && !isRouteSessionPending) {
     if (isLoadingSessionCreateReadiness) {
-      return <div className="flex min-h-0 flex-1 items-center justify-center"><LoadingIndicator label="正在检查聊天配置" /></div>
-    }
-    if (sessionCreateReadinessError) {
-      return (
+      emptySessionContent = <div className="flex min-h-0 flex-1 items-center justify-center"><LoadingIndicator label="正在检查聊天配置" /></div>
+    } else if (sessionCreateReadinessError) {
+      emptySessionContent = (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 text-center">
           <p className="text-sm font-medium">无法检查聊天配置</p>
           <p className="mt-1 text-sm text-muted-foreground">{sessionCreateReadinessError}</p>
           <Button variant="outline" size="sm" className="mt-4" onClick={() => void loadSessionCreateReadiness(true)}>重新检查</Button>
         </div>
       )
-    }
-    if (!sessionCreateReadiness?.ready) {
-      return (
+    } else if (!sessionCreateReadiness?.ready) {
+      emptySessionContent = (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden overscroll-none px-5 text-center">
           <Settings2 className="h-7 w-7 text-muted-foreground" />
           <h1 className="mt-3 text-base font-semibold">聊天尚未准备好</h1>
@@ -192,10 +191,11 @@ export function ChatArea({
           ) : null}
         </div>
       )
+    } else {
+      emptySessionContent = (
+        <EmptyGreeting showLogo onCreateSession={handleCreateSession} creating={isCreatingSession} createError={sessionCreateError} />
+      )
     }
-    return (
-      <EmptyGreeting showLogo onCreateSession={handleCreateSession} creating={isCreatingSession} createError={sessionCreateError} />
-    )
   }
 
   return (
@@ -245,12 +245,14 @@ export function ChatArea({
           <SessionExportDialog key={activeSessionId} sessionId={activeSessionId} />
           </div>
         ) : null}
-        <div className="pointer-events-auto min-w-0 shrink-0">
-          <ModelSelector />
-        </div>
+        {activeSessionId ? (
+          <div className="pointer-events-auto min-w-0 shrink-0">
+            <ModelSelector />
+          </div>
+        ) : null}
       </header>
       <div className="flex min-h-0 flex-1 flex-col">
-        {isSessionTransitioning ? (
+        {emptySessionContent ?? (isSessionTransitioning ? (
           <div className="flex flex-1 items-center justify-center">
             {showSessionLoading ? <LoadingIndicator label="正在加载会话" /> : null}
           </div>
@@ -268,16 +270,18 @@ export function ChatArea({
           <EmptyGreeting key={activeSessionId} withComposerInset />
         ) : (
           <MessageList />
-        )}
+        ))}
       </div>
-      <div ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-background/68 via-background/32 to-transparent pt-10 pb-[env(safe-area-inset-bottom)] sm:pb-6">
-        <div className="pointer-events-auto">
-          <ChatInput ref={chatInputRef} />
+      {activeSessionId ? (
+        <div ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-background/68 via-background/32 to-transparent pt-10 pb-[env(safe-area-inset-bottom)] sm:pb-6">
+          <div className="pointer-events-auto">
+            <ChatInput ref={chatInputRef} />
+          </div>
         </div>
-      </div>
-      <SessionFilesDrawer sessionId={activeSessionId} open={filesOpen} onOpenChange={setFilesOpen} />
+      ) : null}
+      {activeSessionId ? <SessionFilesDrawer sessionId={activeSessionId} open={filesOpen} onOpenChange={setFilesOpen} /> : null}
 
-      {dragging && (
+      {activeSessionId && dragging ? (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-background/80 backdrop-blur-sm animate-in fade-in-0 motion-surface">
           <div className="m-4 flex h-[calc(100%-2rem)] w-[calc(100%-2rem)] flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-primary/50 bg-primary/5">
             <UploadCloud className="h-10 w-10 text-primary/70" />
@@ -285,7 +289,7 @@ export function ChatArea({
             <p className="text-xs text-muted-foreground">支持图片、PDF、Word、Excel、文本等</p>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

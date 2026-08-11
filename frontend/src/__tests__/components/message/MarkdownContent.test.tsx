@@ -7,7 +7,7 @@ vi.mock("@/components/message/CodeBlock", () => ({
   CodeBlock: ({ code, allowPreview }: { code: string; allowPreview?: boolean }) => <pre className="mock-code-block" data-allow-preview={String(allowPreview)}>{code}</pre>,
 }))
 
-describe("MarkdownContent math rendering", () => {
+describe("MarkdownContent rendering", () => {
   it("renders inline and block math as KaTeX markup", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent content={"行内公式 $E=mc^2$\n\n$$\\int_0^1 x^2 dx$$"} />
@@ -73,5 +73,24 @@ describe("MarkdownContent math rendering", () => {
     expect(markdownHasDefaultInlinePreview("```html\n<p>source first</p>\n```")).toBe(false)
     expect(markdownHasDefaultInlinePreview("```mermaid\ngraph TD; A-->B\n```")).toBe(true)
     expect(markdownHasDefaultInlinePreview("~~~graphviz-neato\ngraph { A -- B }\n~~~")).toBe(true)
+  })
+
+  it("keeps extracted GFM table cells structurally intact", () => {
+    const content = [
+      String.raw`| head\|er | literal\\\|pipe | multi&#10;line | &lt;tag&gt; | 中文 |`,
+      "| --- | --- | --- | --- | --- |",
+      "| A | B&#10;C | D&#10;E |  |  |",
+      "|  |  | tail | &amp;entity; | 🙂 |",
+    ].join("\n")
+    const html = renderToStaticMarkup(<MarkdownContent content={content} variant="document" />)
+
+    expect(html).toContain("<table>")
+    expect(html.match(/<th>/g)).toHaveLength(5)
+    expect(html.match(/<td>/g)).toHaveLength(10)
+    expect(html).toContain("<th>head|er</th>")
+    expect(html).toContain(String.raw`<th>literal\|pipe</th>`)
+    expect(html).toContain("<th>multi<br/>\nline</th>")
+    expect(html).toContain("<th>&lt;tag&gt;</th>")
+    expect(html).not.toContain("<tag>")
   })
 })

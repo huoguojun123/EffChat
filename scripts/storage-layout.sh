@@ -43,11 +43,7 @@ data_dir() {
   local value
   value="$(env_value DATA_DIR)"
   if [ -z "$value" ]; then
-    if [ "$(basename "$SRC_DIR")" = "src" ]; then
-      value="../data"
-    else
-      value="./data"
-    fi
+    value="../data"
   fi
   case "$value" in
     /*) printf '%s\n' "$value" ;;

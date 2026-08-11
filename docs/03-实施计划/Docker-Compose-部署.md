@@ -4,9 +4,9 @@
 
 ## 组件
 
-- `postgres`：PostgreSQL 17，数据写入 `${DATA_DIR:-./data}/postgres`。
+- `postgres`：PostgreSQL 17，数据写入 `${DATA_DIR:-../data}/postgres`。
 - `migrate`：一次性迁移容器，等待数据库健康后执行尚未记录到 `schema_migrations` 的生产迁移。
-- `backend`：Go release 服务，受管文件写入 `${DATA_DIR:-./data}/storage`，默认只映射到宿主机 `127.0.0.1:18080`。
+- `backend`：Go release 服务，受管文件写入 `${DATA_DIR:-../data}/storage`，默认只映射到宿主机 `127.0.0.1:18080`。
 - `web`：Nginx 静态前端，内置 `/api/` 到 `backend:8080` 的容器内转发，默认只映射到宿主机 `127.0.0.1:8088`。
 
 ## 首次部署
@@ -88,14 +88,15 @@ cp .env.docker.example .env.docker
 
 6. 进入管理后台配置渠道和模型。管理员保存配置后只影响新请求，正在进行的流式 run 不会中途切换凭据。
 
-启动后目录结构会变成：
+官方模板默认把源码和运行数据分开。若源码目录名为 `EffChat`，启动后父目录结构为：
 
 ```text
-.
-├── .env.docker
-├── docker-compose.yml
-├── backend/
-├── frontend/
+parent/
+├── EffChat/
+│   ├── .env.docker
+│   ├── docker-compose.yml
+│   ├── backend/
+│   └── frontend/
 └── data/
     ├── postgres/
     └── storage/
@@ -108,11 +109,10 @@ cp .env.docker.example .env.docker
         └── skills/
 ```
 
-等价的原生 Compose 命令：
-
-```bash
-docker compose --env-file .env.docker -f docker-compose.yml up -d --build
-```
+不要把原生 `docker compose up -d --build` 当作等价部署入口。它不会执行
+`docker-build.sh` 的占位 secret 检查、统一 `DATA_DIR` 解析、BUILD_REF 生成、
+storage layout 升级、显式 migration 与健康等待。原生 `docker compose config`
+可用于只读诊断；构建、升级和启动统一使用 `scripts/docker-build.sh`。
 
 默认 Web 入口：
 
@@ -164,7 +164,7 @@ Compose 默认由内置 Nginx 覆盖并传递 `X-Real-IP`，因此模板将 `TRU
 CONFIRM_RESET=DELETE_EFFCHAT_DATA scripts/docker-build.sh reset-db
 ```
 
-该命令会删除 `${DATA_DIR:-./data}/postgres`、`${DATA_DIR:-./data}/storage` 和遗留的 `${DATA_DIR:-./data}/uploads`，包括数据库与全部受管文件。
+该命令会删除 `${DATA_DIR:-../data}/postgres`、`${DATA_DIR:-../data}/storage` 和遗留的 `${DATA_DIR:-../data}/uploads`，包括数据库与全部受管文件。
 
 ## 常用命令
 
@@ -174,7 +174,7 @@ scripts/docker-build.sh up       # 构建并启动整套服务
 scripts/docker-build.sh config   # 渲染并校验 compose 配置
 scripts/docker-build.sh build-ref # 查看将注入 /health 的构建标识
 scripts/docker-build.sh logs     # 跟随日志
-scripts/docker-build.sh down     # 停止服务，不删除 ./data
+scripts/docker-build.sh down     # 停止服务，不删除 DATA_DIR
 ```
 
 ## 数据目录
@@ -182,10 +182,12 @@ scripts/docker-build.sh down     # 停止服务，不删除 ./data
 默认使用：
 
 ```env
-DATA_DIR=./data
+DATA_DIR=../data
 ```
 
-这适合把 `docker-compose.yml`、`.env.docker`、源码和运行数据放在同一个发布目录里。迁移源码或发布目录不等于迁移数据；不要在 PostgreSQL 运行时复制整个 `DATA_DIR` 或 `postgres` 目录。
+相对路径按源码目录解析，因此默认数据位于源码同级目录，而不是 Git 工作树内。
+受控导出部署中对应 `runtime/src` 与 `runtime/data`。迁移源码或发布目录不等于
+迁移数据；不要在 PostgreSQL 运行时复制整个 `DATA_DIR` 或 `postgres` 目录。
 
 如果服务器数据盘另有路径，可以改成绝对路径：
 

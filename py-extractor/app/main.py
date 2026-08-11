@@ -21,10 +21,9 @@ import pdfplumber
 from docx import Document
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from openpyxl import load_workbook
-from pptx import Presentation
 from starlette.concurrency import run_in_threadpool
 
-from app import markdown_table, resource_limits
+from app import markdown_table, pptx_content, resource_limits
 
 
 app = FastAPI(title="EffChat Extractor", version="0.3.4")
@@ -540,20 +539,14 @@ def extract_docx(data: bytes, filename: str) -> ExtractedDocument:
 
 def extract_pptx(data: bytes, filename: str) -> ExtractedDocument:
     resource_limits.validate_office_archive(data)
-    prs = Presentation(io.BytesIO(data))
-    slides: list[str] = []
-    for index, slide in enumerate(prs.slides, start=1):
-        texts: list[str] = []
-        for shape in slide.shapes:
-            if hasattr(shape, "text") and shape.text.strip():
-                texts.append(shape.text.strip())
-        if texts:
-            slides.append(f"## Slide {index}\n\n" + "\n\n".join(texts))
+    content = pptx_content.extract(data)
     return ExtractedDocument(
-        text="\n\n".join(slides),
+        text=content.text,
         parser="python-pptx",
-        page_count=len(prs.slides),
-        paragraph_count=sum(count_paragraphs(slide) for slide in slides),
+        page_count=content.slide_count,
+        paragraph_count=count_paragraphs(content.text),
+        table_count=content.table_count,
+        warnings=content.warnings,
     )
 
 

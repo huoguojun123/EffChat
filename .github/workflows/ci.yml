@@ -72,7 +72,7 @@ jobs:
             py-extractor/requirements.lock
             .github/requirements/pip-audit.lock
       - run: pip install --require-hashes -r requirements.lock
-      - run: python -m unittest app.test_mineru
+      - run: python -m unittest discover -s app -p 'test_*.py'
       - name: Install pinned Python dependency auditor
         run: |
           python -m venv .pip-audit

@@ -146,6 +146,10 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 ## 文件与 OCR
 
 - 文件元数据在 `files` 表，解析文本保存在受管理的数据目录。
+- PDF、DOCX、XLSX 与 CSV 的表格共用一个 GFM serializer。cell 先转义用户 HTML，
+  再按顺序保留反斜杠、转义 pipe，并把真实 CR/LF/CRLF 编码为安全的 `&#10;`；
+  remark-gfm 因而维持原行列，当前 `remark-breaks` 将解码后的换行渲染为 `<br>`。
+  下载和 Agent 读取继续消费同一份无原始 HTML 注入的 Markdown sidecar。
 - 文件 list/download/preview/OCR refresh 的公共读取契约区分本地参数 400、用户域内缺失 404、解析未完成 409 与 repository/受管存储/sidecar 读取的带 request ID 5xx；缺失与无权访问保持不可区分。`ApiError` 保留后端 `code/retryable/request_id`，文件预览按稳定 code 展示缺失或暂无正文，并只在公共协议允许重试时提供重试入口，不再解析中英文错误字符串。列表扫描统一检查 `rows.Err()`，中途数据库故障不能伪装成部分成功结果。
 - 文件上传准入与持久化复用同一公共错误协议：缺少 multipart/file/session 参数为稳定 400，文件与解析输出超限为 413，声明 MIME 不一致为 400，白名单或解析器不支持为 415，损坏/无可读正文为 422，会话文件数达到上限为 409；会话不存在或无权访问统一为 404，但 session/repository、受管存储、OCR queue 和 metadata 故障必须返回带 request ID 的 retryable 5xx。extractor owner 用 sentinel 区分用户内容、资源上限与依赖故障，Python sidecar 的响应正文、内部路径和上游原因不会传播到 Go 公共错误或 request log；metadata 创建失败会补偿删除本轮刚写入的原件、OCR buffer 或 extracted sidecar。
 - 前端上传预校验的 limits 接口与真实上传入口读取同一个 fail-closed policy；策略在冷启动不可用时二者都返回 `file_policy_unavailable`、带 request ID 的 retryable 503，不能由只读入口退化为无关联信息的裸错误。last-known-good、degraded 标记和实际上传最终裁决保持不变。

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import http.client
 import importlib
 import io
@@ -25,7 +24,7 @@ from openpyxl import load_workbook
 from pptx import Presentation
 from starlette.concurrency import run_in_threadpool
 
-from app import resource_limits
+from app import markdown_table, resource_limits
 
 
 app = FastAPI(title="EffChat Extractor", version="0.3.4")
@@ -500,7 +499,7 @@ def extract_pdf_with_pdfplumber(data: bytes) -> ExtractedDocument:
                 chunks.append(text.strip())
             tables = page.extract_tables() or []
             for table in tables:
-                md = markdown_table(table)
+                md = markdown_table.serialize(table)
                 if md:
                     chunks.append(md)
                     table_count += 1
@@ -527,7 +526,7 @@ def extract_docx(data: bytes, filename: str) -> ExtractedDocument:
     table_count = 0
     for table in doc.tables:
         rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-        md = markdown_table(rows)
+        md = markdown_table.serialize(rows)
         if md:
             blocks.append(md)
             table_count += 1
@@ -571,7 +570,7 @@ def extract_xlsx(data: bytes, filename: str) -> ExtractedDocument:
                 if any(cell.strip() for cell in values):
                     rows.append(values)
             if rows:
-                sections.append(f"## {sheet.title}\n\n{markdown_table(rows)}")
+                sections.append(f"## {sheet.title}\n\n{markdown_table.serialize(rows)}")
                 table_count += 1
     finally:
         wb.close()
@@ -587,28 +586,11 @@ def extract_csv(data: bytes, filename: str) -> ExtractedDocument:
     text = decode_text(data)
     rows = resource_limits.read_bounded_csv(text, MAX_OUTPUT_BYTES)
     return ExtractedDocument(
-        text=markdown_table(rows),
+        text=markdown_table.serialize(rows),
         parser="python-csv",
         table_count=1 if rows else 0,
         paragraph_count=len(rows),
     )
-
-
-def markdown_table(rows: list[list[object]]) -> str:
-    cleaned = [[html.escape("" if cell is None else str(cell).strip()) for cell in row] for row in rows]
-    cleaned = [row for row in cleaned if any(cell for cell in row)]
-    if not cleaned:
-        return ""
-    width = max(len(row) for row in cleaned)
-    normalized = [row + [""] * (width - len(row)) for row in cleaned]
-    header = normalized[0]
-    body = normalized[1:] or [[""] * width]
-    lines = [
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join(["---"] * width) + " |",
-    ]
-    lines.extend("| " + " | ".join(row) + " |" for row in body)
-    return "\n".join(lines)
 
 
 def normalize_markdown(text: str) -> str:

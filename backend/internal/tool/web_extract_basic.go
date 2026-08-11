@@ -238,26 +238,21 @@ func basicMediaType(declared string, body []byte) string {
 	return strings.ToLower(detected)
 }
 
-// normalizeBasicText preserves paragraph, code and table line structure emitted
-// by readability while bounding pathological blank-line runs. It intentionally
-// does not collapse every line with strings.Fields as the legacy stripper did.
+// normalizeBasicText preserves the meaningful line structure emitted by
+// readability but drops blank-only separator lines. Tool results are plain text,
+// so repeated visual paragraph spacing only consumes context without adding
+// information; code and table rows remain separate non-empty lines.
 func normalizeBasicText(input string) string {
 	input = strings.ReplaceAll(input, "\r\n", "\n")
 	input = strings.ReplaceAll(input, "\r", "\n")
 	lines := strings.Split(input, "\n")
 	kept := make([]string, 0, len(lines))
-	blank := false
 	for _, line := range lines {
 		line = strings.TrimRight(line, " \t")
 		if strings.TrimSpace(line) == "" {
-			if len(kept) > 0 && !blank {
-				kept = append(kept, "")
-			}
-			blank = true
 			continue
 		}
 		kept = append(kept, line)
-		blank = false
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }

@@ -66,6 +66,14 @@ func TestExtractBasicDocumentDecodesPlainTextAndRejectsBinary(t *testing.T) {
 	}
 }
 
+func TestNormalizeBasicTextDropsBlankSeparatorsButKeepsLineStructure(t *testing.T) {
+	input := "Heading\r\n\r\nParagraph text\n\nfunc main() {\n\n    println(\"ok\")\n}\n\nMode | Result\nBasic | Ready"
+	want := "Heading\nParagraph text\nfunc main() {\n    println(\"ok\")\n}\nMode | Result\nBasic | Ready"
+	if got := normalizeBasicText(input); got != want {
+		t.Fatalf("normalizeBasicText() = %q, want %q", got, want)
+	}
+}
+
 func TestReadBasicResponseEnforcesIdentityAndDecodedLimits(t *testing.T) {
 	resp := &http.Response{Header: make(http.Header), Body: io.NopCloser(strings.NewReader("123456"))}
 	body, truncated, err := readBasicResponse(resp, 5, 5)

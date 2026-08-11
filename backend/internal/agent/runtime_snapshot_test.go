@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,18 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 
 	channelService := service.NewChannelService(repository.NewChannelRepository(db))
 	enabled := true
+	if _, err := channelService.SaveExternalService(&service.ExternalServiceInput{
+		Key: "jina", DisplayName: "Jina", Kind: service.ServiceKindCrawler,
+		BaseURL: "https://reader.example.test", Enabled: &enabled,
+	}); err != nil {
+		t.Fatalf("save Jina service: %v", err)
+	}
+	if _, err := channelService.SaveExternalService(&service.ExternalServiceInput{
+		Key: "firecrawl", DisplayName: "Firecrawl", Kind: service.ServiceKindCrawler,
+		BaseURL: "https://crawler.example.test", APIKey: "firecrawl-secret", Enabled: &enabled,
+	}); err != nil {
+		t.Fatalf("save Firecrawl service: %v", err)
+	}
 	fixedTemperature := 1.0
 	topP, presencePenalty, frequencyPenalty := 1.0, 0.0, 0.0
 	n := 1
@@ -88,7 +101,7 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	if err != nil {
 		t.Fatalf("capture runtime snapshot: %v", err)
 	}
-	for _, secret := range []string{"secret-key-one", "/private/skill/body.md", "private skill description"} {
+	for _, secret := range []string{"secret-key-one", "firecrawl-secret", "/private/skill/body.md", "private skill description"} {
 		if strings.Contains(string(raw), secret) {
 			t.Fatalf("runtime snapshot leaked %q: %s", secret, raw)
 		}
@@ -108,6 +121,11 @@ func TestAcceptedRuntimeSnapshotRejectsChangedDependenciesWithoutPersistingSecre
 	}
 	if snapshot.ToolConfigState.State == "" || snapshot.SearchConfigState.Search.State == "" || snapshot.MemoryState.State == "" {
 		t.Fatalf("runtime dependency states missing: %+v", snapshot)
+	}
+	wantExtractProviders := []string{"jina", "firecrawl", "basic"}
+	if !reflect.DeepEqual(snapshot.ExtractProviders, wantExtractProviders) ||
+		!reflect.DeepEqual(req.RuntimeSearchConfig.CrawlerProviders, wantExtractProviders) {
+		t.Fatalf("extract provider order snapshot=%#v runtime=%#v", snapshot.ExtractProviders, req.RuntimeSearchConfig.CrawlerProviders)
 	}
 	if snapshot.ExtractSummaryChecksum == "" {
 		t.Fatal("extract summary dependency checksum is missing")

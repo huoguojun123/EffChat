@@ -64,7 +64,7 @@ func (t *WebExtractTool) extractWithBasic(ctx context.Context, pageURL string) W
 		}
 	}
 
-	body, fetchTruncated, err := readBasicResponse(resp, t.basicWireLimit, t.basicDecodedLimit)
+	body, fetchTruncated, err := readBasicResponse(resp, basicWireLimitBytes, basicDecodedLimitBytes)
 	if err != nil {
 		outcome := "fetch_error"
 		if errors.Is(err, errUnsupportedBasicEncoding) || errors.Is(err, gzip.ErrHeader) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -82,7 +82,7 @@ func (t *WebExtractTool) extractWithBasic(ctx context.Context, pageURL string) W
 		logBasicOutcome("challenge", pageURL, resp.StatusCode, "", len(body), 0, fetchTruncated, started)
 		return WebExtractOutput{OK: false, URL: pageURL, StatusCode: resp.StatusCode, Error: "challenge page detected"}
 	}
-	title, content, parsedTruncated, parser, err := extractBasicDocument(finalURL, resp.Header.Get("Content-Type"), body, t.basicParsedLimit)
+	title, content, parsedTruncated, parser, err := extractBasicDocument(finalURL, resp.Header.Get("Content-Type"), body, basicParsedContentLimit)
 	if err != nil {
 		switch {
 		case errors.Is(err, errBasicHTMLParse):
@@ -90,7 +90,7 @@ func (t *WebExtractTool) extractWithBasic(ctx context.Context, pageURL string) W
 			// stripper as a last-resort Basic parser for short or malformed HTML;
 			// binary response types never enter this fallback.
 			htmlText := string(body)
-			content, parsedTruncated = extractReadableTextWithStatus(htmlText, t.basicParsedLimit)
+			content, parsedTruncated = extractReadableTextWithStatus(htmlText, basicParsedContentLimit)
 			title = extractTitle(htmlText)
 			parser = "basic-strip"
 		case errors.Is(err, errUnsupportedBasicContent):
@@ -155,6 +155,9 @@ func readBasicResponse(resp *http.Response, wireLimit, decodedLimit int64) ([]by
 			return nil, false, errBasicWireLimit
 		}
 		return nil, false, err
+	}
+	if encoding == "gzip" && wire.N == 0 {
+		return nil, false, errBasicWireLimit
 	}
 	if int64(len(body)) <= decodedLimit {
 		return body, false, nil

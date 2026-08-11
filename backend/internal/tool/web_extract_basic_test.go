@@ -89,6 +89,11 @@ func TestReadBasicResponseDecodesGzipAndRejectsUnsupportedEncoding(t *testing.T)
 	if _, _, err := readBasicResponse(resp, 1024, 1024); !errors.Is(err, errUnsupportedBasicEncoding) {
 		t.Fatalf("unsupported encoding error = %v", err)
 	}
+
+	resp = &http.Response{Header: http.Header{"Content-Encoding": []string{"gzip"}}, Body: io.NopCloser(strings.NewReader("not a gzip stream"))}
+	if _, _, err := readBasicResponse(resp, 1024, 1024); err == nil {
+		t.Fatal("invalid gzip stream must fail")
+	}
 }
 
 func TestReadBasicResponseBoundsDecodedAndCompressedStreams(t *testing.T) {
@@ -106,6 +111,26 @@ func TestReadBasicResponseBoundsDecodedAndCompressedStreams(t *testing.T) {
 	if _, _, err := readBasicResponse(resp, 8, 1024); err == nil {
 		t.Fatal("compressed stream exceeding its wire limit must fail")
 	}
+
+	resp = &http.Response{Header: http.Header{"Content-Encoding": []string{"gzip"}}, Body: io.NopCloser(bytes.NewReader(compressed.Bytes()))}
+	if _, _, err := readBasicResponse(resp, int64(compressed.Len()-1), 1024); !errors.Is(err, errBasicWireLimit) {
+		t.Fatalf("complete gzip stream one byte over the wire limit error = %v", err)
+	}
+}
+
+func TestWebExtractToolLegacyFramesetUsesBoundedFallback(t *testing.T) {
+	logs := captureToolLog(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><head><title>Fallback</title></head><frameset><noframes>recoverable text</noframes></frameset></html>"))
+	}))
+	defer server.Close()
+
+	output := runExtract(t, allowLoopback(NewWebExtractTool(WebExtractConfig{})), WebExtractInput{URL: server.URL})
+	if !output.OK || output.Title != "Fallback" || !strings.Contains(output.Content, "recoverable text") {
+		t.Fatalf("output = %#v", output)
+	}
+	requireToolLogContains(t, logs.String(), "basic_outcome", "parser=basic-strip")
 }
 
 func TestBasicChallengeDetectionRequiresStrongSignals(t *testing.T) {

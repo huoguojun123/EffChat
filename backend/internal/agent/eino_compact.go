@@ -70,9 +70,15 @@ func (a *EinoAgent) PrepareCompaction(setupCtx context.Context, req *ChatRequest
 	}
 
 	input := make([]*schema.Message, 0, len(history)+2)
-	input = append(input, schema.SystemMessage("You are an assistant responsible for summarizing conversations into durable continuation context."))
+	// The detailed compaction contract belongs to the system layer. Keeping it
+	// out of source user messages prevents the model from recording EffChat's
+	// own output protocol as a user request. A short final marker still gives
+	// every provider a user turn to answer after histories that end in assistant
+	// output; the system instruction explicitly excludes that marker from the
+	// conversation being summarized.
+	input = append(input, schema.SystemMessage(compactionSystemInstruction))
 	input = append(input, history...)
-	input = append(input, schema.UserMessage(compactionInstruction))
+	input = append(input, schema.UserMessage(compactionRequestMarker))
 
 	return &PreparedCompactionRun{
 		profile:        compressionProfile,

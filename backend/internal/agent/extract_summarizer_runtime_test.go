@@ -207,10 +207,14 @@ func TestRuntimeConfigMaterialMarksMalformedRefinementPolicyUnavailable(t *testi
 	defer db.Close()
 	configRepo := repository.NewConfigRepository(db)
 	original, err := configRepo.Get("extract_summary_enabled")
-	if err != nil {
+	switch {
+	case err == nil:
+		t.Cleanup(func() { _ = configRepo.Update("extract_summary_enabled", original.Value) })
+	case errors.Is(err, repository.ErrNotFound):
+		t.Cleanup(func() { _, _ = db.Exec(`DELETE FROM system_config WHERE key = 'extract_summary_enabled'`) })
+	default:
 		t.Fatalf("read original refinement policy: %v", err)
 	}
-	t.Cleanup(func() { _ = configRepo.Update("extract_summary_enabled", original.Value) })
 	if err := configRepo.Update("extract_summary_enabled", json.RawMessage(`"invalid"`)); err != nil {
 		t.Fatalf("seed malformed refinement policy: %v", err)
 	}

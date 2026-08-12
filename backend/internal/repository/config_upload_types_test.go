@@ -69,6 +69,48 @@ func TestValidateUploadAllowedTypesRejectsEmptyPolicy(t *testing.T) {
 	}
 }
 
+func TestUploadSizeAdminPolicyHonorsDeploymentCeiling(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewConfigRepository(db)
+	original, originalErr := repo.Get("file_upload_max_size_mb")
+	if originalErr != nil && !errors.Is(originalErr, ErrNotFound) {
+		t.Fatalf("read original upload limit: %v", originalErr)
+	}
+	t.Cleanup(func() {
+		if original != nil {
+			_ = repo.Update("file_upload_max_size_mb", original.Value)
+		} else {
+			_, _ = db.Exec("DELETE FROM system_config WHERE key = 'file_upload_max_size_mb'")
+		}
+	})
+	repo.SetUploadMaxSizeMB(25)
+	if err := repo.UpdateAdminEditable("file_upload_max_size_mb", json.RawMessage(`25`)); err != nil {
+		t.Fatalf("save reachable upload limit: %v", err)
+	}
+	if err := repo.UpdateAdminEditable("file_upload_max_size_mb", json.RawMessage(`26`)); !errors.Is(err, ErrConfigInvalid) || !strings.Contains(err.Error(), "deployed 25MB") {
+		t.Fatalf("save unreachable upload limit error = %v", err)
+	}
+
+	if _, err := db.Exec(`UPDATE system_config SET value = '50' WHERE key = 'file_upload_max_size_mb'`); err != nil {
+		t.Fatalf("seed legacy oversized value: %v", err)
+	}
+	items, err := repo.ListAdminEditable()
+	if err != nil {
+		t.Fatalf("list admin config: %v", err)
+	}
+	for _, item := range items {
+		if item.Key == "file_upload_max_size_mb" {
+			if string(item.Value) != "25" {
+				t.Fatalf("effective legacy upload value = %s, want 25", item.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("file_upload_max_size_mb missing from admin config")
+}
+
 func TestListAdminEditableIncludesSystemPromptDefault(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

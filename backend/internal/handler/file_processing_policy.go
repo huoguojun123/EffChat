@@ -14,6 +14,8 @@ type uploadLimits struct {
 	PolicyDegraded  bool     `json:"policy_degraded,omitempty"`
 }
 
+const defaultDeploymentUploadMaxBytes int64 = 25 * 1024 * 1024
+
 type attachmentProcessingPolicy struct {
 	Enabled        bool
 	TimeoutSeconds int
@@ -21,7 +23,7 @@ type attachmentProcessingPolicy struct {
 	Degraded       bool
 }
 
-func resolveUploadLimits(ctx context.Context, configRepo *repository.ConfigRepository) (uploadLimits, error) {
+func resolveUploadLimits(ctx context.Context, configRepo *repository.ConfigRepository, deploymentMaxBytes int64) (uploadLimits, error) {
 	limits := uploadLimits{
 		MaxFileSizeMB:   20,
 		MaxSessionFiles: 50,
@@ -46,6 +48,13 @@ func resolveUploadLimits(ctx context.Context, configRepo *repository.ConfigRepos
 	if limits.MaxFileSizeMB <= 0 {
 		return uploadLimits{}, fmt.Errorf("file_upload_max_size_mb must be positive")
 	}
+	ceilingMB := uploadDeploymentCeilingMB(deploymentMaxBytes)
+	if limits.MaxFileSizeMB > ceilingMB {
+		// A legacy database value can predate the current deployment ceiling.
+		// Enforce the reachable limit here without mutating that value; the Admin
+		// read/write contract exposes the same effective ceiling for correction.
+		limits.MaxFileSizeMB = ceilingMB
+	}
 	if limits.MaxSessionFiles <= 0 {
 		return uploadLimits{}, fmt.Errorf("file_upload_max_session_files must be positive")
 	}
@@ -57,6 +66,18 @@ func resolveUploadLimits(ctx context.Context, configRepo *repository.ConfigRepos
 		return uploadLimits{}, fmt.Errorf("file_upload_allowed_types has no valid values")
 	}
 	return limits, nil
+}
+
+func uploadDeploymentCeilingMB(deploymentMaxBytes int64) int {
+	bytes := defaultDeploymentUploadMaxBytes
+	if deploymentMaxBytes > 0 {
+		bytes = deploymentMaxBytes
+	}
+	ceiling := int(bytes >> 20)
+	if ceiling < 1 {
+		return 1
+	}
+	return ceiling
 }
 
 func resolveAttachmentProcessingPolicy(ctx context.Context, configRepo *repository.ConfigRepository) (attachmentProcessingPolicy, error) {

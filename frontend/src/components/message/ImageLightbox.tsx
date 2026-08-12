@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { Download, Minus, Plus, RotateCcw, X } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { LatestOperationOwner } from "@/lib/latestOperation"
 
 interface Props {
   open: boolean
   url: string
   filename: string
   onOpenChange: (open: boolean) => void
-  onDownload?: () => void | Promise<void>
+  onDownload?: (signal?: AbortSignal) => void | Promise<void>
 }
 
 const MIN_SCALE = 0.5
@@ -18,12 +19,23 @@ export function ImageLightbox({ open, url, filename, onOpenChange, onDownload }:
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
   const dragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null)
+  const downloadOwnerRef = useRef(new LatestOperationOwner())
 
-  function reset() {
+  const reset = useCallback(() => {
     setScale(1)
     setOffset({ x: 0, y: 0 })
-  }
+  }, [])
+
+  const close = useCallback(() => {
+    downloadOwnerRef.current.cancel()
+    setDownloading(false)
+    setDownloadError(null)
+    reset()
+    onOpenChange(false)
+  }, [onOpenChange, reset])
 
   function setZoom(next: number) {
     const value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next))
@@ -51,6 +63,21 @@ export function ImageLightbox({ open, url, filename, onOpenChange, onDownload }:
     }
   }
 
+  async function download() {
+    const operation = downloadOwnerRef.current.begin()
+    setDownloading(true)
+    setDownloadError(null)
+    try {
+      await (onDownload ? onDownload(operation.signal) : Promise.resolve(downloadUrl(url, filename)))
+    } catch (err) {
+      if (!operation.signal.aborted && downloadOwnerRef.current.owns(operation)) setDownloadError(err instanceof Error ? err.message : "下载失败，请稍后重试")
+    } finally {
+      if (downloadOwnerRef.current.release(operation)) {
+        setDownloading(false)
+      }
+    }
+  }
+
   useEffect(() => {
     if (!open) return
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -58,18 +85,17 @@ export function ImageLightbox({ open, url, filename, onOpenChange, onDownload }:
       if (event.key === "-") setZoom(scale - 0.25)
       if (event.key === "0") reset()
       if (event.key === "Escape") {
-        reset()
-        onOpenChange(false)
+        close()
       }
     }
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [open, onOpenChange, scale])
+  }, [close, open, reset, scale])
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => {
-      if (!nextOpen) reset()
-      onOpenChange(nextOpen)
+      if (!nextOpen) close()
+      else onOpenChange(true)
     }}>
       <DialogContent
         showClose={false}
@@ -86,13 +112,13 @@ export function ImageLightbox({ open, url, filename, onOpenChange, onDownload }:
             </button>
             <LightboxButton label="放大" onClick={() => setZoom(scale + 0.25)} disabled={scale >= MAX_SCALE}><Plus /></LightboxButton>
             <LightboxButton label="适应屏幕" onClick={reset}><RotateCcw /></LightboxButton>
-            <LightboxButton label="下载" onClick={() => void (onDownload ? onDownload() : downloadUrl(url, filename))}><Download /></LightboxButton>
+            <LightboxButton label="下载图片" onClick={() => void download()} disabled={downloading}>{downloading ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> : <Download />}</LightboxButton>
             <LightboxButton label="关闭" onClick={() => {
-              reset()
-              onOpenChange(false)
+              close()
             }}><X /></LightboxButton>
           </div>
         </div>
+        {downloadError ? <div role="alert" className="absolute inset-x-3 top-16 z-20 mx-auto max-w-xl rounded-md bg-rose-950/90 px-3 py-2 text-center text-xs text-rose-100 shadow-lg">下载失败：{downloadError}</div> : null}
 
         <div className="flex h-full w-full items-center justify-center overflow-hidden px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-16 sm:px-8">
           <img

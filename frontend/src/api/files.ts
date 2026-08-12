@@ -1,4 +1,4 @@
-import { api, fetchWithTimeout, handleAuthExpired, readApiError } from "./client"
+import { api, downloadFilename } from "./client"
 
 interface FileRecord {
   id: number
@@ -185,29 +185,31 @@ export const filesApi = {
 
   // 文件路由在鉴权组下，<a href> / <img src> 带不上 Authorization header，
   // 因此用带 token 的 fetch 拿 blob，再触发临时 <a download>。
-  async downloadBlob(id: number, filename: string): Promise<void> {
-    const blob = await fetchFileBlob(id)
+  async downloadBlob(id: number, fallbackFilename: string, signal?: AbortSignal): Promise<void> {
+    const { blob, filename } = await fetchFileDownload(id, signal)
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = filename
+    // The handler is authoritative: documents are served as extracted text,
+    // while images retain their original binary filename. The fallback only
+    // protects an older or intermediary response that dropped the header.
+    a.download = filename || fallbackFilename
     document.body.appendChild(a)
     a.click()
     a.remove()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   },
 }
 
 // fetchFileBlob 用 localStorage 里的 token 鉴权拉取文件二进制，供下载与图片缩略图复用。
 export async function fetchFileBlob(id: number): Promise<Blob> {
-  const token = localStorage.getItem("token")
-  const res = await fetchWithTimeout(`/api/v1/files/${id}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  }, 60000)
-  if (!res.ok) {
-    const error = await readApiError(res, `下载失败 (HTTP ${res.status})`)
-    if (res.status === 401 && token) handleAuthExpired(token)
-    throw error
+  return (await fetchFileDownload(id)).blob
+}
+
+async function fetchFileDownload(id: number, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+  const res = await api.download(`/files/${id}`, { timeoutMs: 60000, signal })
+  return {
+    blob: await res.blob(),
+    filename: downloadFilename(res.headers.get("Content-Disposition")),
   }
-  return res.blob()
 }

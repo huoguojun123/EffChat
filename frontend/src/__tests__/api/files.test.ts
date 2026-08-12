@@ -73,6 +73,51 @@ describe("fetchFileBlob", () => {
       retryable: false,
     } satisfies Partial<ApiError>))
   })
+
+  it("wraps download network failures in the shared readable error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network down")))
+
+    await expect(fetchFileBlob(7)).rejects.toMatchObject({
+      name: "ApiError",
+      status: 0,
+      message: "网络连接失败，请检查后端服务或网络",
+    })
+  })
+})
+
+describe("filesApi.downloadBlob", () => {
+  it("prefers the handler filename over stale attachment metadata", async () => {
+    const anchor = { href: "", download: "", click: vi.fn(), remove: vi.fn() }
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:fixture"), revokeObjectURL: vi.fn() })
+    vi.stubGlobal("window", { location: { href: "" }, setTimeout: vi.fn() })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("extracted workbook text", {
+      headers: { "Content-Disposition": "attachment; filename*=UTF-8''budget.xlsx.txt" },
+    })))
+
+    await filesApi.downloadBlob(7, "budget.xlsx")
+
+    expect(anchor.download).toBe("budget.xlsx.txt")
+    expect(anchor.click).toHaveBeenCalledOnce()
+  })
+
+  it("uses the explicit safe fallback only when a response omits Content-Disposition", async () => {
+    const anchor = { href: "", download: "", click: vi.fn(), remove: vi.fn() }
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:fixture"), revokeObjectURL: vi.fn() })
+    vi.stubGlobal("window", { location: { href: "" }, setTimeout: vi.fn() })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("extracted text")))
+
+    await filesApi.downloadBlob(7, "budget.xlsx.txt")
+
+    expect(anchor.download).toBe("budget.xlsx.txt")
+  })
 })
 
 describe("filesApi.preview", () => {

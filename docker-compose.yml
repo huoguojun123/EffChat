@@ -118,6 +118,7 @@ services:
       PY_EXTRACTOR_ENABLED: ${PY_EXTRACTOR_ENABLED:-true}
       PY_EXTRACTOR_URL: ${PY_EXTRACTOR_URL:-http://py-extractor:8090}
       PY_EXTRACTOR_TIMEOUT_SECONDS: ${PY_EXTRACTOR_TIMEOUT_SECONDS:-60}
+      PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
       no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
     volumes:
@@ -138,6 +139,13 @@ services:
     image: effchat-web:local
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      # The web proxy, backend and extractor share one deployment upload
+      # ceiling; the Nginx envsh adds only multipart framing overhead.
+      PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
+      # Only substitute EffChat-owned template variables. Nginx runtime
+      # variables such as $uri and $remote_addr must remain intact.
+      NGINX_ENVSUBST_FILTER: ^EFFCHAT_
     depends_on:
       backend:
         condition: service_healthy

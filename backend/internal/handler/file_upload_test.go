@@ -183,6 +183,41 @@ func TestUploadLimits_ReturnsConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestUploadLimitsClampsLegacyPolicyToDeploymentCeiling(t *testing.T) {
+	env := setupTestEnv(t)
+	var previous []byte
+	_ = env.db.QueryRow("SELECT value FROM system_config WHERE key = 'file_upload_max_size_mb'").Scan(&previous)
+	if _, err := env.db.Exec("UPDATE system_config SET value = '50' WHERE key = 'file_upload_max_size_mb'"); err != nil {
+		t.Fatalf("seed legacy upload size: %v", err)
+	}
+	t.Cleanup(func() {
+		if previous != nil {
+			_, _ = env.db.Exec("UPDATE system_config SET value = $1 WHERE key = 'file_upload_max_size_mb'", previous)
+		}
+	})
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", env.userID)
+		c.Next()
+	})
+	router.GET("/limits", UploadLimitsHandler(repository.NewConfigRepository(env.db), 25<<20))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/limits", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		MaxFileSizeMB int `json:"max_file_size_mb"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode limits: %v", err)
+	}
+	if body.MaxFileSizeMB != 25 {
+		t.Fatalf("effective upload limit=%d, want 25", body.MaxFileSizeMB)
+	}
+}
+
 func TestUploadPolicyEndpointsFailClosedWhenConfigurationIsUnavailable(t *testing.T) {
 	db := setupHandlerTestDB(t)
 	configRepo := repository.NewConfigRepository(db)
@@ -195,7 +230,7 @@ func TestUploadPolicyEndpointsFailClosedWhenConfigurationIsUnavailable(t *testin
 		c.Set("request_id", "req-file-policy")
 		c.Next()
 	})
-	router.GET("/limits", UploadLimitsHandler(configRepo))
+	router.GET("/limits", UploadLimitsHandler(configRepo, defaultDeploymentUploadMaxBytes))
 	router.POST("/files", UploadFileHandler(nil, configRepo))
 
 	tests := []struct {
@@ -242,7 +277,7 @@ func TestFilePoliciesKeepLastStrictValuesAfterParseFailure(t *testing.T) {
 		t.Fatalf("seed strict file policies: %v", err)
 	}
 
-	limits, err := resolveUploadLimits(t.Context(), configRepo)
+	limits, err := resolveUploadLimits(t.Context(), configRepo, defaultDeploymentUploadMaxBytes)
 	if err != nil || limits.PolicyDegraded || limits.MaxFileSizeMB != 1 || limits.MaxSessionFiles != 1 || !reflect.DeepEqual(limits.AllowedTypes, []string{"text/plain"}) {
 		t.Fatalf("prime upload policy: limits=%+v err=%v", limits, err)
 	}
@@ -259,7 +294,7 @@ func TestFilePoliciesKeepLastStrictValuesAfterParseFailure(t *testing.T) {
 		t.Fatalf("inject malformed file policies: %v", err)
 	}
 
-	limits, err = resolveUploadLimits(t.Context(), configRepo)
+	limits, err = resolveUploadLimits(t.Context(), configRepo, defaultDeploymentUploadMaxBytes)
 	if err != nil || !limits.PolicyDegraded || limits.MaxFileSizeMB != 1 || limits.MaxSessionFiles != 1 || !reflect.DeepEqual(limits.AllowedTypes, []string{"text/plain"}) {
 		t.Fatalf("degraded upload policy widened: limits=%+v err=%v", limits, err)
 	}

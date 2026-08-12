@@ -43,6 +43,7 @@ type uploadFileHandlerOptions struct {
 	channelService  *service.ChannelService
 	quotaService    *service.QuotaService
 	ocrRecovery     *OCRRecoveryRunner
+	maxUploadBytes  int64
 }
 
 type UploadFileHandlerOption func(*uploadFileHandlerOptions)
@@ -77,13 +78,19 @@ func WithUploadOCRRecoveryRunner(runner *OCRRecoveryRunner) UploadFileHandlerOpt
 	}
 }
 
+func WithUploadMaxBytes(maxBytes int64) UploadFileHandlerOption {
+	return func(opts *uploadFileHandlerOptions) {
+		opts.maxUploadBytes = maxBytes
+	}
+}
+
 // UploadLimitsHandler 返回当前登录用户上传前端预校验所需的全局限制。
 //
 // 后端仍是最终裁判；这个接口只负责让 ChatInput 不再硬编码“5 个 / 20MB”，
 // 避免管理员改了系统配置后前端提示和真实上传行为漂移。
-func UploadLimitsHandler(configRepo *repository.ConfigRepository) gin.HandlerFunc {
+func UploadLimitsHandler(configRepo *repository.ConfigRepository, deploymentMaxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		limits, err := resolveUploadLimits(c.Request.Context(), configRepo)
+		limits, err := resolveUploadLimits(c.Request.Context(), configRepo, deploymentMaxBytes)
 		if err != nil {
 			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
 			return
@@ -105,7 +112,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 	}
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		limits, err := resolveUploadLimits(c.Request.Context(), configRepo)
+		limits, err := resolveUploadLimits(c.Request.Context(), configRepo, opts.maxUploadBytes)
 		if err != nil {
 			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
 			return

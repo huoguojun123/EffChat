@@ -66,10 +66,13 @@ type AuthRateLimitConfig struct {
 }
 
 type ExtractorConfig struct {
-	Enabled bool
-	URL     string
-	Timeout time.Duration
+	Enabled        bool
+	URL            string
+	Timeout        time.Duration
+	MaxUploadBytes int64
 }
+
+const defaultExtractorMaxUploadBytes int64 = 25 * 1024 * 1024
 
 // AIConfig 只保留基础运行参数。模型渠道、API key、搜索与网页提取服务
 // 由管理员后台持久化配置，运行时不再读取 .env 作为业务配置 fallback。
@@ -111,9 +114,10 @@ func Load() *Config {
 			},
 		},
 		Extractor: ExtractorConfig{
-			Enabled: getEnvBool("PY_EXTRACTOR_ENABLED", true),
-			URL:     getEnv("PY_EXTRACTOR_URL", "http://py-extractor:8090"),
-			Timeout: getEnvDuration("PY_EXTRACTOR_TIMEOUT_SECONDS", 60*time.Second),
+			Enabled:        getEnvBool("PY_EXTRACTOR_ENABLED", true),
+			URL:            getEnv("PY_EXTRACTOR_URL", "http://py-extractor:8090"),
+			Timeout:        getEnvDuration("PY_EXTRACTOR_TIMEOUT_SECONDS", 60*time.Second),
+			MaxUploadBytes: getEnvPositiveInt64("PY_EXTRACTOR_MAX_UPLOAD_BYTES", defaultExtractorMaxUploadBytes),
 		},
 	}
 }
@@ -138,6 +142,18 @@ func getEnvInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvPositiveInt64(key string, defaultValue int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		return defaultValue
+	}
+	return parsed
 }
 
 // getEnvBool 解析布尔环境变量；未设置或无法解析时返回 defaultValue。

@@ -57,3 +57,20 @@ func TestLoadRunConfigHeartbeat(t *testing.T) {
 		t.Errorf("HeartbeatInterval = %v, want 8s", got)
 	}
 }
+
+func TestLoadExtractorUploadLimit(t *testing.T) {
+	t.Run("configured positive bytes", func(t *testing.T) {
+		t.Setenv("PY_EXTRACTOR_MAX_UPLOAD_BYTES", "10485760")
+		if got := Load().Extractor.MaxUploadBytes; got != 10*1024*1024 {
+			t.Fatalf("MaxUploadBytes = %d, want %d", got, 10*1024*1024)
+		}
+	})
+	t.Run("invalid values retain safe deployment default", func(t *testing.T) {
+		for _, raw := range []string{"0", "-1", "invalid"} {
+			t.Setenv("PY_EXTRACTOR_MAX_UPLOAD_BYTES", raw)
+			if got := Load().Extractor.MaxUploadBytes; got != defaultExtractorMaxUploadBytes {
+				t.Fatalf("MaxUploadBytes for %q = %d, want %d", raw, got, defaultExtractorMaxUploadBytes)
+			}
+		}
+	})
+}

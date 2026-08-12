@@ -19,8 +19,10 @@ RUN npm run build \
 
 FROM nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
 
-COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template
 COPY frontend/nginx-security-headers.conf /etc/nginx/conf.d/security-headers.conf
+COPY frontend/docker-entrypoint.d/15-effchat-upload-limit.envsh /docker-entrypoint.d/15-effchat-upload-limit.envsh
+RUN chmod +x /docker-entrypoint.d/15-effchat-upload-limit.envsh
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY --from=builder /out/third-party /usr/share/licenses/effchat/third-party/frontend
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/licenses/effchat/

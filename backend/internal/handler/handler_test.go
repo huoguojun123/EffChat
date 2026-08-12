@@ -115,7 +115,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		auth.POST("/files", UploadFileHandler(fileRepo, configRepo))
 		auth.GET("/files", ListFilesHandler(fileRepo))
 		auth.DELETE("/files/:id", DeleteFileHandler(fileRepo))
-		auth.GET("/files/upload-limits", UploadLimitsHandler(configRepo))
+		auth.GET("/files/upload-limits", UploadLimitsHandler(configRepo, defaultDeploymentUploadMaxBytes))
 		auth.POST("/files/:id/ocr-refresh", RefreshOCRFileHandler(fileRepo, nil, nil))
 	}
 

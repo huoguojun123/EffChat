@@ -40,8 +40,9 @@ type ConfigOption struct {
 }
 
 type ConfigRepository struct {
-	db          *sql.DB
-	policyCache sync.Map
+	db              *sql.DB
+	policyCache     sync.Map
+	uploadMaxSizeMB int
 }
 
 type configExecer interface {
@@ -520,6 +521,14 @@ func NewConfigRepository(db *sql.DB) *ConfigRepository {
 	return &ConfigRepository{db: db}
 }
 
+// SetUploadMaxSizeMB installs the immutable deployment ceiling used by the
+// admin control plane. The database keeps the user-selected policy, while this
+// process-local value prevents future writes that no deployed request path can
+// fulfill. A non-positive input leaves tests and non-upload callers uncapped.
+func (r *ConfigRepository) SetUploadMaxSizeMB(maxSizeMB int) {
+	r.uploadMaxSizeMB = maxSizeMB
+}
+
 func (r *ConfigRepository) List() ([]*ConfigItem, error) {
 	query := `SELECT key, value, description, config_type FROM system_config ORDER BY key`
 	rows, err := r.db.Query(query)
@@ -575,6 +584,14 @@ func (r *ConfigRepository) ListAdminEditable() ([]*ConfigItem, error) {
 		if item.ConfigType == "select" && len(meta.Options) > 0 {
 			if n, ok := parseConfigInt(item.Value); ok {
 				item.Value = json.RawMessage(strconv.Itoa(clampToOptions(key, n)))
+			}
+		}
+		if key == "file_upload_max_size_mb" && r.uploadMaxSizeMB > 0 {
+			if n, ok := parseConfigInt(item.Value); ok && n > r.uploadMaxSizeMB {
+				// Legacy installations may have saved a value before the deployment
+				// ceiling existed. Report the effective value without rewriting the
+				// database, so an administrator can review and save deliberately.
+				item.Value = json.RawMessage(strconv.Itoa(r.uploadMaxSizeMB))
 			}
 		}
 		result = append(result, item)
@@ -783,7 +800,7 @@ func updateConfigValue(execer configExecer, key string, value json.RawMessage, c
 }
 
 func (r *ConfigRepository) UpdateAdminEditable(key string, value json.RawMessage) error {
-	meta, err := validateAdminEditableValue(key, value)
+	meta, err := r.validateAdminEditableValue(key, value)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 	}
@@ -801,7 +818,7 @@ func (r *ConfigRepository) UpdateAdminEditableBatchContext(ctx context.Context, 
 	keys := make([]string, 0, len(updates))
 	metas := make(map[string]AdminConfigMeta, len(updates))
 	for key, value := range updates {
-		meta, err := validateAdminEditableValue(key, value)
+		meta, err := r.validateAdminEditableValue(key, value)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 		}
@@ -824,6 +841,21 @@ func (r *ConfigRepository) UpdateAdminEditableBatchContext(ctx context.Context, 
 		return fmt.Errorf("failed to commit config update: %w", configContextError(ctx, err))
 	}
 	return nil
+}
+
+func (r *ConfigRepository) validateAdminEditableValue(key string, value json.RawMessage) (AdminConfigMeta, error) {
+	meta, err := validateAdminEditableValue(key, value)
+	if err != nil || key != "file_upload_max_size_mb" || r.uploadMaxSizeMB <= 0 {
+		return meta, err
+	}
+	requested, ok := parseConfigInt(value)
+	if !ok || requested <= 0 {
+		return AdminConfigMeta{}, fmt.Errorf("file_upload_max_size_mb must be a positive integer")
+	}
+	if requested > r.uploadMaxSizeMB {
+		return AdminConfigMeta{}, fmt.Errorf("file_upload_max_size_mb exceeds the deployed %dMB upload ceiling", r.uploadMaxSizeMB)
+	}
+	return meta, nil
 }
 
 func updateConfigValueContext(ctx context.Context, tx *sql.Tx, key string, value json.RawMessage, configType string) error {

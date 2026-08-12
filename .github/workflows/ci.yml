@@ -143,6 +143,8 @@ jobs:
         run: scripts/test-export-target-safety.sh
       - name: Test Compose environment contract
         run: scripts/test-compose-env-contract.sh
+      - name: Test upload limit contract
+        run: scripts/test-upload-limit-contract.sh
       - name: Test storage finalization fencing
         run: scripts/test-storage-finalization-state.sh
       - name: Test deployment stage ordering

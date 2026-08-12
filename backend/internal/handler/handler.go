@@ -67,6 +67,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 	answerAttemptRepo := repository.NewAnswerAttemptRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	configRepo := repository.NewConfigRepository(db)
+	configRepo.SetUploadMaxSizeMB(uploadDeploymentCeilingMB(cfg.Extractor.MaxUploadBytes))
 	promptRepo := repository.NewPromptRepository(db)
 	fileRepo := repository.NewFileRepository(db)
 	fontRepo := repository.NewFontRepository(db)
@@ -230,9 +231,9 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 			// 文件路由
 			files := authenticated.Group("/files")
 			{
-				files.POST("", UploadFileHandler(fileRepo, configRepo, WithUploadSessionRepo(sessionRepo), WithUploadExtractorClient(extractorClient), WithUploadChannelService(channelService), WithUploadQuotaService(quotaService), WithUploadOCRRecoveryRunner(ocrRecoveryRunner)))
+				files.POST("", UploadFileHandler(fileRepo, configRepo, WithUploadSessionRepo(sessionRepo), WithUploadExtractorClient(extractorClient), WithUploadChannelService(channelService), WithUploadQuotaService(quotaService), WithUploadOCRRecoveryRunner(ocrRecoveryRunner), WithUploadMaxBytes(cfg.Extractor.MaxUploadBytes)))
 				files.GET("", ListFilesHandler(fileRepo))
-				files.GET("/upload-limits", UploadLimitsHandler(configRepo))
+				files.GET("/upload-limits", UploadLimitsHandler(configRepo, cfg.Extractor.MaxUploadBytes))
 				files.POST("/:id/ocr-refresh", RefreshOCRFileHandler(fileRepo, channelService, extractorClient))
 				files.POST("/:id/ocr-retry", RetryOCRFileHandler(fileRepo, configRepo, channelService, extractorClient, ocrRecoveryRunner))
 				files.GET("/:id/preview", PreviewFileHandler(fileRepo, channelService, extractorClient))

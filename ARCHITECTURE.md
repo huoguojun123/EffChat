@@ -119,7 +119,7 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 前端消息正文只维护一个当前窗口 generation。切换会话、账户 reset、latest/full reload、around 跳转和显式窗口替换都会先递增 generation、失效旧分页并释放 loading；older/newer 同一时刻只有一个方向拥有分页请求，响应还必须匹配 session、generation、方向 owner 和原 cursor 才能合并。RunHub/SSE terminal 对账捕获同一 generation，历史窗口不会被迟到 durable sync 改写；full reload 替换 durable 行，只保留尚待服务端对应记录接管的本地 optimistic 消息。滚动锚点同样绑定 generation，窗口替换后旧 observer 或 timeout 不能继续调整 scrollTop。
 
-会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功；该公共错误契约不改变复合 PATCH 字段的更新语义。
+会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功。`PATCH /session-folders/:id` 的 `name` 与 `pinned` 是同一个 owner-scoped 原子 mutation：空 payload 在写入前拒绝，实际携带的字段由一条 `UPDATE ... RETURNING` 同时提交并返回 canonical folder；名称唯一约束或数据库失败不能留下只改名称或只改置顶的半状态。
 
 侧栏会话与文件夹置顶分别按对象 ID 维护局部 operation generation。乐观更新、服务端 canonical `pinned_at`、失败回滚和列表 reload 只有在仍拥有当前对象时才能提交；失败只恢复该对象的置顶字段，不能覆盖其他对象或该对象的标题、归属等并发变化。同一对象的 PATCH 按用户意图顺序串行送达服务端，不同对象仍可并行，避免旧请求最后落库后在刷新时恢复旧意图；已被更新意图或账户 reset 取代的旧失败不再写 UI error。列表请求会保留其发起后出现或仍在途的 pin intent，账户 reset 会失效全部 owner。`PATCH /sessions/:id` 成功返回更新后的 Session，使客户端无需追加一个可能乱序的读取；该协调只覆盖侧栏 pin 字段，不扩展为通用 mutation framework 或跨标签页 CAS。
 

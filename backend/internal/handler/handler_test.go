@@ -905,6 +905,25 @@ func TestSessionFolders_CRUDAndFiltering(t *testing.T) {
 		t.Fatalf("unmarshal folder: %v", err)
 	}
 
+	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{
+		"name":   "项目资料",
+		"pinned": true,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("composite folder patch: got %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &folder); err != nil {
+		t.Fatalf("unmarshal composite folder patch: %v", err)
+	}
+	if folder.Name != "项目资料" || folder.PinnedAt == nil {
+		t.Fatalf("composite folder patch = %+v, want renamed and pinned", folder)
+	}
+
+	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty folder patch: got %d %s", w.Code, w.Body.String())
+	}
+
 	w = env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
 		"model_id":  "gpt-4o-mini",
 		"provider":  env.channelKey,
@@ -994,13 +1013,14 @@ func TestSessionFolders_CRUDAndFiltering(t *testing.T) {
 	}
 
 	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{
-		"pinned": true,
+		"pinned": false,
 	})
 	if w.Code != http.StatusOK {
-		t.Fatalf("pin folder: got %d %s", w.Code, w.Body.String())
+		t.Fatalf("unpin folder: got %d %s", w.Code, w.Body.String())
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &folder); err != nil || folder.PinnedAt == nil {
-		t.Fatalf("folder pin response = %s, err = %v", w.Body.String(), err)
+	var unpinnedFolder model.SessionFolder
+	if err := json.Unmarshal(w.Body.Bytes(), &unpinnedFolder); err != nil || unpinnedFolder.PinnedAt != nil {
+		t.Fatalf("folder unpin response = %s, err = %v", w.Body.String(), err)
 	}
 	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{
 		"name": "项目",
@@ -1038,7 +1058,23 @@ func TestSessionFolders_CrossUserIsolation(t *testing.T) {
 		t.Fatalf("insert other folder: %v", err)
 	}
 
-	w := env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
+	w := env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", otherFolderID), map[string]interface{}{
+		"name":   "Not mine",
+		"pinned": true,
+	})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-user folder patch should fail: got %d %s", w.Code, w.Body.String())
+	}
+	var otherName string
+	var otherPinnedAt *time.Time
+	if err := env.db.QueryRow(`SELECT name, pinned_at FROM session_folders WHERE id = $1`, otherFolderID).Scan(&otherName, &otherPinnedAt); err != nil {
+		t.Fatalf("read cross-user folder: %v", err)
+	}
+	if otherName != "Other" || otherPinnedAt != nil {
+		t.Fatalf("cross-user folder changed to name=%q pinned_at=%v", otherName, otherPinnedAt)
+	}
+
+	w = env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
 		"model_id": "gpt-4o-mini",
 		"provider": env.channelKey,
 		"title":    "Mine",
@@ -1056,6 +1092,42 @@ func TestSessionFolders_CrossUserIsolation(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("cross-user folder move should fail: got %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSessionFolderCompositePatchFailureIsAtomic(t *testing.T) {
+	env := setupTestEnv(t)
+
+	createFolder := func(name string) model.SessionFolder {
+		t.Helper()
+		w := env.doRequest(http.MethodPost, "/api/v1/session-folders", map[string]interface{}{"name": name})
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create folder %q: got %d %s", name, w.Code, w.Body.String())
+		}
+		var folder model.SessionFolder
+		if err := json.Unmarshal(w.Body.Bytes(), &folder); err != nil {
+			t.Fatalf("unmarshal folder %q: %v", name, err)
+		}
+		return folder
+	}
+
+	first := createFolder("First")
+	second := createFolder("Second")
+	w := env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", first.ID), map[string]interface{}{
+		"name":   second.Name,
+		"pinned": true,
+	})
+	if w.Code == http.StatusOK {
+		t.Fatalf("conflicting composite patch unexpectedly succeeded: %s", w.Body.String())
+	}
+
+	var name string
+	var pinnedAt *time.Time
+	if err := env.db.QueryRow(`SELECT name, pinned_at FROM session_folders WHERE id = $1`, first.ID).Scan(&name, &pinnedAt); err != nil {
+		t.Fatalf("read failed composite patch: %v", err)
+	}
+	if name != first.Name || pinnedAt != nil {
+		t.Fatalf("failed composite patch left name=%q pinned_at=%v, want %q and nil", name, pinnedAt, first.Name)
 	}
 }
 

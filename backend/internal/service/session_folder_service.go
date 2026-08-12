@@ -46,30 +46,24 @@ func (s *SessionFolderService) Create(userID int64, req *CreateSessionFolderRequ
 }
 
 func (s *SessionFolderService) Update(id, userID int64, req *UpdateSessionFolderRequest) (*model.SessionFolder, error) {
-	folder, err := s.folderRepo.GetByID(id, userID)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			return nil, fmt.Errorf("%w: %v", ErrSessionFolderNotFound, err)
-		}
-		return nil, err
+	if req.Name == nil && req.Pinned == nil {
+		return nil, fmt.Errorf("%w: at least one field is required", ErrSessionFolderInvalid)
 	}
+	patch := repository.SessionFolderPatch{}
 	if req.Name != nil {
 		name := normalizeFolderName(*req.Name)
 		if name == "" {
 			return nil, fmt.Errorf("%w: name is required", ErrSessionFolderInvalid)
 		}
-		folder.Name = name
+		patch.Name = name
+		patch.NameSet = true
 	}
 	if req.Pinned != nil {
-		if err := s.folderRepo.SetPinned(id, userID, *req.Pinned); err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return nil, fmt.Errorf("%w: %v", ErrSessionFolderNotFound, err)
-			}
-			return nil, err
-		}
-		return s.folderRepo.GetByID(id, userID)
+		patch.Pinned = *req.Pinned
+		patch.PinnedSet = true
 	}
-	if err := s.folderRepo.Update(folder); err != nil {
+	folder, err := s.folderRepo.Patch(id, userID, patch)
+	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			return nil, fmt.Errorf("%w: %v", ErrSessionFolderNotFound, err)
 		}

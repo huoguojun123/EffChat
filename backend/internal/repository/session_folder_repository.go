@@ -11,6 +11,13 @@ type SessionFolderRepository struct {
 	db *sql.DB
 }
 
+type SessionFolderPatch struct {
+	Name      string
+	NameSet   bool
+	Pinned    bool
+	PinnedSet bool
+}
+
 func NewSessionFolderRepository(db *sql.DB) *SessionFolderRepository {
 	return &SessionFolderRepository{db: db}
 }
@@ -71,39 +78,33 @@ func (r *SessionFolderRepository) GetByID(id, userID int64) (*model.SessionFolde
 	return folder, nil
 }
 
-func (r *SessionFolderRepository) SetPinned(id, userID int64, pinned bool) error {
-	result, err := r.db.Exec(`UPDATE session_folders SET pinned_at = CASE WHEN $1 THEN NOW() ELSE NULL END WHERE id = $2 AND user_id = $3`, pinned, id, userID)
-	if err != nil {
-		return fmt.Errorf("failed to update session folder pin: %w", err)
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-	if rows != 1 {
-		return fmt.Errorf("session folder not found: %w", ErrNotFound)
-	}
-	return nil
-}
-
-func (r *SessionFolderRepository) Update(folder *model.SessionFolder) error {
+func (r *SessionFolderRepository) Patch(id, userID int64, patch SessionFolderPatch) (*model.SessionFolder, error) {
+	folder := &model.SessionFolder{}
+	// The public PATCH accepts name and pinned together. One owner-scoped SQL
+	// statement is the atomic boundary: a constraint or database failure cannot
+	// leave one requested field committed while the other is rejected.
 	query := `
 		UPDATE session_folders
-		SET name = $1
-		WHERE id = $2 AND user_id = $3
+		SET name = CASE WHEN $1 THEN $2 ELSE name END,
+		    pinned_at = CASE WHEN $3 THEN CASE WHEN $4 THEN NOW() ELSE NULL END ELSE pinned_at END
+		WHERE id = $5 AND user_id = $6
+		RETURNING id, user_id, name, pinned_at, created_at, updated_at
 	`
-	result, err := r.db.Exec(query, folder.Name, folder.ID, folder.UserID)
+	err := r.db.QueryRow(query, patch.NameSet, patch.Name, patch.PinnedSet, patch.Pinned, id, userID).Scan(
+		&folder.ID,
+		&folder.UserID,
+		&folder.Name,
+		&folder.PinnedAt,
+		&folder.CreatedAt,
+		&folder.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("session folder not found: %w", ErrNotFound)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to update session folder: %w", err)
+		return nil, fmt.Errorf("failed to patch session folder: %w", err)
 	}
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return fmt.Errorf("session folder not found: %w", ErrNotFound)
-	}
-	return nil
+	return folder, nil
 }
 
 func (r *SessionFolderRepository) Delete(id, userID int64) error {

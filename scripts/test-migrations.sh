@@ -184,11 +184,75 @@ SELECT
           AND data_type = 'bigint'
           AND is_nullable = 'NO'
           AND column_default = '0'
+    )
+    AND (
+        SELECT count(*) FROM user_groups WHERE is_default = true
+    ) = 1
+    AND EXISTS (
+        SELECT 1 FROM user_groups
+        WHERE name = 'Default'
+          AND level = 0
+          AND is_default = true
+          AND daily_message_limit = 0
+          AND daily_token_limit = 0
+          AND concurrent_run_limit = 0
+          AND daily_tool_call_limit = 0
+          AND daily_web_search_limit = 0
+          AND daily_web_extract_limit = 0
+          AND daily_ocr_file_limit = 0
+          AND daily_ocr_page_limit = 0
     );
 SQL
 )"
 [ "$result" = "t" ] || {
     echo "fresh schema does not satisfy the current catalog and OCR fencing contracts" >&2
+    exit 1
+}
+
+# Migration 053 only repairs a missing default. It must neither replace an
+# administrator-selected default nor overwrite an existing same-name group's
+# access level and quotas when promoting it into the missing role.
+psql_db "$ATOMIC_DB" >/dev/null <<'SQL'
+INSERT INTO user_groups (name, level, description, is_default, daily_message_limit)
+VALUES ('Configured', 23, 'administrator configured', false, 37);
+UPDATE user_groups SET is_default = false WHERE name = 'Default';
+UPDATE user_groups SET is_default = true WHERE name = 'Configured';
+SQL
+psql_db "$ATOMIC_DB" < "$ROOT/backend/migrations/production/053_default_user_group_baseline.sql" >/dev/null
+result="$(psql_db "$ATOMIC_DB" -At <<'SQL'
+SELECT
+    (SELECT count(*) FROM user_groups WHERE is_default = true) = 1
+    AND (SELECT is_default FROM user_groups WHERE name = 'Configured')
+    AND NOT (SELECT is_default FROM user_groups WHERE name = 'Default');
+SQL
+)"
+[ "$result" = "t" ] || {
+    echo "default user group migration replaced an existing administrator default" >&2
+    exit 1
+}
+
+psql_db "$ATOMIC_DB" >/dev/null <<'SQL'
+UPDATE user_groups SET is_default = false WHERE is_default = true;
+UPDATE user_groups
+SET level = 17, description = 'preserve this configuration', daily_message_limit = 29
+WHERE name = 'Default';
+SQL
+psql_db "$ATOMIC_DB" < "$ROOT/backend/migrations/production/053_default_user_group_baseline.sql" >/dev/null
+result="$(psql_db "$ATOMIC_DB" -At <<'SQL'
+SELECT
+    (SELECT count(*) FROM user_groups WHERE is_default = true) = 1
+    AND EXISTS (
+        SELECT 1 FROM user_groups
+        WHERE name = 'Default'
+          AND is_default = true
+          AND level = 17
+          AND description = 'preserve this configuration'
+          AND daily_message_limit = 29
+    );
+SQL
+)"
+[ "$result" = "t" ] || {
+    echo "default user group migration overwrote an existing same-name group" >&2
     exit 1
 }
 

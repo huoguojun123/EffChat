@@ -128,6 +128,17 @@ func resetIsolationDatabase(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("truncate isolated test data: %w", err)
 	}
+	// Isolated tests start from the same structural invariant as a fresh
+	// production database, without inheriting application data from the cloned
+	// template. Tests that exercise a missing-default failure may still delete
+	// this row inside their private database.
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO user_groups (name, level, description, is_default)
+		VALUES ('Default', 0, 'Default access group for users without an explicit assignment', true)
+	`)
+	if err != nil {
+		return fmt.Errorf("restore isolated default user group: %w", err)
+	}
 	return nil
 }
 

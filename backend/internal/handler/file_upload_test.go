@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
@@ -553,6 +555,48 @@ func TestUpload_ValidatesImageContentAgainstDeclaredType(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCleanupCancelledUploadMovesPersistedFileIntoDeferredCleanup(t *testing.T) {
+	env := setupTestEnv(t)
+	repo := repository.NewFileRepository(env.db)
+	sessionID := createUploadTestSession(t, env)
+	path := filepath.Join(filepolicy.AttachmentOriginalsRoot, fmt.Sprintf("%d", env.userID), "cancelled.png")
+	if err := filepolicy.WriteFile(path, uploadTestPNG(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := &model.File{
+		UserID:        env.userID,
+		SessionID:     &sessionID,
+		FileName:      "cancelled.png",
+		FilePath:      path,
+		FileType:      "image/png",
+		FileSize:      64,
+		ExtractStatus: "ready",
+	}
+	if err := repo.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.db.Exec("DELETE FROM files WHERE id = $1", file.ID)
+		_ = os.Remove(path)
+	})
+
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cleanupCancelledUpload(requestCtx, repo, file, env.userID)
+
+	var status string
+	var cleanupAfter time.Time
+	if err := env.db.QueryRow("SELECT status, cleanup_after FROM files WHERE id = $1", file.ID).Scan(&status, &cleanupAfter); err != nil {
+		t.Fatal(err)
+	}
+	if status != repository.FileStatusCleanupClaimed {
+		t.Fatalf("status=%q, want %q", status, repository.FileStatusCleanupClaimed)
+	}
+	if cleanupAfter.After(time.Now().Add(time.Second)) {
+		t.Fatalf("cleanup_after=%s, want immediate cleanup eligibility", cleanupAfter)
 	}
 }
 

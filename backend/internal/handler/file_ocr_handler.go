@@ -43,7 +43,7 @@ func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, op
 	f.OCRSourcePath = &sourcePath
 	now := time.Now()
 	f.OCRNextRetryAt = &now
-	if err := fileRepo.Create(f); err != nil {
+	if err := fileRepo.CreateContext(ctx, f); err != nil {
 		_ = filepolicy.Remove(sourcePath)
 		log.Printf("[file_ocr] metadata_create_failed user=%d session=%d file=%q err=%v", userID, sessionID, safeName, err)
 		return nil, fmt.Errorf("%w: %v", errOCRMetadataCreate, err)

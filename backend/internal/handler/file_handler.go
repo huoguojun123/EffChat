@@ -111,8 +111,14 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		}
 	}
 	return func(c *gin.Context) {
+		requestCtx := c.Request.Context()
 		userID := middleware.GetUserID(c)
-		limits, err := resolveUploadLimits(c.Request.Context(), configRepo, opts.maxUploadBytes)
+		var persistedFile *model.File
+		defer func() {
+			cleanupCancelledUpload(requestCtx, fileRepo, persistedFile, userID)
+		}()
+
+		limits, err := resolveUploadLimits(requestCtx, configRepo, opts.maxUploadBytes)
 		if err != nil {
 			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
 			return
@@ -120,7 +126,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		if limits.PolicyDegraded {
 			log.Printf("[file_upload] upload policy degraded; using last-known-good limits")
 		}
-		extractPolicy, err := resolveAttachmentProcessingPolicy(c.Request.Context(), configRepo)
+		extractPolicy, err := resolveAttachmentProcessingPolicy(requestCtx, configRepo)
 		if err != nil {
 			writeServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
 			return
@@ -149,7 +155,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			return
 		}
 		if opts.sessionRepo != nil {
-			if _, err := opts.sessionRepo.GetByIDContext(c.Request.Context(), sessionID, userID); err != nil {
+			if _, err := opts.sessionRepo.GetByIDContext(requestCtx, sessionID, userID); err != nil {
 				writeUploadSessionLookupError(c, err)
 				return
 			}
@@ -179,6 +185,9 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			writePublicError(c, http.StatusRequestEntityTooLarge, "file_too_large", fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB), false)
 			return
 		}
+		if requestCtx.Err() != nil {
+			return
+		}
 
 		// declared + 内容嗅探 reconcile，得出可信类型再过白名单。
 		contentType, ok := extractor.ResolveUploadType(declaredType, content, safeName)
@@ -201,7 +210,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 
 		hash := fmt.Sprintf("%x", sha256.Sum256(content))
 
-		if existing, err := fileRepo.FindActiveByHashInSession(userID, sessionID, hash, int64(len(content))); err == nil {
+		if existing, err := fileRepo.FindActiveByHashInSessionContext(requestCtx, userID, sessionID, hash, int64(len(content))); err == nil {
 			c.JSON(http.StatusOK, existing)
 			return
 		} else if !errors.Is(err, repository.ErrNotFound) {
@@ -209,7 +218,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			return
 		}
 
-		if count, err := fileRepo.CountActiveBySession(userID, sessionID); err != nil {
+		if count, err := fileRepo.CountActiveBySessionContext(requestCtx, userID, sessionID); err != nil {
 			writeServerError(c, http.StatusInternalServerError, "session_file_count_failed", "failed to check session file count", err)
 			return
 		} else if count >= limits.MaxSessionFiles {
@@ -263,7 +272,8 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			}
 			if isPDFUpload(contentType, safeName) {
 				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d file=%q bytes=%d strategy=mineru_async_first", userID, sessionID, safeName, len(content))
-				if queuedFile, queueErr := queueMinerUOCR(c.Request.Context(), fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
+				if queuedFile, queueErr := queueMinerUOCR(requestCtx, fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
+					persistedFile = queuedFile
 					c.JSON(http.StatusAccepted, queuedFile)
 					return
 				} else if queueErr != nil {
@@ -273,7 +283,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				log.Printf("[file_ocr] local_fallback_start user=%d session=%d file=%q", userID, sessionID, safeName)
 			}
 
-			extractCtx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(extractPolicy.TimeoutSeconds)*time.Second)
+			extractCtx, cancel := context.WithTimeout(requestCtx, time.Duration(extractPolicy.TimeoutSeconds)*time.Second)
 			defer cancel()
 			res, err := extractor.ExtractWithSidecar(extractCtx, content, contentType, safeName, opts.extractorClient)
 			if err != nil {
@@ -286,6 +296,9 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				writeAttachmentExtractionError(c, err)
 				return
 			} else {
+				if requestCtx.Err() != nil {
+					return
+				}
 				if int64(len([]byte(res.Text))) > maxOutputBytes {
 					writePublicError(c, http.StatusRequestEntityTooLarge, "attachment_extract_too_large", fmt.Sprintf("解析结果过大（上限 %dMB），请上传更小的文件", extractPolicy.MaxOutputMB), false)
 					return
@@ -323,13 +336,37 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			return
 		}
 
-		if err := fileRepo.Create(f); err != nil {
+		if requestCtx.Err() != nil {
 			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
+			return
+		}
+		if err := fileRepo.CreateContext(requestCtx, f); err != nil {
+			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
+			if requestCtx.Err() != nil {
+				return
+			}
 			writeServerError(c, http.StatusInternalServerError, "file_metadata_create_failed", "failed to save file metadata", err)
 			return
 		}
+		persistedFile = f
 
 		c.JSON(http.StatusCreated, f)
+	}
+}
+
+func cleanupCancelledUpload(requestCtx context.Context, fileRepo *repository.FileRepository, file *model.File, userID int64) {
+	if requestCtx.Err() == nil || file == nil || file.ID <= 0 {
+		return
+	}
+	// A browser abort can race with the final response after storage and
+	// metadata have been committed. The upload was never accepted by the
+	// client, so make the staged row inaccessible immediately and let the
+	// existing deferred-cleanup lifecycle remove managed bytes safely.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now()
+	if err := fileRepo.RequestDeletion(cleanupCtx, file.ID, userID, now, now); err != nil && !errors.Is(err, repository.ErrNotFound) {
+		logger.Error("cancelled upload cleanup failed: user=%d file_id=%d err=%v", userID, file.ID, err)
 	}
 }
 

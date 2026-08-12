@@ -238,6 +238,11 @@ func (r *MessageRepository) createBatchForActiveSession(ctx context.Context, ses
 	return nil
 }
 
+// CreateBatchAndTransitionActiveRun locks the session before the run and
+// commits attempt state, attachment claims, terminal messages/event and the
+// durable run transition as one fact. Any error rolls all of them back. The
+// RunHub caller may publish terminal SSE only after this method returns a
+// committed canonical record; a repeated terminal commit reloads that record.
 func (r *MessageRepository) CreateBatchAndTransitionActiveRun(ctx context.Context, sessionID, userID int64, runID string, messages []*model.Message, input ChatRunTransitionInput) (ChatRunRecord, bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || input.RunID != runID {
@@ -1140,6 +1145,11 @@ func (r *MessageRepository) persistCheckpointForActiveSession(ctx context.Contex
 	return nil
 }
 
+// PersistCheckpointAndTransitionActiveRun locks the session selection before
+// the run, then commits the summary, compressed-message pointers and terminal
+// run record together. A revision conflict or any write failure leaves no
+// partial checkpoint. As with message terminals, callers publish terminal SSE
+// only from the canonical record returned after commit.
 func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.Context, sessionID, userID int64, runID string, summary *model.Message, beforeMessageID int64, input ChatRunTransitionInput, expectedAnswerSelectionRevision *int64) (ChatRunRecord, bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || input.RunID != runID {

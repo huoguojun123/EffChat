@@ -46,6 +46,10 @@ func managedPathUnder(rootPath, path string, allowRoot bool) (string, error) {
 	return target, nil
 }
 
+// WriteFile owns containment, private parent directories and symlink refusal.
+// The domain caller owns the requested file mode because attachments, avatars,
+// fonts and Skill packages have different exposure contracts; this helper
+// never supplies or widens a default on the caller's behalf.
 func WriteFile(path string, content []byte, permission os.FileMode) error {
 	return writeFileUnder(StorageRoot, path, content, permission)
 }

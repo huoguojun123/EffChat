@@ -103,6 +103,13 @@ func TestOpenPostgresTestDBIsolatesAndCleansUp(t *testing.T) {
 		if _, ok := isolationDatabaseCreatedAt(firstName); !ok {
 			t.Fatalf("first database = %q, want a current isolation database name", firstName)
 		}
+		var defaultGroups int
+		if err := first.QueryRow("SELECT COUNT(*) FROM user_groups WHERE is_default = true").Scan(&defaultGroups); err != nil {
+			t.Fatal(err)
+		}
+		if defaultGroups != 1 {
+			t.Fatalf("first database default groups = %d, want migration baseline", defaultGroups)
+		}
 		if _, err := first.Exec("CREATE TABLE isolation_sentinel (id integer primary key)"); err != nil {
 			t.Fatal(err)
 		}
@@ -122,6 +129,12 @@ func TestOpenPostgresTestDBIsolatesAndCleansUp(t *testing.T) {
 		}
 		if exists {
 			t.Fatal("isolated databases leaked test state")
+		}
+		if err := second.QueryRow("SELECT COUNT(*) FROM user_groups WHERE is_default = true").Scan(&defaultGroups); err != nil {
+			t.Fatal(err)
+		}
+		if defaultGroups != 1 {
+			t.Fatalf("second database default groups = %d, want migration baseline", defaultGroups)
 		}
 		isolationDatabases = []string{firstName, secondName}
 	}) {

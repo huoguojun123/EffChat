@@ -241,6 +241,13 @@ func TestMemoryMaintenanceControlStagesHonorShorterParentDeadline(t *testing.T) 
 		memoryRepo:     repository.NewSessionMemoryRepository(db),
 		taskRunRepo:    repository.NewModelTaskRunRepository(db),
 	}
+	t.Cleanup(func() {
+		drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if !agent.DrainMemoryTasks(drainCtx) {
+			t.Error("memory audit tasks did not drain")
+		}
+	})
 	assertDeadline := func(name string, run func(context.Context) error) {
 		t.Helper()
 		t.Run(name, func(t *testing.T) {
@@ -512,11 +519,18 @@ func TestRecordMemoryTaskRunClearsCooldownOnlyForLifecycleCancellation(t *testin
 	}
 	retryAfterForRun := func(runID string) sql.NullTime {
 		t.Helper()
-		var retryAfter sql.NullTime
-		if err := db.QueryRow(`SELECT retry_after FROM model_task_runs WHERE run_id = $1`, runID).Scan(&retryAfter); err != nil {
-			t.Fatalf("read task run %q: %v", runID, err)
+		deadline := time.Now().Add(time.Second)
+		for {
+			var retryAfter sql.NullTime
+			err := db.QueryRow(`SELECT retry_after FROM model_task_runs WHERE run_id = $1`, runID).Scan(&retryAfter)
+			if err == nil {
+				return retryAfter
+			}
+			if !errors.Is(err, sql.ErrNoRows) || time.Now().After(deadline) {
+				t.Fatalf("read task run %q: %v", runID, err)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		return retryAfter
 	}
 
 	canceledCtx, cancel := context.WithCancel(t.Context())
@@ -529,6 +543,11 @@ func TestRecordMemoryTaskRunClearsCooldownOnlyForLifecycleCancellation(t *testin
 	record(t.Context(), "memory-provider-failure")
 	if retryAfter := retryAfterForRun("memory-provider-failure"); !retryAfter.Valid {
 		t.Fatal("provider failure lost its automatic retry cooldown")
+	}
+	drainCtx, cancelDrain := context.WithTimeout(t.Context(), time.Second)
+	defer cancelDrain()
+	if !agent.DrainMemoryTasks(drainCtx) {
+		t.Fatal("memory audit tasks did not drain")
 	}
 }
 

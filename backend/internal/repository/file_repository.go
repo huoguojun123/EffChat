@@ -234,6 +234,10 @@ func NewFileRepository(db *sql.DB) *FileRepository {
 }
 
 func (r *FileRepository) Create(f *model.File) error {
+	return r.CreateContext(context.Background(), f)
+}
+
+func (r *FileRepository) CreateContext(ctx context.Context, f *model.File) error {
 	query := `
 		INSERT INTO files (
 			user_id, session_id, file_name, file_path, file_type, file_size, file_hash,
@@ -246,7 +250,8 @@ func (r *FileRepository) Create(f *model.File) error {
 	if f.ExtractStatus == "" {
 		f.ExtractStatus = "pending"
 	}
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(
+		ctx,
 		query, f.UserID, f.SessionID, f.FileName, f.FilePath, f.FileType, f.FileSize, f.FileHash,
 		f.ExtractedTextPath, f.ExtractStatus, f.ExtractError, f.TokenEstimate,
 		f.OCRProvider, f.OCRTaskID, f.OCRPageCount, f.OCRProgressPages, f.OCRStartedAt, f.OCRCompletedAt, f.OCRErrorType, f.OCRSourcePath,
@@ -380,8 +385,12 @@ func (r *FileRepository) IsReferencedByMessage(userID, fileID int64) (bool, erro
 }
 
 func (r *FileRepository) CountActiveBySession(userID, sessionID int64) (int, error) {
+	return r.CountActiveBySessionContext(context.Background(), userID, sessionID)
+}
+
+func (r *FileRepository) CountActiveBySessionContext(ctx context.Context, userID, sessionID int64) (int, error) {
 	var count int
-	err := r.db.QueryRow(
+	err := r.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM files WHERE user_id = $1 AND session_id = $2 AND status IN ('staged', 'formal')`,
 		userID, sessionID,
 	).Scan(&count)
@@ -407,6 +416,10 @@ func (r *FileRepository) CountActiveOCRTasks(provider string) (int, error) {
 }
 
 func (r *FileRepository) FindActiveByHashInSession(userID, sessionID int64, hash string, size int64) (*model.File, error) {
+	return r.FindActiveByHashInSessionContext(context.Background(), userID, sessionID, hash, size)
+}
+
+func (r *FileRepository) FindActiveByHashInSessionContext(ctx context.Context, userID, sessionID int64, hash string, size int64) (*model.File, error) {
 	f := &model.File{}
 	query := `
 		SELECT id, user_id, session_id, file_name, file_path, file_type, file_size, file_hash, status,
@@ -422,7 +435,7 @@ func (r *FileRepository) FindActiveByHashInSession(userID, sessionID int64, hash
 		ORDER BY created_at DESC, id DESC
 		LIMIT 1
 	`
-	err := r.db.QueryRow(query, userID, sessionID, hash, size).Scan(
+	err := r.db.QueryRowContext(ctx, query, userID, sessionID, hash, size).Scan(
 		&f.ID, &f.UserID, &f.SessionID, &f.FileName, &f.FilePath, &f.FileType, &f.FileSize, &f.FileHash, &f.Status,
 		&f.ExtractedTextPath, &f.ExtractStatus, &f.ExtractError, &f.TokenEstimate,
 		&f.OCRProvider, &f.OCRTaskID, &f.OCRPageCount, &f.OCRProgressPages, &f.OCRStartedAt, &f.OCRCompletedAt, &f.OCRErrorType, &f.OCRSourcePath,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type failedMessageRows struct {
@@ -34,6 +36,17 @@ func TestContextAwareRepositoriesHonorCancellation(t *testing.T) {
 		{name: "tool configs", run: func() error { _, err := NewToolConfigRepository(db).ListContext(ctx); return err }},
 		{name: "attachments", run: func() error {
 			_, err := NewFileRepository(db).GetActiveFilesForSessionContext(ctx, 1, 1, []int64{1})
+			return err
+		}},
+		{name: "file create", run: func() error {
+			return NewFileRepository(db).CreateContext(ctx, &model.File{UserID: 1, FileName: "cancelled.txt", FilePath: "storage/cancelled.txt", FileType: "text/plain", FileSize: 1})
+		}},
+		{name: "file count", run: func() error {
+			_, err := NewFileRepository(db).CountActiveBySessionContext(ctx, 1, 1)
+			return err
+		}},
+		{name: "file duplicate", run: func() error {
+			_, err := NewFileRepository(db).FindActiveByHashInSessionContext(ctx, 1, 1, "hash", 1)
 			return err
 		}},
 	}

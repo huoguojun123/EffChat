@@ -86,7 +86,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     })
   }, [])
 
-  const { attachments: stagedAttachments, selectedAttachments: attachments, uploading, uploadError, fileInputRef, refreshUploadLimits, uploadFiles, removeAttachment, toggleAttachment, markSent, retryAttachmentOCR, refreshStagedAttachments } = useAttachmentUploadQueue(activeSessionId)
+  const { attachments: stagedAttachments, selectedAttachments: attachments, uploading, uploadTasks, uploadError, fileInputRef, refreshUploadLimits, uploadFiles, cancelUpload, retryUpload, dismissUpload, removeAttachment, toggleAttachment, markSentForCurrentEpoch, currentAttachmentEpoch, retryAttachmentOCR, refreshStagedAttachments } = useAttachmentUploadQueue(activeSessionId)
   const activeSession = sessions.find((item) => item.id === activeSessionId)
   const compacting = Boolean(compactionOwner)
   const currentModel = models.find((item) => item.id === activeSession?.model_id && item.provider === activeSession?.provider)
@@ -252,6 +252,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     }))
 
     const submittedSessionId = activeSessionId
+    const submittedAttachmentEpoch = currentAttachmentEpoch()
     const submittedInput = input
     const submittedAttachmentIds = attachments.map((item) => item.id)
     let accepted = false
@@ -268,7 +269,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           setNoticeAction(null)
         }
         clearSubmittedDraft(submittedSessionId, submittedInput)
-        markSent(submittedSessionId, submittedAttachmentIds)
+        markSentForCurrentEpoch(submittedSessionId, submittedAttachmentEpoch, submittedAttachmentIds)
       },
     }).catch((err) => {
       if (accepted || useChatStore.getState().activeSessionId !== submittedSessionId) return
@@ -417,11 +418,15 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
         files={stagedAttachments}
         selected={attachments}
         uploading={uploading}
+        uploadTasks={uploadTasks}
         onUpload={() => fileInputRef.current?.click()}
         onToggle={toggleAttachment}
         onDelete={(id) => void removeAttachment(id)}
         onRetry={(id) => retryAttachmentOCR(id)}
         onRefresh={() => refreshStagedAttachments()}
+        onCancelUpload={cancelUpload}
+        onRetryUpload={retryUpload}
+        onDismissUpload={dismissUpload}
       />
     </div>
   )

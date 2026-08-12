@@ -1,4 +1,4 @@
-import { api, downloadFilename } from "./client"
+import { ApiError, api, downloadFilename, handleAuthExpired } from "./client"
 
 interface FileRecord {
   id: number
@@ -73,6 +73,12 @@ export interface UploadLimits {
   allowedTypes: string[]
 }
 
+export interface FileUploadOptions {
+  signal?: AbortSignal
+  onProgress?: (loaded: number, total: number) => void
+  onProcessing?: () => void
+}
+
 function normalizeFile(file: FileRecord): FileInfo {
   return {
     id: file.id,
@@ -125,11 +131,11 @@ export const filesApi = {
     }
   },
 
-  async upload(file: File, sessionId: number): Promise<FileInfo> {
+  async upload(file: File, sessionId: number, options: FileUploadOptions = {}): Promise<FileInfo> {
     const form = new FormData()
     form.append("file", file)
     form.append("session_id", String(sessionId))
-    const uploaded = await api.upload<FileRecord>("/files", form)
+    const uploaded = await uploadFileRequest<FileRecord>(form, options)
     return normalizeFile(uploaded)
   },
 
@@ -199,6 +205,63 @@ export const filesApi = {
     a.remove()
     window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   },
+}
+
+function uploadFileRequest<T>(form: FormData, options: FileUploadOptions): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const token = localStorage.getItem("token")
+    const xhr = new XMLHttpRequest()
+    let settled = false
+
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      options.signal?.removeEventListener("abort", abort)
+      callback()
+    }
+    const abort = () => xhr.abort()
+
+    xhr.open("POST", "/api/v1/files")
+    xhr.timeout = 180000
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`)
+    xhr.upload.addEventListener("progress", (event) => {
+      const total = event.lengthComputable ? event.total : 0
+      options.onProgress?.(event.loaded, total)
+    })
+    xhr.upload.addEventListener("load", () => options.onProcessing?.())
+    xhr.addEventListener("load", () => {
+      const body = parseXHRBody(xhr.responseText)
+      if (xhr.status < 200 || xhr.status >= 300) {
+        if (xhr.status === 401 && token) handleAuthExpired(token)
+        finish(() => reject(new ApiError(xhr.status, body.error || `上传失败 (HTTP ${xhr.status})`, {
+          code: body.code,
+          retryable: body.retryable,
+          requestId: body.request_id,
+        })))
+        return
+      }
+      finish(() => resolve(body as T))
+    })
+    xhr.addEventListener("error", () => finish(() => reject(new ApiError(0, "网络连接失败，请检查后端服务或网络"))))
+    xhr.addEventListener("timeout", () => finish(() => reject(new ApiError(0, "请求超时，请稍后重试"))))
+    xhr.addEventListener("abort", () => finish(() => reject(new ApiError(0, "上传已取消", { code: "request_cancelled", retryable: true }))))
+
+    if (options.signal?.aborted) {
+      finish(() => reject(new ApiError(0, "上传已取消", { code: "request_cancelled", retryable: true })))
+      return
+    }
+    options.signal?.addEventListener("abort", abort, { once: true })
+    xhr.send(form)
+  })
+}
+
+function parseXHRBody(raw: string): { error?: string; code?: string; retryable?: boolean; request_id?: string } & Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
 }
 
 // fetchFileBlob 用 localStorage 里的 token 鉴权拉取文件二进制，供下载与图片缩略图复用。

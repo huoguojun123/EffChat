@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+# Keep the reverse-proxy request ceiling derived from the same byte limit that
+# protects the extractor and backend. One MiB is reserved for multipart fields
+# and headers so an allowed file at the configured boundary is not rejected by
+# Nginx before the application sees it.
+upload_bytes="${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}"
+case "$upload_bytes" in
+  ''|*[!0-9]*)
+    echo "invalid PY_EXTRACTOR_MAX_UPLOAD_BYTES: $upload_bytes" >&2
+    return 1
+    ;;
+esac
+if [ "$upload_bytes" -lt 1048576 ] || [ $((upload_bytes % 1048576)) -ne 0 ]; then
+  echo "PY_EXTRACTOR_MAX_UPLOAD_BYTES must be a positive whole MiB value" >&2
+  return 1
+fi
+EFFCHAT_NGINX_MAX_BODY_BYTES=$((upload_bytes + 1048576))
+export EFFCHAT_NGINX_MAX_BODY_BYTES

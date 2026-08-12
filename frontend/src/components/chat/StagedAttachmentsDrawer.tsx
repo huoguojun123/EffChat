@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
-import { FileText, ImageIcon, Loader2, Plus, RefreshCw, Trash2, X } from "lucide-react"
+import { FileText, ImageIcon, Loader2, Plus, RefreshCw, RotateCw, Square, Trash2, X } from "lucide-react"
 import { canRetryOCR, filesApi, type FileInfo, isFileSendBlocked } from "@/api/files"
 import { Button } from "@/components/ui/button"
 import { useAuthedBlobUrl } from "@/hooks/useAuthedBlobUrl"
@@ -10,6 +10,7 @@ import { ImageLightbox } from "@/components/message/ImageLightbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { DocumentPreview } from "@/components/files/DocumentPreview"
 import { WorkspaceWindow } from "@/components/ui/workspace-window"
+import type { UploadTask } from "./useAttachmentUploadQueue"
 
 interface Props {
   open: boolean
@@ -17,14 +18,18 @@ interface Props {
   files: FileInfo[]
   selected: FileInfo[]
   uploading: boolean
+  uploadTasks: UploadTask[]
   onUpload: () => void
   onToggle: (id: number) => void
   onDelete: (id: number) => void
   onRetry: (id: number) => Promise<void>
   onRefresh: () => Promise<void>
+  onCancelUpload: (id: string) => void
+  onRetryUpload: (id: string) => Promise<void>
+  onDismissUpload: (id: string) => void
 }
 
-export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, uploading, onUpload, onToggle, onDelete, onRetry, onRefresh }: Props) {
+export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, uploading, uploadTasks, onUpload, onToggle, onDelete, onRetry, onRefresh, onCancelUpload, onRetryUpload, onDismissUpload }: Props) {
   const selectedOrder = new Map(selected.map((file, index) => [file.id, index + 1]))
   const [previewFile, setPreviewFile] = useState<FileInfo | null>(null)
   const [pendingDelete, setPendingDelete] = useState<FileInfo | null>(null)
@@ -65,7 +70,8 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
               </DialogPrimitive.Close>
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
-              {files.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">上传的文件会暂存在这里</div> : null}
+              {uploadTasks.length > 0 ? <div className="mb-3 space-y-1.5">{uploadTasks.map((task) => <UploadTaskRow key={task.id} task={task} onCancel={() => onCancelUpload(task.id)} onRetry={() => void onRetryUpload(task.id)} onDismiss={() => onDismissUpload(task.id)} />)}</div> : null}
+              {files.length === 0 && uploadTasks.length === 0 ? <div className="py-16 text-center text-sm text-muted-foreground">上传的文件会暂存在这里</div> : null}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {files.map((file) => <StagedFile key={file.id} file={file} selectedOrder={selectedOrder.get(file.id)} onToggle={() => onToggle(file.id)} onDelete={() => setPendingDelete(file)} onRetry={() => onRetry(file.id)} onPreview={() => setPreviewFile(file)} />)}
               </div>
@@ -91,6 +97,21 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function UploadTaskRow({ task, onCancel, onRetry, onDismiss }: { task: UploadTask; onCancel: () => void; onRetry: () => void; onDismiss: () => void }) {
+  const progress = task.total > 0 ? Math.min(100, Math.round(task.loaded / task.total * 100)) : 0
+  const active = task.status === "queued" || task.status === "uploading" || task.status === "processing"
+  const label = task.status === "queued" ? "等待上传" : task.status === "uploading" ? `上传 ${progress}%` : task.status === "processing" ? "服务器处理中" : task.status === "cancelled" ? "已取消" : task.error || "上传失败"
+  return (
+    <div className="rounded-md border border-border/70 bg-muted/15 px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1"><div className="truncate text-xs font-medium">{task.filename}</div><div className="truncate text-[11px] text-muted-foreground">{label}</div></div>
+        {active ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={onCancel} aria-label={`取消上传：${task.filename}`}><Square className="h-3.5 w-3.5" /></Button> : <div className="flex items-center">{task.retryable ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={onRetry} aria-label={`重试上传：${task.filename}`}><RotateCw className="h-3.5 w-3.5" /></Button> : null}<Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={onDismiss} aria-label={`移除上传任务：${task.filename}`}><X className="h-3.5 w-3.5" /></Button></div>}
+      </div>
+      {task.status === "uploading" ? <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div> : null}
+    </div>
   )
 }
 

@@ -3,6 +3,7 @@ import { filesApi, isFileSendBlocked, isOCRRefreshable, type FileInfo, type Uplo
 import { compressImageIfNeeded } from "@/lib/imageCompress"
 import { DEFAULT_UPLOAD_LIMITS } from "./ChatInput.constants"
 import { isAcceptedFile } from "./chatInputUpload"
+import { AttachmentQueueOwnership } from "./attachmentQueueOwnership"
 
 function mergeFilesByID(current: FileInfo[], incoming: FileInfo[]): FileInfo[] {
   const byID = new Map<number, FileInfo>()
@@ -18,6 +19,25 @@ function mergeFilesByID(current: FileInfo[], incoming: FileInfo[]): FileInfo[] {
 
 export const MAX_MESSAGE_ATTACHMENTS = 10
 export const MAX_VISION_IMAGES = 4
+
+export type UploadTaskStatus = "queued" | "uploading" | "processing" | "failed" | "cancelled"
+
+export interface UploadTask {
+  id: string
+  filename: string
+  loaded: number
+  total: number
+  status: UploadTaskStatus
+  error?: string
+  retryable?: boolean
+}
+
+interface UploadTaskRuntime extends UploadTask {
+  sourceFile: File
+  uploadFile: File
+  sessionId: number
+  sessionEpoch: number
+}
 
 interface StoredSelection {
   manual: boolean
@@ -77,21 +97,31 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
   const [attachments, setAttachments] = useState<FileInfo[]>([])
   const [selection, setSelection] = useState<StoredSelection>({ manual: false, ids: [] })
   const [uploading, setUploading] = useState(false)
+  const [uploadTasks, setUploadTasks] = useState<UploadTaskRuntime[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const uploadLimitsRef = useRef<UploadLimits>(DEFAULT_UPLOAD_LIMITS)
   const ocrRefreshInFlightRef = useRef<Set<number>>(new Set())
   const activeSessionRef = useRef(activeSessionId)
-  const sessionEpochRef = useRef(0)
   const uploadCountBySessionRef = useRef<Map<number, number>>(new Map())
-
-  useLayoutEffect(() => {
-    activeSessionRef.current = activeSessionId
-  }, [activeSessionId])
+  const ownershipRef = useRef(new AttachmentQueueOwnership())
+  const uploadControllersRef = useRef<Map<string, AbortController>>(new Map())
+  const cancelledUploadTasksRef = useRef<Set<string>>(new Set())
+  const uploadTaskSequenceRef = useRef(0)
+  const errorTimerRef = useRef<number | null>(null)
+  const ocrGenerationRef = useRef<Map<number, number>>(new Map())
 
   const flashUploadError = useCallback((message: string) => {
+    const generation = ownershipRef.current.beginError()
+    if (errorTimerRef.current !== null) window.clearTimeout(errorTimerRef.current)
     setUploadError(message)
-    setTimeout(() => setUploadError(null), 10000)
+    errorTimerRef.current = window.setTimeout(() => {
+      if (ownershipRef.current.ownsError(generation)) setUploadError(null)
+    }, 10000)
+  }, [])
+
+  const updateUploadTask = useCallback((id: string, update: Partial<UploadTaskRuntime>) => {
+    setUploadTasks((current) => current.map((task) => task.id === id ? { ...task, ...update } : task))
   }, [])
 
   const persistSelection = useCallback((sessionId: number, next: StoredSelection) => {
@@ -114,6 +144,76 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
     }
   }, [])
 
+  const runUploadTasks = useCallback(async (tasks: UploadTaskRuntime[], sessionId: number, sessionEpoch: number, limits: UploadLimits) => {
+    const stillCurrent = () => ownershipRef.current.ownsSession(sessionId, sessionEpoch)
+    const activeUploads = (uploadCountBySessionRef.current.get(sessionId) || 0) + 1
+    uploadCountBySessionRef.current.set(sessionId, activeUploads)
+    if (stillCurrent()) {
+      setUploading(true)
+      setUploadError(null)
+    }
+    try {
+      for (const task of tasks) {
+        if (!stillCurrent()) break
+        if (cancelledUploadTasksRef.current.delete(task.id)) continue
+        try {
+          task.uploadFile = await compressImageIfNeeded(task.sourceFile)
+        } catch (err) {
+          updateUploadTask(task.id, { status: "failed", error: err instanceof Error ? err.message : "图片处理失败", retryable: false })
+          continue
+        }
+        if (!stillCurrent()) break
+        if (cancelledUploadTasksRef.current.delete(task.id)) continue
+        if (!isAcceptedFile(task.uploadFile, limits.allowedTypes)) {
+          updateUploadTask(task.id, { status: "failed", error: "不支持的文件类型", retryable: false })
+          continue
+        }
+        if (task.uploadFile.size > limits.maxFileSizeMb * 1024 * 1024) {
+          updateUploadTask(task.id, { status: "failed", error: `文件过大（上限 ${limits.maxFileSizeMb}MB）`, retryable: false })
+          continue
+        }
+        updateUploadTask(task.id, { total: task.uploadFile.size })
+        const controller = new AbortController()
+        uploadControllersRef.current.set(task.id, controller)
+        updateUploadTask(task.id, { status: "uploading", error: undefined })
+        try {
+          const uploaded = await filesApi.upload(task.uploadFile, sessionId, {
+            signal: controller.signal,
+            onProgress: (loaded, total) => {
+              if (stillCurrent()) updateUploadTask(task.id, { loaded, total: total || task.uploadFile.size, status: "uploading" })
+            },
+            onProcessing: () => {
+              if (stillCurrent()) updateUploadTask(task.id, { loaded: task.uploadFile.size, total: task.uploadFile.size, status: "processing" })
+            },
+          })
+          if (stillCurrent()) {
+            ownershipRef.current.mutate()
+            setAttachments((prev) => mergeFilesByID(prev, [uploaded]))
+            setUploadTasks((current) => current.filter((item) => item.id !== task.id))
+          }
+        } catch (err) {
+          if (!stillCurrent()) break
+          const cancelled = controller.signal.aborted
+          updateUploadTask(task.id, {
+            status: cancelled ? "cancelled" : "failed",
+            error: cancelled ? "已取消" : err instanceof Error ? err.message : "上传失败",
+            retryable: cancelled || !(err instanceof Error && "retryable" in err && err.retryable === false),
+          })
+        } finally {
+          uploadControllersRef.current.delete(task.id)
+        }
+      }
+    } finally {
+      const remaining = Math.max(0, (uploadCountBySessionRef.current.get(sessionId) || 1) - 1)
+      if (remaining > 0) uploadCountBySessionRef.current.set(sessionId, remaining)
+      else uploadCountBySessionRef.current.delete(sessionId)
+      if (stillCurrent()) {
+        setUploading(remaining > 0)
+        if (fileInputRef.current) fileInputRef.current.value = ""
+      }
+    }
+  }, [updateUploadTask])
+
   const uploadFiles = useCallback(async (rawFiles: File[]) => {
     if (rawFiles.length === 0) return
     if (!activeSessionId) {
@@ -121,67 +221,77 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
       return
     }
     const sessionId = activeSessionId
-    const sessionEpoch = sessionEpochRef.current
-    const stillCurrent = () => activeSessionRef.current === sessionId && sessionEpochRef.current === sessionEpoch
+    const sessionEpoch = ownershipRef.current.currentEpoch()
+    const stillCurrent = () => ownershipRef.current.ownsSession(sessionId, sessionEpoch)
+    const tasks = rawFiles.map((sourceFile): UploadTaskRuntime => ({
+      id: `${sessionEpoch}:${++uploadTaskSequenceRef.current}`,
+      sourceFile,
+      uploadFile: sourceFile,
+      sessionId,
+      sessionEpoch,
+      filename: sourceFile.name,
+      loaded: 0,
+      total: sourceFile.size,
+      status: "queued",
+    }))
+    setUploadTasks((current) => [...current, ...tasks])
+    setUploading(true)
+    setUploadError(null)
     const limits = await refreshUploadLimits()
     if (!stillCurrent()) return
-    const files: File[] = []
-    for (const file of rawFiles) files.push(await compressImageIfNeeded(file))
-    if (!stillCurrent()) return
-    const rejected = files.filter((f) => !isAcceptedFile(f, limits.allowedTypes))
-    if (rejected.length > 0) {
-      flashUploadError(`不支持的文件类型：${rejected.map((f) => f.name).join("、")}`)
-      return
-    }
-    const maxUploadBytes = limits.maxFileSizeMb * 1024 * 1024
-    const tooLarge = files.filter((f) => f.size > maxUploadBytes)
-    if (tooLarge.length > 0) {
-      flashUploadError(`文件过大（上限 ${limits.maxFileSizeMb}MB）：${tooLarge.map((f) => f.name).join("、")}`)
-      return
-    }
+    await runUploadTasks(tasks, sessionId, sessionEpoch, limits)
+  }, [activeSessionId, flashUploadError, refreshUploadLimits, runUploadTasks])
 
-    const activeUploads = (uploadCountBySessionRef.current.get(sessionId) || 0) + 1
-    uploadCountBySessionRef.current.set(sessionId, activeUploads)
-    if (activeSessionRef.current === sessionId) {
-      setUploading(true)
-      setUploadError(null)
+  const cancelUpload = useCallback((id: string) => {
+    const controller = uploadControllersRef.current.get(id)
+    if (controller) controller.abort()
+    else cancelledUploadTasksRef.current.add(id)
+    setUploadTasks((current) => current.map((task) => task.id === id && task.status === "queued" ? { ...task, status: "cancelled", error: "已取消", retryable: true } : task))
+  }, [])
+
+  const retryUpload = useCallback(async (id: string) => {
+    const task = uploadTasks.find((item) => item.id === id)
+    if (!task || !ownershipRef.current.ownsSession(task.sessionId, task.sessionEpoch)) return
+    setUploadTasks((current) => current.filter((item) => item.id !== id))
+    const replacement: UploadTaskRuntime = {
+      ...task,
+      id: `${task.sessionEpoch}:${++uploadTaskSequenceRef.current}`,
+      uploadFile: task.sourceFile,
+      loaded: 0,
+      total: task.sourceFile.size,
+      status: "queued",
+      error: undefined,
+      retryable: undefined,
     }
-    try {
-      const failed: string[] = []
-      for (const f of files) {
-        if (!stillCurrent()) break
-        try {
-          const uploaded = await filesApi.upload(f, sessionId)
-          if (stillCurrent()) {
-            setAttachments((prev) => mergeFilesByID(prev, [uploaded]))
-          }
-        } catch {
-          failed.push(f.name)
-        }
-      }
-      if (failed.length > 0 && stillCurrent()) {
-        flashUploadError(`上传失败：${failed.join("、")}`)
-      }
-    } finally {
-      const remaining = Math.max(0, (uploadCountBySessionRef.current.get(sessionId) || 1) - 1)
-      if (remaining > 0) uploadCountBySessionRef.current.set(sessionId, remaining)
-      else uploadCountBySessionRef.current.delete(sessionId)
-      if (activeSessionRef.current === sessionId) {
-        setUploading(remaining > 0)
-        if (fileInputRef.current) fileInputRef.current.value = ""
-      }
-    }
-  }, [activeSessionId, flashUploadError, refreshUploadLimits])
+    setUploadTasks((current) => [...current, replacement])
+    setUploading(true)
+    setUploadError(null)
+    const limits = await refreshUploadLimits()
+    if (!ownershipRef.current.ownsSession(task.sessionId, task.sessionEpoch)) return
+    await runUploadTasks([replacement], task.sessionId, task.sessionEpoch, limits)
+  }, [refreshUploadLimits, runUploadTasks, uploadTasks])
+
+  const dismissUpload = useCallback((id: string) => {
+    const controller = uploadControllersRef.current.get(id)
+    if (controller) controller.abort()
+    else cancelledUploadTasksRef.current.add(id)
+    setUploadTasks((current) => current.filter((item) => item.id !== id))
+  }, [])
 
   const removeAttachment = useCallback(async (id: number) => {
     if (!activeSessionId) return
+    const sessionId = activeSessionId
+    const sessionEpoch = ownershipRef.current.currentEpoch()
     try {
       await filesApi.delete(id)
+      if (!ownershipRef.current.ownsSession(sessionId, sessionEpoch)) return
+      ownershipRef.current.mutate()
       setAttachments((prev) => prev.filter((file) => file.id !== id))
-      const current = readSelection(activeSessionId)
+      const current = readSelection(sessionId)
       const next = { manual: current.manual, ids: current.ids.filter((selectedID) => selectedID !== id) }
-      persistSelection(activeSessionId, next)
+      persistSelection(sessionId, next)
     } catch (err) {
+      if (!ownershipRef.current.ownsSession(sessionId, sessionEpoch)) return
       flashUploadError(err instanceof Error ? err.message : "删除附件失败")
     }
   }, [activeSessionId, flashUploadError, persistSelection])
@@ -199,15 +309,33 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
   const markSent = useCallback((sessionId: number, ids: number[]) => {
     if (ids.length === 0) return
     const sent = new Set(ids)
-    if (activeSessionRef.current === sessionId) setAttachments((prev) => prev.filter((file) => !sent.has(file.id)))
+    if (activeSessionRef.current === sessionId) {
+      ownershipRef.current.mutate()
+      setAttachments((prev) => prev.filter((file) => !sent.has(file.id)))
+    }
     persistSelection(sessionId, selectionAfterSent(readSelection(sessionId), ids))
   }, [persistSelection])
 
+  const markSentForCurrentEpoch = useCallback((sessionId: number, sessionEpoch: number, ids: number[]) => {
+    if (!ownershipRef.current.ownsSession(sessionId, sessionEpoch)) return
+    markSent(sessionId, ids)
+  }, [markSent])
+
+  const currentAttachmentEpoch = useCallback(() => ownershipRef.current.currentEpoch(), [])
+
   const retryAttachmentOCR = useCallback(async (id: number) => {
+    const sessionId = activeSessionRef.current
+    if (!sessionId) return
+    const sessionEpoch = ownershipRef.current.currentEpoch()
+    const generation = (ocrGenerationRef.current.get(id) || 0) + 1
+    ocrGenerationRef.current.set(id, generation)
     try {
       const next = await filesApi.retryOCR(id)
+      if (!ownershipRef.current.ownsSession(sessionId, sessionEpoch) || ocrGenerationRef.current.get(id) !== generation) return
+      ownershipRef.current.mutate()
       setAttachments((current) => current.map((file) => file.id === id ? next : file))
     } catch (err) {
+      if (!ownershipRef.current.ownsSession(sessionId, sessionEpoch)) return
       flashUploadError(err instanceof Error ? err.message : "OCR 重试失败")
     }
   }, [flashUploadError])
@@ -215,45 +343,67 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
   const refreshStagedAttachments = useCallback(async () => {
     const sessionId = activeSessionRef.current
     if (!sessionId) return
+    const snapshot = ownershipRef.current.beginList(sessionId)
     try {
       const res = await filesApi.list({ sessionId, limit: 100, offset: 0, unreferenced: true })
-      if (activeSessionRef.current !== sessionId) return
+      if (!ownershipRef.current.ownsList(snapshot)) return
       const files = mergeFilesByID([], res.files)
       setAttachments(files)
       const current = readSelection(sessionId)
       const available = new Set(files.filter((file) => !isFileSendBlocked(file)).map((file) => file.id))
       persistSelection(sessionId, { manual: current.manual, ids: current.ids.filter((id) => available.has(id)) })
     } catch (err) {
+      if (!ownershipRef.current.ownsList(snapshot)) return
       flashUploadError(err instanceof Error ? err.message : "加载暂存附件失败")
     }
   }, [flashUploadError, persistSelection])
 
   useLayoutEffect(() => {
     const sessionId = activeSessionId
-    sessionEpochRef.current += 1
+    const previousSessionId = activeSessionRef.current
+    activeSessionRef.current = sessionId
+    ownershipRef.current.activate(sessionId || null)
+    const ownership = ownershipRef.current
+    const uploadControllers = uploadControllersRef.current
+    const cancelledUploadTasks = cancelledUploadTasksRef.current
+    if (previousSessionId) uploadCountBySessionRef.current.delete(previousSessionId)
+    if (sessionId) uploadCountBySessionRef.current.delete(sessionId)
+    for (const controller of uploadControllersRef.current.values()) controller.abort()
+    uploadControllersRef.current.clear()
+    cancelledUploadTasksRef.current.clear()
+    if (errorTimerRef.current !== null) window.clearTimeout(errorTimerRef.current)
     if (activeSessionRef.current !== sessionId) return
     setAttachments([])
     setSelection(sessionId ? readSelection(sessionId) : { manual: false, ids: [] })
     setUploadError(null)
-    setUploading(sessionId ? (uploadCountBySessionRef.current.get(sessionId) || 0) > 0 : false)
+    setUploadTasks([])
+    // Session navigation aborts and releases every in-memory upload task. A
+    // later A visit is a new epoch and must not inherit the old A call count.
+    setUploading(false)
     if (fileInputRef.current) fileInputRef.current.value = ""
     if (!sessionId) {
       return
     }
-    let cancelled = false
+    const snapshot = ownershipRef.current.beginList(sessionId)
     void filesApi.list({ sessionId, limit: 100, offset: 0, unreferenced: true }).then((res) => {
-      if (cancelled || activeSessionRef.current !== sessionId) return
-      setAttachments((prev) => mergeFilesByID(prev, res.files))
+      if (!ownershipRef.current.ownsList(snapshot)) return
+      setAttachments(mergeFilesByID([], res.files))
       const stored = readSelection(sessionId)
       const available = new Set(res.files.filter((file) => !isFileSendBlocked(file)).map((file) => file.id))
       const next = { manual: stored.manual, ids: stored.ids.filter((id) => available.has(id)) }
       if (next.ids.length !== stored.ids.length) localStorage.setItem(selectionKey(sessionId), JSON.stringify(next))
       setSelection(next)
-    }).catch(() => {})
+    }).catch((err) => {
+      if (ownershipRef.current.ownsList(snapshot)) flashUploadError(err instanceof Error ? err.message : "加载暂存附件失败")
+    })
     return () => {
-      cancelled = true
+      ownership.activate(null)
+      for (const controller of uploadControllers.values()) controller.abort()
+      uploadControllers.clear()
+      cancelledUploadTasks.clear()
+      if (errorTimerRef.current !== null) window.clearTimeout(errorTimerRef.current)
     }
-  }, [activeSessionId])
+  }, [activeSessionId, flashUploadError])
 
   useEffect(() => {
     if (!attachments.some(isOCRRefreshable)) return
@@ -264,11 +414,15 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
         for (const file of pending) {
           if (ocrRefreshInFlightRef.current.has(file.id)) continue
           ocrRefreshInFlightRef.current.add(file.id)
+          const generation = (ocrGenerationRef.current.get(file.id) || 0) + 1
+          ocrGenerationRef.current.set(file.id, generation)
+          const sessionEpoch = ownershipRef.current.currentEpoch()
           void filesApi.refreshOCR(file.id).then((next) => {
-            if (activeSessionRef.current !== sessionId) return
+            if (!sessionId || !ownershipRef.current.ownsSession(sessionId, sessionEpoch) || ocrGenerationRef.current.get(file.id) !== generation) return
+            ownershipRef.current.mutate()
             setAttachments((current) => current.map((item) => (item.id === next.id ? next : item)))
           }).catch((err) => {
-            if (activeSessionRef.current === sessionId) {
+            if (sessionId && ownershipRef.current.ownsSession(sessionId, sessionEpoch)) {
               flashUploadError(err instanceof Error ? err.message : "OCR 状态刷新失败")
             }
           }).finally(() => {
@@ -286,19 +440,34 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
     ? selection.ids.map((id) => readyAttachments.find((file) => file.id === id)).filter((file): file is FileInfo => !!file)
     : defaultSelection(readyAttachments)
 
+  const publicUploadTasks: UploadTask[] = uploadTasks.map((task) => ({
+    id: task.id,
+    filename: task.filename,
+    loaded: task.loaded,
+    total: task.total,
+    status: task.status,
+    error: task.error,
+    retryable: task.retryable,
+  }))
+
   return {
     attachments,
     setAttachments,
     selectedAttachments,
     selectionManual: selection.manual,
     uploading,
+    uploadTasks: publicUploadTasks,
     uploadError,
     fileInputRef,
     refreshUploadLimits,
     uploadFiles,
+    cancelUpload,
+    retryUpload,
+    dismissUpload,
     removeAttachment,
     toggleAttachment,
-    markSent,
+    markSentForCurrentEpoch,
+    currentAttachmentEpoch,
     retryAttachmentOCR,
     refreshStagedAttachments,
   }

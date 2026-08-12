@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,65 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
+
+func TestDownloadFileHandlerUsesServedContentContract(t *testing.T) {
+	env := setupTestEnv(t)
+	repo := repository.NewFileRepository(env.db)
+	router := newFileReadContractRouter(repo, env.userID)
+
+	makeFile := func(name, contentType, body string, extracted bool) *model.File {
+		t.Helper()
+		path := fmt.Sprintf("./storage/attachments/%s/%d/%d", map[bool]string{true: "extracted", false: "originals"}[extracted], env.userID, time.Now().UnixNano())
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(path) })
+		file := &model.File{UserID: env.userID, FileName: name, FilePath: path, FileType: contentType, FileSize: int64(len(body)), ExtractStatus: "ready"}
+		if extracted {
+			file.ExtractedTextPath = &path
+		}
+		if err := repo.Create(file); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = env.db.Exec("DELETE FROM files WHERE id = $1", file.ID) })
+		return file
+	}
+
+	document := makeFile("预算.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "# extracted workbook", true)
+	image := makeFile("cover.png", "image/png", "fixture png", false)
+
+	for _, tt := range []struct {
+		name            string
+		file            *model.File
+		wantFilename    string
+		wantContentType string
+		wantBody        string
+	}{
+		{name: "document sidecar", file: document, wantFilename: "预算.xlsx.txt", wantContentType: "text/plain; charset=utf-8", wantBody: "# extracted workbook"},
+		{name: "image original", file: image, wantFilename: "cover.png", wantContentType: "image/png", wantBody: "fixture png"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/files/%d", tt.file.ID), nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			_, params, err := mime.ParseMediaType(recorder.Header().Get("Content-Disposition"))
+			if err != nil || params["filename"] != tt.wantFilename {
+				t.Fatalf("content disposition=%q filename=%q err=%v", recorder.Header().Get("Content-Disposition"), params["filename"], err)
+			}
+			if got := recorder.Header().Get("Content-Type"); got != tt.wantContentType {
+				t.Fatalf("content type=%q, want %q", got, tt.wantContentType)
+			}
+			if got := recorder.Body.String(); got != tt.wantBody {
+				t.Fatalf("body=%q, want %q", got, tt.wantBody)
+			}
+		})
+	}
+}
 
 func TestFileLookupErrorHidesInternalDetails(t *testing.T) {
 	tests := []struct {

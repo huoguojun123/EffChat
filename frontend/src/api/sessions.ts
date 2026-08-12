@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, downloadFilename } from "./client"
 import type { Session, SessionFolder } from "@/types"
 import type { Model } from "@/types"
 
@@ -90,19 +90,6 @@ export async function exportSessionMarkdown(id: number, includeTools = false) {
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-export function downloadFilename(disposition: string | null) {
-  if (!disposition) return ""
-  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
-  if (encoded) {
-    try {
-      return decodeURIComponent(encoded)
-    } catch {
-      return ""
-    }
-  }
-  return /filename="([^"]+)"/i.exec(disposition)?.[1] || /filename=([^;]+)/i.exec(disposition)?.[1]?.trim() || ""
 }
 
 export interface SessionMemorySection {

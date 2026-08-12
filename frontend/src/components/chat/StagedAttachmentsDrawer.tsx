@@ -122,7 +122,7 @@ function StagedFilePreview({ file, onOpenChange }: { file: FileInfo | null; onOp
   const { url, loading, error } = useAuthedBlobUrl(image ? file?.id : undefined)
 
   if (!file) return null
-  if (image && url) return <ImageLightbox open url={url} filename={file.filename} onOpenChange={onOpenChange} onDownload={() => filesApi.downloadBlob(file.id, file.filename)} />
+  if (image && url) return <ImageLightbox open url={url} filename={file.filename} onOpenChange={onOpenChange} onDownload={(signal) => filesApi.downloadBlob(file.id, file.filename, signal)} />
   if (!image) {
     return (
       <WorkspaceWindow

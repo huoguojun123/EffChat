@@ -2,9 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const { get, patch } = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }))
 
-vi.mock("@/api/client", () => ({ api: { get, patch } }))
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  api: { get, patch },
+}))
 
-import { downloadFilename, searchConversations, updateSession } from "@/api/sessions"
+import { downloadFilename } from "@/api/client"
+import { searchConversations, updateSession } from "@/api/sessions"
 
 describe("searchConversations", () => {
   beforeEach(() => get.mockReset())

@@ -8,6 +8,7 @@ import { useAuthedBlobUrl } from "@/hooks/useAuthedBlobUrl"
 import { ImageLightbox } from "@/components/message/ImageLightbox"
 import { DocumentPreview } from "@/components/files/DocumentPreview"
 import { WorkspaceWindow } from "@/components/ui/workspace-window"
+import { LatestOperationOwner } from "@/lib/latestOperation"
 
 interface Props {
   sessionId: number | null
@@ -27,12 +28,14 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
   const sessionRef = useRef(sessionId)
   const loadedSessionRef = useRef<number | null>(null)
   const requestRef = useRef(0)
+  const downloadOwnerRef = useRef(new LatestOperationOwner())
   const selectionRef = useRef<number | null>(null)
 
   useLayoutEffect(() => {
     sessionRef.current = sessionId
     loadedSessionRef.current = null
     requestRef.current += 1
+    downloadOwnerRef.current.cancel()
     queueMicrotask(() => {
       if (sessionRef.current !== sessionId) return
       setFiles([])
@@ -107,6 +110,19 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
       setError(err instanceof Error ? err.message : "OCR 重试失败")
     } finally {
       if (sessionRef.current === requestedSession && loadedSessionRef.current === requestedSession) setRetryingID(null)
+    }
+  }
+
+  async function downloadFile(file: FileInfo) {
+    const operation = downloadOwnerRef.current.begin()
+    setError(null)
+    try {
+      await filesApi.downloadBlob(file.id, fallbackDownloadFilename(file), operation.signal)
+    } catch (err) {
+      if (operation.signal.aborted || !downloadOwnerRef.current.owns(operation) || sessionRef.current !== sessionId) return
+      setError(err instanceof Error ? err.message : "下载失败，请稍后重试")
+    } finally {
+      downloadOwnerRef.current.release(operation)
     }
   }
 
@@ -232,7 +248,7 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                       {selected.tokenEstimate ? ` · ${formatTokens(selected.tokenEstimate)}` : ""}
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md sm:h-8 sm:w-8" onClick={() => filesApi.downloadBlob(selected.id, selected.filename)} aria-label={`下载文件：${selected.filename}`}>
+                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md sm:h-8 sm:w-8" onClick={() => void downloadFile(selected)} aria-label={`${downloadLabel(selected)}：${selected.filename}`} title={downloadLabel(selected)}>
                     <Download className="h-4 w-4" />
                   </Button>
                   <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md text-rose-500 hover:text-rose-600 sm:h-8 sm:w-8" onClick={() => {
@@ -263,6 +279,7 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                   ) : (
                     <DocumentPreview key={`${selected.id}:${selected.extractStatus || ""}`} fileId={selected.id} className="mx-auto w-full max-w-[1100px]" />
                   )}
+                  {mobilePreviewOpen && error ? <div role="alert" className="mt-3 text-center text-xs text-rose-500">{error}</div> : null}
                 </div>
               </>
             ) : (
@@ -300,10 +317,18 @@ function FileDrawerImage({ file }: { file: FileInfo }) {
         url={url}
         filename={file.filename}
         onOpenChange={setOpen}
-        onDownload={() => filesApi.downloadBlob(file.id, file.filename)}
+        onDownload={(signal) => filesApi.downloadBlob(file.id, fallbackDownloadFilename(file), signal)}
       />
     </>
   )
+}
+
+function downloadLabel(file: FileInfo): string {
+  return file.content_type.startsWith("image/") ? "下载图片" : "下载提取文本"
+}
+
+function fallbackDownloadFilename(file: FileInfo): string {
+  return file.content_type.startsWith("image/") ? file.filename : `${file.filename}.txt`
 }
 
 function FileIcon({ file }: { file: FileInfo }) {

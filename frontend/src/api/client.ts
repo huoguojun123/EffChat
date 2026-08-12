@@ -93,13 +93,14 @@ export const api = {
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   upload: <T>(path: string, formData: FormData) =>
     request<T>(path, { method: "POST", body: formData, timeoutMs: UPLOAD_TIMEOUT_MS }),
-  download: async (path: string) => {
+  download: async (path: string, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
     const token = getToken()
     let res: Response
     try {
       res = await fetchWithTimeout(`${BASE_URL}${path}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      })
+        signal: options?.signal,
+      }, options?.timeoutMs)
     } catch (err) {
       if (err instanceof ApiError) throw err
       throw new ApiError(0, "网络连接失败，请检查后端服务或网络")
@@ -111,6 +112,19 @@ export const api = {
     }
     return res
   },
+}
+
+export function downloadFilename(disposition: string | null) {
+  if (!disposition) return ""
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      return ""
+    }
+  }
+  return /filename="([^"]+)"/i.exec(disposition)?.[1] || /filename=([^;]+)/i.exec(disposition)?.[1]?.trim() || ""
 }
 
 export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Response> {

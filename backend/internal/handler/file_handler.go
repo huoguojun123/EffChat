@@ -520,7 +520,11 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			writeServerError(c, http.StatusInternalServerError, "file_download_unavailable", "file storage is unavailable", err)
 			return
 		}
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		// The download can be an extracted text sidecar rather than the original
+		// Office/PDF upload. FormatMediaType preserves that server-selected name
+		// (including non-ASCII names) so authenticated browser clients do not have
+		// to guess an extension from stale attachment metadata.
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 		c.Header("Content-Type", contentType)
 		c.File(path)
 	}

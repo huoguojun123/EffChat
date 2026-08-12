@@ -290,8 +290,9 @@ func largeFictionalMemory(t *testing.T) string {
 	}
 	content := strings.TrimSpace(b.String())
 	chars := utf8.RuneCountInString(content)
-	if chars < 14000 || chars > 16000 {
-		t.Fatalf("large fictional memory has %d characters, want 14000..16000", chars)
+	const maxChars = 16000
+	if chars < maxChars*4/5 || chars > maxChars {
+		t.Fatalf("large fictional memory has %d characters, want %d..%d", chars, maxChars*4/5, maxChars)
 	}
 	return content
 }

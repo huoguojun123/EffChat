@@ -55,7 +55,10 @@ func writeFileUnder(rootPath, path string, content []byte, permission os.FileMod
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
+	// Managed attachments contain user-controlled content. Keep every directory
+	// private to the backend owner; API authorization is the product boundary,
+	// while filesystem mode is the host-level defense-in-depth boundary.
+	if err := os.MkdirAll(filepath.Dir(clean), 0o700); err != nil {
 		return err
 	}
 	parent, err := existingPathUnder(rootPath, filepath.Dir(clean), true)

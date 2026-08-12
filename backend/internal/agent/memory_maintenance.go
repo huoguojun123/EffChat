@@ -1094,7 +1094,25 @@ func (a *EinoAgent) recordUtilityTaskRun(ctx context.Context, input repository.R
 	if input.Source == repository.ModelTaskSourceAuto && ctx != nil && ctx.Err() != nil {
 		input.RetryAfter = nil
 	}
-	recordCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if ctx != nil && ctx.Err() != nil {
+		// The audit row is useful after request cancellation, but it must not add
+		// another five seconds to the canceled operation. Reuse the managed memory
+		// task lifecycle so service drain can cancel and wait for this detached write.
+		if !a.startMemoryBackgroundTask() {
+			log.Printf("[model_task_runs] record skipped during drain: task=%s session=%d", input.TaskKey, input.SessionID)
+			return
+		}
+		go func() {
+			defer a.memoryTasks.Done()
+			a.recordUtilityTaskRunNow(a.backgroundTaskContext(), input)
+		}()
+		return
+	}
+	a.recordUtilityTaskRunNow(context.Background(), input)
+}
+
+func (a *EinoAgent) recordUtilityTaskRunNow(parent context.Context, input repository.RecordModelTaskRunInput) {
+	recordCtx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	if _, err := a.taskRunRepo.Record(recordCtx, input); err != nil {
 		log.Printf("[model_task_runs] record failed: task=%s session=%d err=%v", input.TaskKey, input.SessionID, err)

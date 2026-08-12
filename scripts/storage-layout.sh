@@ -330,7 +330,7 @@ SQL
 }
 
 verify_layout() {
-  local legacy_count managed_paths font_paths missing=0 path host_path
+  local legacy_count managed_paths deferred_paths font_paths missing=0 path host_path
   legacy_count="$(legacy_db_count | tr -d '[:space:]')"
   if [ "$legacy_count" != "0" ]; then
     echo "Database still contains $legacy_count legacy storage path(s)." >&2
@@ -340,11 +340,13 @@ verify_layout() {
   managed_paths="$(db_psql -Atc "
     SELECT path
     FROM (
-      SELECT file_path AS path FROM files WHERE status <> 'storage_removed'
+      SELECT file_path AS path FROM files WHERE status IN ('staged', 'formal')
       UNION
-      SELECT extracted_text_path FROM files WHERE status <> 'storage_removed' AND extracted_text_path IS NOT NULL
+      SELECT extracted_text_path FROM files
+      WHERE status IN ('staged', 'formal') AND extracted_text_path IS NOT NULL
       UNION
-      SELECT ocr_source_path FROM files WHERE status <> 'storage_removed' AND ocr_source_path IS NOT NULL
+      SELECT ocr_source_path FROM files
+      WHERE status IN ('staged', 'formal') AND ocr_source_path IS NOT NULL
       UNION
       SELECT storage_path FROM skill_files
       UNION
@@ -371,6 +373,35 @@ verify_layout() {
       missing=$((missing + 1))
     fi
   done <<< "$managed_paths"
+
+  # Deleted attachments retain path metadata until the cleanup lease reaches
+  # its retention deadline. Their original or derived bytes may never have
+  # existed (for example a cancelled OCR run), but path fencing must remain
+  # strict so a malformed tombstone cannot bless an external cleanup target.
+  deferred_paths="$(db_psql -Atc "
+    SELECT path
+    FROM (
+      SELECT file_path AS path FROM files WHERE status = 'cleanup_claimed'
+      UNION
+      SELECT extracted_text_path FROM files
+      WHERE status = 'cleanup_claimed' AND extracted_text_path IS NOT NULL
+      UNION
+      SELECT ocr_source_path FROM files
+      WHERE status = 'cleanup_claimed' AND ocr_source_path IS NOT NULL
+    ) deferred_paths
+    WHERE path IS NOT NULL AND path <> ''
+    ORDER BY path;
+  ")"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      storage/*) ;;
+      *)
+        echo "Database path is outside managed storage: $path" >&2
+        missing=$((missing + 1))
+        ;;
+    esac
+  done <<< "$deferred_paths"
 
   if [ "$missing" -ne 0 ]; then
     echo "Storage verification failed with $missing invalid or missing path(s)." >&2

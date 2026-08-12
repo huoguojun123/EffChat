@@ -233,6 +233,8 @@ scripts/storage-layout.sh plan
 scripts/storage-layout.sh verify
 ```
 
+`verify` 对仍可用的 `staged` / `formal` 附件、头像、字体和 Skills 保持严格磁盘存在性校验。已由用户删除并进入 `cleanup_claimed` 保留期的附件仍会校验所有数据库路径位于受管 `storage/` 内，但允许尚未生成或已被幂等清理的候选文件不存在；到期后的正式 cleanup 会删除剩余字节并将记录收口为 `storage_removed`。
+
 只有迁移满 7 天、验证通过并显式确认后，才允许删除旧副本：
 
 ```bash

@@ -157,6 +157,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 - 前端上传预校验的 limits 接口与真实上传入口读取同一个 fail-closed policy；策略在冷启动不可用时二者都返回 `file_policy_unavailable`、带 request ID 的 retryable 503，不能由只读入口退化为无关联信息的裸错误。last-known-good、degraded 标记和实际上传最终裁决保持不变。
 - 人工 OCR retry 在 mutation 前分别校验附件 policy、Go/Python runtime 依赖和 MinerU 渠道配置；管理员未启用返回稳定 409，控制面或 runtime 暂不可读返回带 request ID 的 retryable 503。文件不存在或无权访问统一为 404，repository mutation 故障为可追踪 5xx。`RestartOCR` 提交新的 pending generation 后才复核受管原件：过期或确实缺失会用 `FailOCR` 补偿闭合为 failed 并返回 409，越界路径、非缺失型文件系统错误或补偿失败返回稳定可追踪 5xx；只有复核成功才唤醒 recovery runner。
 - 用户删除附件只先提交数据库 tombstone/cleanup claim，不在请求内删除受管字节。无效参数为 400，缺失或无权访问统一为 404，不可用生命周期状态为 409；lookup、受管路径校验和删除事务故障返回带 request ID 的 retryable 5xx。删除事务继续负责 fencing OCR worker，并在 formal attachment 上同步写入历史消息 tombstone；物理清理由管理员维护入口按租约完成。
+- 部署存储校验对仍可用的 `staged` / `formal` 附件、头像、字体和 Skills 保持严格路径与磁盘存在性检查。`cleanup_claimed` 附件在保留期内只要求全部候选路径仍位于受管 `storage/`：解析或 OCR 在删除前可能尚未生成派生文件，清理重试也允许目标已经不存在；到期 cleanup 继续幂等删除现存字节并收口为 `storage_removed`。
 - 管理员批量 cleanup 在任何 claim 前先完成只读统计，随后分别过期 OCR source、按 lease claim 文件、删除受管字节并用 claim token finalize；单文件失败不会中止同批其他文件。顶层参数错误为 400，repository 阶段故障为带 request ID 的 retryable 5xx；200 部分成功响应的每项失败都包含稳定 `code/error/retryable`，并在存在失败时携带 request ID。物理删除或 finalize 失败会尝试立即释放 claim；释放本身失败使用独立 code，避免把延迟重试的 lease 状态隐藏在泛化错误中。
 - 图片保留原图；文档类文件不承诺长期保留原始 PDF/Word。
 - PDF 当前策略是 MinerU 优先，本地 Python 解析兜底。

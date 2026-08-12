@@ -147,6 +147,8 @@ jobs:
         run: scripts/test-upload-limit-contract.sh
       - name: Test storage finalization fencing
         run: scripts/test-storage-finalization-state.sh
+      - name: Test storage verification lifecycle
+        run: scripts/test-storage-verify-lifecycle.sh
       - name: Test deployment stage ordering
         run: scripts/test-deployment-stage-order.sh
       - name: Test backup artifact contract

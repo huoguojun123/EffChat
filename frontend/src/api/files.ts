@@ -265,8 +265,8 @@ function parseXHRBody(raw: string): { error?: string; code?: string; retryable?:
 }
 
 // fetchFileBlob 用 localStorage 里的 token 鉴权拉取文件二进制，供下载与图片缩略图复用。
-export async function fetchFileBlob(id: number): Promise<Blob> {
-  return (await fetchFileDownload(id)).blob
+export async function fetchFileBlob(id: number, signal?: AbortSignal): Promise<Blob> {
+  return (await fetchFileDownload(id, signal)).blob
 }
 
 async function fetchFileDownload(id: number, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {

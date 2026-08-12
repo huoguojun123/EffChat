@@ -7,6 +7,15 @@ interface BlobState {
   error: boolean
 }
 
+interface BlobOwner {
+  fileId: number | undefined
+  generation: number
+}
+
+interface OwnedBlobState extends BlobState {
+  owner: BlobOwner
+}
+
 const IDLE: BlobState = { url: null, loading: false, error: false }
 const LOADING: BlobState = { url: null, loading: true, error: false }
 
@@ -14,35 +23,49 @@ const LOADING: BlobState = { url: null, loading: true, error: false }
 // 鉴权走 Authorization header（token 在 localStorage），<img src> 无法直接带，
 // 故先 fetch blob 再 createObjectURL；卸载时 revoke 释放，避免内存泄漏。
 //
-// 状态合并为单个对象，且只在异步回调里 setState（effect 体内不同步 setState），
-// 以满足 react-hooks 规则；初始 loading 由 useState 惰性初值给出，避免渲染期闪烁。
+// 状态与当前 render owner 分开保存：文件切换的首个 committed render 必须立即显示
+// loading，而不能等待 effect 才清掉上一文件的 URL 或错误。
 export function useAuthedBlobUrl(fileId: number | undefined): BlobState {
-  const [state, setState] = useState<BlobState>(() => (fileId ? LOADING : IDLE))
+  const [renderOwner, setRenderOwner] = useState<BlobOwner>(() => ({ fileId, generation: 0 }))
+  let owner = renderOwner
+  if (renderOwner.fileId !== fileId) {
+    // React immediately retries this component before committing descendants.
+    // Advancing a monotonic generation also distinguishes A→B→A, so the
+    // first A's already-revoked URL cannot become visible during the return.
+    owner = { fileId, generation: renderOwner.generation + 1 }
+    setRenderOwner(owner)
+  }
+  const [state, setState] = useState<OwnedBlobState | null>(null)
 
   useEffect(() => {
-    if (!fileId) {
-      return
-    }
-    let revoked = false
+    if (fileId === undefined) return
+    const controller = new AbortController()
+    let cancelled = false
     let objectUrl: string | null = null
-    fetchFileBlob(fileId)
+    fetchFileBlob(fileId, controller.signal)
       .then((blob) => {
-        if (revoked) return
+        if (cancelled) return
         objectUrl = URL.createObjectURL(blob)
-        setState({ url: objectUrl, loading: false, error: false })
+        setState({ owner, url: objectUrl, loading: false, error: false })
       })
       .catch(() => {
-        if (!revoked) setState({ url: null, loading: false, error: true })
+        if (!cancelled) setState({ owner, url: null, loading: false, error: true })
       })
     return () => {
-      revoked = true
+      cancelled = true
+      controller.abort()
       if (objectUrl) URL.revokeObjectURL(objectUrl)
-      // 下次进入（fileId 变更）前回到 loading；fileId 被清空时无新 effect 重置，
-      // 由下方 `fileId ? state : IDLE` 的渲染期派生兜底为 idle，避免卡在 loading。
-      setState(LOADING)
     }
-  }, [fileId])
+  }, [fileId, owner])
 
-  // fileId 为空时直接返回 IDLE，不依赖 cleanup 残留的 state（可能是上一个 fileId 的 LOADING）。
-  return fileId ? state : IDLE
+  return visibleBlobState(fileId, owner, state)
+}
+
+function sameBlobOwner(left: BlobOwner, right: BlobOwner) {
+  return left.fileId === right.fileId && left.generation === right.generation
+}
+
+export function visibleBlobState(fileId: number | undefined, owner: BlobOwner, state: OwnedBlobState | null): BlobState {
+  if (fileId === undefined) return IDLE
+  return state && sameBlobOwner(state.owner, owner) ? state : LOADING
 }

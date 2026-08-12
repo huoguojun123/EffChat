@@ -146,7 +146,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 ## 文件与 OCR
 
 - 文件元数据在 `files` 表，解析文本保存在受管理的数据目录。
-- 受管附件是私有用户内容：`storage/attachments` 及其用户/月目录使用 `0700`，图片原件、解析文本和 OCR staging 文件使用 `0600`。backend 启动入口只归一化 attachments 子树的 owner/mode，不递归改变 avatars、fonts 或 skills 的公开/管理语义；API 会话/用户鉴权仍是读取边界，文件 mode 是宿主机防御纵深。
+- 受管附件是私有用户内容：`storage/attachments` 及其用户/月目录使用 `0700`，图片原件、解析文本和 OCR staging 文件使用 `0600`。backend 启动入口保留所有受管 storage 的既有 owner 归一化，但只递归收紧 attachments 的 mode，不改变 avatars、fonts 或 skills 的模式语义；API 会话/用户鉴权仍是读取边界，文件 mode 是宿主机防御纵深。
 - PDF、DOCX、XLSX 与 CSV 的表格共用一个 GFM serializer。cell 先转义用户 HTML，
   再按顺序保留反斜杠、转义 pipe，并把真实 CR/LF/CRLF 编码为安全的 `&#10;`；
   remark-gfm 因而维持原行列，当前 `remark-breaks` 将解码后的换行渲染为 `<br>`。

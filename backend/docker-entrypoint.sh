@@ -9,9 +9,9 @@ mkdir -p \
   /app/storage/fonts \
   /app/storage/skills
 
-# Attachments are authenticated user content, not public static assets. Normalize
-# only this managed subtree on startup so legacy 0755/0644 files become private
-# without changing the intentionally shareable avatar, font, or skill domains.
+# Keep the existing owner normalization for every backend-managed storage domain.
+# Attachments are authenticated user content, so only their mode is tightened on
+# startup; avatars, fonts, and skills retain their distinct mode semantics.
 chown -R app:app /app/storage
 chmod -R go-rwx /app/storage/attachments
 

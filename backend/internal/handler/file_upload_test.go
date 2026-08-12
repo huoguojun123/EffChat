@@ -320,6 +320,43 @@ func TestUpload_DoesNotTreatSelectionSizeAsAnUploadLimit(t *testing.T) {
 	}
 }
 
+func TestUploadImageUsesPrivateManagedAttachmentModes(t *testing.T) {
+	env := setupTestEnv(t)
+	sessionID := createUploadTestSession(t, env)
+	t.Cleanup(func() {
+		_, _ = env.db.Exec("DELETE FROM files WHERE user_id = $1", env.userID)
+		_ = os.RemoveAll(filepath.Join(filepolicy.AttachmentOriginalsRoot, fmt.Sprintf("%d", env.userID)))
+	})
+
+	recorder := httptest.NewRecorder()
+	env.router.ServeHTTP(recorder, uploadMultipart(t, env.token, sessionID, "private.png", "image/png", uploadTestPNG(t)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("upload status=%d, want %d (body: %s)", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+
+	var filePath string
+	if err := env.db.QueryRow("SELECT file_path FROM files WHERE user_id = $1 ORDER BY id DESC LIMIT 1", env.userID).Scan(&filePath); err != nil {
+		t.Fatalf("query uploaded path: %v", err)
+	}
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat uploaded file: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("uploaded file mode=%#o, want 0600", got)
+	}
+	monthDir := filepath.Dir(filePath)
+	for _, dir := range []string{monthDir, filepath.Dir(monthDir), filepath.Dir(filepath.Dir(monthDir))} {
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			t.Fatalf("stat attachment directory %s: %v", dir, statErr)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("attachment directory %s mode=%#o, want 0700", dir, got)
+		}
+	}
+}
+
 func TestUpload_RejectsOversizedMultipartBody(t *testing.T) {
 	env := setupTestEnv(t)
 	sessionID := createUploadTestSession(t, env)

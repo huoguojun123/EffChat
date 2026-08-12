@@ -212,7 +212,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 
 		// 生成存储路径名。文档类解析成功后只保留解析文本；图片类才保留原始文件。
 		userDir := uploadUserMonthDir(userID, time.Now())
-		if err := os.MkdirAll(userDir, 0755); err != nil {
+		if err := os.MkdirAll(userDir, 0700); err != nil {
 			writeServerError(c, http.StatusInternalServerError, "upload_directory_create_failed", "failed to create upload directory", err)
 			return
 		}
@@ -236,7 +236,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		isImage := strings.HasPrefix(contentType, "image/")
 		if isImage {
 			storedPath := filepath.Join(userDir, storedName)
-			if err := filepolicy.WriteFile(storedPath, content, 0o644); err != nil {
+			if err := filepolicy.WriteFile(storedPath, content, 0o600); err != nil {
 				writeServerError(c, http.StatusInternalServerError, "file_write_failed", "failed to save file", err)
 				return
 			}

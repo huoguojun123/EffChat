@@ -400,6 +400,12 @@ func (h *RunHub) TransitionWithCommit(ctx context.Context, runID string, commit 
 	return h.transition(ctx, runID, commit, terminal)
 }
 
+// transition serializes one run with transitionMu, then holds h.mu only for
+// short in-memory reads or publication; durable I/O never runs under h.mu.
+// finishing freezes cancellation/terminal arbitration while the repository or
+// commit callback records the canonical terminal facts. Only a successful
+// durable result is published to RunHub subscribers; on failure clearFinishing
+// leaves the running state retryable by terminal recovery.
 func (h *RunHub) transition(ctx context.Context, runID string, commit RunTerminalCommit, terminal RunTerminal) (*RunSnapshot, bool, *RunEvent, error) {
 	if terminal.Status != RunStatusCompleted && terminal.Status != RunStatusFailed && terminal.Status != RunStatusCanceled {
 		return nil, false, nil, fmt.Errorf("invalid terminal status %q", terminal.Status)

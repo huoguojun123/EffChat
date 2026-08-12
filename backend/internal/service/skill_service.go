@@ -657,6 +657,10 @@ var skillUploadDir = filepolicy.SkillRoot
 
 var skillPackageGracePeriod = 16 * time.Minute
 
+// persistSkillPackage writes a content-addressed immutable root before the
+// governed database update. The database becomes the package owner only after
+// that update commits; failed roots remain unreferenced, while superseded roots
+// enter delayed cleanup so in-flight readers can finish on the old version.
 func (s *SkillService) persistSkillPackage(ctx context.Context, skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord, patch repository.SkillMetadataPatch, mutation repository.SkillGovernanceMutation) error {
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
@@ -908,6 +912,9 @@ func (s *SkillService) cleanupExpiredSkillPackages() {
 	cleanupExpiredSkillPackageRoots(skillUploadDir, activeRoots, time.Now())
 }
 
+// scheduleSkillPackageCleanup gives every package mutation a new generation.
+// A stale timer cannot sweep roots after a newer mutation has changed the
+// database owner; the eventual sweep re-reads active roots before deletion.
 func (s *SkillService) scheduleSkillPackageCleanup() {
 	s.cleanupMu.Lock()
 	defer s.cleanupMu.Unlock()

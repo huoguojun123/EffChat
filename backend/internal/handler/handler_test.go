@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/huoguojun123/EffChat/internal/middleware"
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 	"github.com/huoguojun123/EffChat/internal/service"
 	"github.com/huoguojun123/EffChat/internal/testutil"
@@ -83,6 +84,24 @@ func setupTestEnv(t *testing.T) *testEnv {
 	if err := modelRepo.Upsert(&model.Model{ID: "gpt-4o-mini", DisplayName: "Handler test model", Provider: channelKey, ContextWindow: 4096, MaxOutput: 1024, Enabled: true, ThinkingFormat: "auto"}); err != nil {
 		t.Fatalf("seed test model: %v", err)
 	}
+	previousModel := modelbank.Get("gpt-4o-mini")
+	modelbank.Register(&modelbank.ModelInfo{
+		ID:             "gpt-4o-mini",
+		DisplayName:    "Handler test model",
+		Provider:       channelKey,
+		Enabled:        true,
+		ThinkingFormat: "auto",
+		Capabilities: modelbank.ModelCapabilities{
+			ContextWindow: 4096,
+			MaxOutput:     1024,
+		},
+	})
+	if previousModel != nil {
+		t.Cleanup(func() { modelbank.Register(previousModel) })
+	}
+	if err := configRepo.Update("default_model_id", json.RawMessage(`"gpt-4o-mini"`)); err != nil {
+		t.Fatalf("seed test default model: %v", err)
+	}
 
 	authService := service.NewAuthService(userRepo, "test-handler-secret")
 	sessionService := service.NewSessionService(sessionRepo, messageRepo, configRepo, sessionFolderRepo)
@@ -100,6 +119,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	auth := r.Group("/api/v1")
 	auth.Use(middleware.AuthMiddleware(authService))
 	{
+		auth.GET("/sessions/readiness", SessionCreateReadinessHandler(sessionService))
 		auth.POST("/sessions", CreateSessionHandler(sessionService))
 		auth.GET("/sessions", ListSessionsHandler(sessionService))
 		auth.GET("/sessions/:id", GetSessionHandler(sessionService))

@@ -5,7 +5,7 @@ EffChat 是一个面向小团队自托管的 AI agent workbench。目标是比�
 [GitHub 仓库](https://github.com/huoguojun123/EffChat)
 
 > [!WARNING]
-> EffChat 当前正在准备 `v0.3.4-beta.1` 测试版；release branch 已锁定，tag 尚未创建。数据迁移、配置兼容性和公开 API 仍可能变化；升级前请使用 [Docker Compose 部署文档](docs/03-实施计划/Docker-Compose-部署.md#备份与隔离恢复) 中的一致备份入口，不要复制运行中的 PostgreSQL 数据目录。
+> `v0.3.4-beta.1` 已作为测试版发布。它仍处于 beta 阶段，数据迁移、配置兼容性和公开 API 仍可能变化；升级前请使用 [Docker Compose 部署文档](docs/03-实施计划/Docker-Compose-部署.md#备份与隔离恢复) 中的一致备份入口，不要复制运行中的 PostgreSQL 数据目录。
 
 ## v0.3.4-beta.1 定位
 
@@ -44,6 +44,17 @@ scripts/docker-build.sh up
 
 详细部署步骤见 [Docker-Compose-部署.md](docs/03-实施计划/Docker-Compose-部署.md)。
 管理员使用步骤见 [管理员配置指南.md](docs/03-实施计划/管理员配置指南.md)。
+
+已有 `.env.docker` 和数据目录、只希望从 Docker Hub 拉取测试版镜像时，可使用
+registry 部署模板：
+
+```bash
+docker compose --env-file .env.docker -f docker-compose.registry.yml pull
+docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
+```
+
+该模板不在部署机编译应用，但仍需要保留同一版本源码中的
+`backend/migrations/` 作为迁移输入；具体目录结构和升级边界见部署文档。
 
 ## 安全与贡献
 

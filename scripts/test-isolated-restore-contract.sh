@@ -168,7 +168,7 @@ grep -Fqx 'schema=051_fixture.sql' "$restore_root/restore-manifest"
 grep -Fqx 'unreferenced_storage_files=0' "$restore_root/restore-manifest"
 test -f "$restore_root/data/storage/attachments/originals/1/example.txt"
 grep -Eq 'project=effchat-restore-[0-9]+-[0-9]+ network=effchat-restore-[0-9]+-[0-9]+_net data=.*/restore-success/data args=.* up -d --no-build --wait' "$FAKE_DOCKER_LOG"
-if rg -n 'down -v|down --volumes' "$FAKE_DOCKER_LOG" >/dev/null; then
+if grep -E -n 'down -v|down --volumes' "$FAKE_DOCKER_LOG" >/dev/null; then
   echo "Restore used a volume-destructive Compose command." >&2
   exit 1
 fi

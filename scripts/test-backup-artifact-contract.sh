@@ -92,7 +92,7 @@ grep -Fqx 'migration_count=2' "$backup_dir/manifest"
 grep -Eq '^migration_manifest_sha256=[0-9a-f]{64}$' "$backup_dir/manifest"
 grep -Fq $'attachments/originals/1/example.txt\t' "$backup_dir/storage.manifest.tsv"
 grep -Fq $'fonts/example.woff2\t' "$backup_dir/storage.manifest.tsv"
-if rg -n 'test-password|test-jwt' "$backup_dir" >/dev/null; then
+if grep -R -E -n 'test-password|test-jwt' "$backup_dir" >/dev/null; then
   echo "Backup artifact leaked deployment secrets." >&2
   exit 1
 fi

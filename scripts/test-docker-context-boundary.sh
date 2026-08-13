@@ -81,7 +81,7 @@ for relative in "${dangerous[@]}"; do
   }
 done
 
-if rg -n 'synthetic private sentinel' "$output" >/dev/null; then
+if grep -R -n 'synthetic private sentinel' "$output" >/dev/null; then
   echo "Private sentinel content survived under an unexpected path." >&2
   exit 1
 fi

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -141,23 +142,27 @@ func (r *FontRepository) enabledFontOrNil(id *int64) *model.FontAsset {
 }
 
 type fontSelectionQueryer interface {
-	QueryRow(query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func getSelectedIDs(queryer fontSelectionQueryer) (ChatFontSelection, error) {
-	legacyID, _, err := getSelectedFontValue(queryer, selectedChatFontConfigKey)
+	return getSelectedIDsContext(context.Background(), queryer)
+}
+
+func getSelectedIDsContext(ctx context.Context, queryer fontSelectionQueryer) (ChatFontSelection, error) {
+	legacyID, _, err := getSelectedFontValue(ctx, queryer, selectedChatFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	chineseID, chinesePresent, err := getSelectedFontValue(queryer, selectedChatChineseFontConfigKey)
+	chineseID, chinesePresent, err := getSelectedFontValue(ctx, queryer, selectedChatChineseFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	latinID, latinPresent, err := getSelectedFontValue(queryer, selectedChatLatinFontConfigKey)
+	latinID, latinPresent, err := getSelectedFontValue(ctx, queryer, selectedChatLatinFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	codeID, codePresent, err := getSelectedFontValue(queryer, selectedChatCodeFontConfigKey)
+	codeID, codePresent, err := getSelectedFontValue(ctx, queryer, selectedChatCodeFontConfigKey)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
@@ -176,18 +181,18 @@ func getSelectedIDs(queryer fontSelectionQueryer) (ChatFontSelection, error) {
 }
 
 func getSelectedIDByKey(queryer fontSelectionQueryer, key string) (*int64, error) {
-	id, _, err := getSelectedFontValue(queryer, key)
+	id, _, err := getSelectedFontValue(context.Background(), queryer, key)
 	return id, err
 }
 
-func getSelectedFontValue(queryer fontSelectionQueryer, key string) (*int64, bool, error) {
+func getSelectedFontValue(ctx context.Context, queryer fontSelectionQueryer, key string) (*int64, bool, error) {
 	var raw json.RawMessage
-	err := queryer.QueryRow(`SELECT value FROM system_config WHERE key = $1`, key).Scan(&raw)
+	err := queryer.QueryRowContext(ctx, `SELECT value FROM system_config WHERE key = $1`, key).Scan(&raw)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to get selected font: %w", err)
+		return nil, false, fmt.Errorf("failed to get selected font: %w", fontContextError(ctx, err))
 	}
 	if string(raw) == "null" {
 		return nil, true, nil
@@ -259,10 +264,14 @@ func setSelectedIDByKeyTx(tx *sql.Tx, key string, id *int64) error {
 }
 
 func clearSelectedFontTx(tx *sql.Tx, id int64) error {
+	return clearSelectedFontTxContext(context.Background(), tx, id)
+}
+
+func clearSelectedFontTxContext(ctx context.Context, tx *sql.Tx, id int64) error {
 	// The predicate is the ownership fence: a concurrent selection of another
 	// font survives, while every slot still owned by this asset is cleared in
 	// the same transaction as disable/delete.
-	_, err := tx.Exec(`
+	_, err := tx.ExecContext(ctx, `
 		UPDATE system_config
 		SET value = 'null'::jsonb, config_type = 'number', updated_at = NOW()
 		WHERE key IN ($1, $2, $3, $4)
@@ -270,7 +279,7 @@ func clearSelectedFontTx(tx *sql.Tx, id int64) error {
 	`, selectedChatFontConfigKey, selectedChatChineseFontConfigKey,
 		selectedChatLatinFontConfigKey, selectedChatCodeFontConfigKey, id)
 	if err != nil {
-		return fmt.Errorf("failed to clear selected font: %w", err)
+		return fmt.Errorf("failed to clear selected font: %w", fontContextError(ctx, err))
 	}
 	return nil
 }

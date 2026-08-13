@@ -148,9 +148,9 @@ func (r *FontRepository) Update(font *model.FontAsset) (ChatFontSelection, error
 func (r *FontRepository) PatchContext(ctx context.Context, id int64, patch FontPatch) (*model.FontAsset, ChatFontSelection, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, ChatFontSelection{}, fmt.Errorf("begin font patch: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("begin font patch: %w", fontContextError(ctx, err))
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	font, err := scanFontRow(tx.QueryRowContext(ctx, `
 		SELECT id, display_name, family_name, file_name, file_path, mime_type,
 		       file_size, checksum, weight, style, enabled, created_by,
@@ -161,7 +161,7 @@ func (r *FontRepository) PatchContext(ctx context.Context, id int64, patch FontP
 		if err == sql.ErrNoRows {
 			return nil, ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
 		}
-		return nil, ChatFontSelection{}, fmt.Errorf("get font for patch: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("get font for patch: %w", fontContextError(ctx, err))
 	}
 	if patch.DisplayName != nil {
 		font.DisplayName = strings.TrimSpace(*patch.DisplayName)
@@ -186,7 +186,7 @@ func (r *FontRepository) PatchContext(ctx context.Context, id int64, patch FontP
 		style = $4, enabled = $5, updated_at = NOW() WHERE id = $6 AND deleted_at IS NULL
 	`, font.DisplayName, font.FamilyName, font.Weight, font.Style, font.Enabled, font.ID)
 	if err != nil {
-		return nil, ChatFontSelection{}, fmt.Errorf("patch font: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("patch font: %w", fontContextError(ctx, err))
 	}
 	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
 		if err != nil {
@@ -195,18 +195,25 @@ func (r *FontRepository) PatchContext(ctx context.Context, id int64, patch FontP
 		return nil, ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
 	}
 	if !font.Enabled {
-		if err := clearSelectedFontTx(tx, font.ID); err != nil {
+		if err := clearSelectedFontTxContext(ctx, tx, font.ID); err != nil {
 			return nil, ChatFontSelection{}, err
 		}
 	}
-	selection, err := getSelectedIDs(tx)
+	selection, err := getSelectedIDsContext(ctx, tx)
 	if err != nil {
 		return nil, ChatFontSelection{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, ChatFontSelection{}, fmt.Errorf("commit font patch: %w", err)
+		return nil, ChatFontSelection{}, fmt.Errorf("commit font patch: %w", fontContextError(ctx, err))
 	}
 	return font, selection, nil
+}
+
+func fontContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func scanFontRow(row *sql.Row) (*model.FontAsset, error) {

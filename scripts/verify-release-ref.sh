@@ -34,6 +34,7 @@ required_checks=(
   "Frontend"
   "Python extractor"
   "PostgreSQL integration"
+  "Isolated Playwright"
   "Compose and containers"
   "Gitleaks"
 )

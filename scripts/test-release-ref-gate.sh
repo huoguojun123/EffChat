@@ -21,6 +21,7 @@ printf '%s\tcompleted\tsuccess\n' \
   "Frontend" \
   "Python extractor" \
   "PostgreSQL integration" \
+  "Isolated Playwright" \
   "Compose and containers" \
   "Gitleaks" >"${checks_file}"
 
@@ -43,9 +44,9 @@ if run_gate "${feature_sha}" "${checks_file}"; then
   exit 1
 fi
 
-head -n 5 "${checks_file}" >"${tmp_dir}/missing-check.tsv"
+grep -v '^Isolated Playwright\t' "${checks_file}" >"${tmp_dir}/missing-check.tsv"
 if run_gate "${main_sha}" "${tmp_dir}/missing-check.tsv"; then
-  echo "missing required check unexpectedly passed" >&2
+  echo "missing isolated Playwright check unexpectedly passed" >&2
   exit 1
 fi
 

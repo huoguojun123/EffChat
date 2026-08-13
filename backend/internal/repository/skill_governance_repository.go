@@ -190,12 +190,12 @@ func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, id string,
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("begin governed Skill metadata update: %w", err)
+		return nil, nil, fmt.Errorf("begin governed Skill metadata update: %w", skillContextError(ctx, err))
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	before, err := skillGovernanceStateForUpdateTx(ctx, tx, id, mutation.ActorUserID, false)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, skillContextError(ctx, err)
 	}
 	var state skillGovernanceState
 	if err := json.Unmarshal(before, &state); err != nil {
@@ -215,7 +215,7 @@ func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, id string,
 		if err == sql.ErrNoRows {
 			return nil, nil, fmt.Errorf("skill not found: %w", ErrNotFound)
 		}
-		return nil, nil, fmt.Errorf("update governed Skill metadata: %w", err)
+		return nil, nil, fmt.Errorf("update governed Skill metadata: %w", skillContextError(ctx, err))
 	}
 	after := marshalSkillGovernanceState(skill, state.ImportRecordID)
 	event := &model.GovernanceEvent{
@@ -224,10 +224,10 @@ func (r *SkillRepository) UpdateMetadataGoverned(ctx context.Context, id string,
 		BeforeState: before, AfterState: after, SkillImportRecordID: &state.ImportRecordID,
 	}
 	if err := InsertGovernanceEventTx(ctx, tx, event); err != nil {
-		return nil, nil, fmt.Errorf("audit governed Skill metadata update: %w", err)
+		return nil, nil, fmt.Errorf("audit governed Skill metadata update: %w", skillContextError(ctx, err))
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("commit governed Skill metadata update: %w", err)
+		return nil, nil, fmt.Errorf("commit governed Skill metadata update: %w", skillContextError(ctx, err))
 	}
 	return skill, event, nil
 }
@@ -420,7 +420,7 @@ func getSkillPackageForUpdateTx(ctx context.Context, tx *sql.Tx, id string) (*mo
 		return nil, nil, fmt.Errorf("skill not found: %w", ErrNotFound)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("get skill for update: %w", err)
+		return nil, nil, fmt.Errorf("get skill for update: %w", skillContextError(ctx, err))
 	}
 	files, err := listSkillFilesTx(ctx, tx, id)
 	if err != nil {

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 LIMIT_ENVSH="$ROOT/frontend/docker-entrypoint.d/15-effchat-upload-limit.envsh"
 
 render_limit() {

@@ -44,13 +44,14 @@ if run_gate "${feature_sha}" "${checks_file}"; then
   exit 1
 fi
 
-grep -v '^Isolated Playwright\t' "${checks_file}" >"${tmp_dir}/missing-check.tsv"
+awk -F '\t' '$1 != "Isolated Playwright"' \
+  "${checks_file}" >"${tmp_dir}/missing-check.tsv"
 if run_gate "${main_sha}" "${tmp_dir}/missing-check.tsv"; then
   echo "missing isolated Playwright check unexpectedly passed" >&2
   exit 1
 fi
 
-sed 's/^Frontend\tcompleted\tsuccess$/Frontend\tcompleted\tfailure/' \
+awk -F '\t' 'BEGIN { OFS = FS } $1 == "Frontend" { $3 = "failure" } { print }' \
   "${checks_file}" >"${tmp_dir}/failed-check.tsv"
 if run_gate "${main_sha}" "${tmp_dir}/failed-check.tsv"; then
   echo "failed required check unexpectedly passed" >&2

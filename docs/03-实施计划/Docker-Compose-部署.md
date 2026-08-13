@@ -2,6 +2,19 @@
 
 本文档描述全量 Docker 部署路径：PostgreSQL 17 开新库，`migrate` 按 `backend/migrations/production/` 记录并执行生产迁移，后端和前端分别构建为镜像。Compose 会把 `web`、`backend`、`postgres` 放在同一个 Docker 网络里；浏览器访问前端容器，前端 Nginx 在内部网络把 `/api/` 转发给 `backend:8080`。数据库和受管存储都位于 `DATA_DIR`，但运行中的 PostgreSQL 数据目录不能用普通目录复制充当备份。
 
+## Registry 镜像部署
+
+需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用
+`docker-compose.registry.yml`。该模板保留本文件中的环境变量、端口、网络、
+PostgreSQL 和 storage 挂载；只把三个应用服务的 `build`/`:local` 替换为
+`${DOCKERHUB_NAMESPACE:-gjhuo}` 下的 `${EFFCHAT_VERSION:-v0.3.4-beta.1}` 镜像。
+
+应用镜像不携带迁移 SQL。部署目录必须同时保留由同一 public release 导出的
+`backend/migrations/`（包含 `build_migration_script.sh`、`init.sql`、`legacy-checksums.txt` 和
+`production/*.sql`），并通过 `MIGRATIONS_DIR` 挂载给一次性 `migrate` 服务。这样源码可以
+归档，migration 仍有精确、可审计和可回滚的输入；不要把运行中的数据库目录或 storage
+目录作为 migration 来源。
+
 ## 组件
 
 - `postgres`：PostgreSQL 17，数据写入 `${DATA_DIR:-../data}/postgres`。

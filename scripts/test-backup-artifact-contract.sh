@@ -149,6 +149,7 @@ if FAKE_DUMP_FAIL=1 run_backup "$failed_root" backup >"$TEST_ROOT/dump-failure.l
 fi
 test -d "$failed_root"
 test -z "$(find "$failed_root" -mindepth 1 -maxdepth 1 -print -quit)"
+test ! -e "$failed_root/.effchat-backup.lock"
 grep -Fq ' stop backend web py-extractor' "$FAKE_DOCKER_LOG"
 grep -Fq ' start backend web py-extractor' "$FAKE_DOCKER_LOG"
 
@@ -157,6 +158,8 @@ if FAKE_STOP_FAIL=1 run_backup "$failed_root" backup >"$TEST_ROOT/stop-failure.l
   echo "Expected application stop failure." >&2
   exit 1
 fi
+test -z "$(find "$failed_root" -mindepth 1 -maxdepth 1 -print -quit)"
+test ! -e "$failed_root/.effchat-backup.lock"
 grep -Fq ' stop backend web py-extractor' "$FAKE_DOCKER_LOG"
 grep -Fq ' start backend web py-extractor' "$FAKE_DOCKER_LOG"
 

@@ -151,7 +151,7 @@ health_value() {
     "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
 }
 
-backup() {
+backup() (
   require_env_file
   local data_root backup_root requested_backup_root timestamp target temp db_dump storage_archive storage_manifest migration_manifest
   data_root="$(data_dir)"
@@ -281,7 +281,7 @@ backup() {
   temp=""
   trap - EXIT
   echo "Backup created: $target"
-}
+)
 
 verify_backup() {
   local backup_dir="$1" manifest db_dump storage_archive storage_manifest migration_manifest expected actual expected_count actual_count entry relative

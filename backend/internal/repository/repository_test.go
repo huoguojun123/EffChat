@@ -42,14 +42,15 @@ func claimRepositoryOCRFile(t *testing.T, db *sql.DB, fileID int64) *model.File 
 
 func claimRepositoryOCRFileWithProvider(t *testing.T, db *sql.DB, fileID int64, provider string) *model.File {
 	t.Helper()
+	now := time.Now()
 	if _, err := db.Exec(`
 		UPDATE files
-		SET ocr_provider = $2, ocr_lease_until = NULL, ocr_next_retry_at = NOW()
+		SET ocr_provider = $2, ocr_lease_until = NULL, ocr_next_retry_at = $3
 		WHERE id = $1
-	`, fileID, provider); err != nil {
+	`, fileID, provider, now); err != nil {
 		t.Fatalf("prepare OCR claim: %v", err)
 	}
-	claimed, err := NewFileRepository(db).ClaimRecoverableOCRTasks(provider, time.Now(), time.Minute, 1)
+	claimed, err := NewFileRepository(db).ClaimRecoverableOCRTasks(provider, now, time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim OCR file: %v", err)
 	}

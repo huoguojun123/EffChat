@@ -536,20 +536,26 @@ func TestFileRepository_ExpireStaleOCROriginalsHonorsContextCancellation(t *test
 	if err := repo.Create(file); err != nil {
 		t.Fatal(err)
 	}
+	now := time.Now()
+	if _, err := db.Exec("UPDATE files SET created_at = $2 WHERE id = $1", file.ID, now.Add(-25*time.Hour)); err != nil {
+		t.Fatalf("age OCR file: %v", err)
+	}
 	blocker, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("begin blocker transaction: %v", err)
 	}
-	defer blocker.Rollback()
-	var lockedID int64
-	if err := blocker.QueryRowContext(context.Background(), `SELECT id FROM files WHERE id = $1 FOR UPDATE`, file.ID).Scan(&lockedID); err != nil {
-		t.Fatalf("lock OCR file row: %v", err)
+	defer func() { _ = blocker.Rollback() }()
+	if _, err := blocker.ExecContext(context.Background(), `LOCK TABLE files IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock files table: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err = repo.ExpireStaleOCROriginalsContext(ctx, time.Now().Add(-24*time.Hour), time.Now(), 10)
+	_, err = repo.ExpireStaleOCROriginalsContext(ctx, now.Add(-24*time.Hour), now, 10)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expire OCR error = %v, want context deadline", err)
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatalf("release files table lock: %v", err)
 	}
 	var storedSource *string
 	if err := db.QueryRow("SELECT ocr_source_path FROM files WHERE id = $1", file.ID).Scan(&storedSource); err != nil {

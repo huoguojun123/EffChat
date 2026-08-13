@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { providerLabels } from "./AdminModelsPanel.constants"
 import { Select } from "./AdminModelsPanel.controls"
-import { catalogSelectionKey } from "./AdminModelsPanel.helpers"
+import { catalogSelectionKey, lifecycleStatusLabel } from "./AdminModelsPanel.helpers"
 
 interface AdminModelCatalogMatcherProps {
   catalogQuery: string
@@ -37,12 +37,12 @@ export function AdminModelCatalogMatcher({
         </Button>
       </div>
       <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)_auto]">
-        <Input type="search" name="fchat-model-catalog-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={catalogQuery} onChange={(e) => setCatalogQuery(e.target.value)} placeholder="搜索官方模型" />
+        <Input type="search" name="effchat-model-catalog-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={catalogQuery} onChange={(e) => setCatalogQuery(e.target.value)} placeholder="搜索官方模型" aria-label="搜索官方模型" />
         <Select value={selectedCatalogKey} onChange={setSelectedCatalogKey}>
           <option value="">不匹配</option>
           {filteredCatalogModels.map((model) => (
             <option key={`${model.provider}:${model.id}`} value={catalogSelectionKey(model)}>
-              {providerLabels[model.provider] || model.provider} · {model.display_name || model.id} · {model.id}
+              {providerLabels[model.provider] || model.provider} · {model.display_name || model.id} · {lifecycleStatusLabel(model.lifecycle_status)} · {model.id}
             </option>
           ))}
         </Select>

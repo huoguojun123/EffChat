@@ -12,11 +12,11 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 // TestMessageToData_FieldNamesAlignWithDBColumns 验证序列化出的 JSON 字段名
@@ -514,6 +514,23 @@ func TestCanonicalizeProducedMessages_ReordersParallelToolResults(t *testing.T) 
 	}
 }
 
+func TestCanonicalizePartialProducedMessagesDropsMetadataOnlyAssistant(t *testing.T) {
+	produced := []map[string]interface{}{
+		{"role": "assistant", "content": "", "response_meta": map[string]interface{}{"usage": map[string]interface{}{"prompt_tokens": 5}}},
+	}
+	if got := canonicalizePartialProducedMessages(produced); len(got) != 0 {
+		t.Fatalf("metadata-only partial messages = %#v, want none", got)
+	}
+
+	meaningful := []map[string]interface{}{
+		{"role": "assistant", "content": "", "reasoning_content": "partial thought"},
+	}
+	got := canonicalizePartialProducedMessages(meaningful)
+	if len(got) != 1 || got[0]["reasoning_content"] != "partial thought" {
+		t.Fatalf("meaningful reasoning partial = %#v", got)
+	}
+}
+
 // TestConvertToEinoMessages_InvalidJSON 验证坏数据返回错误而非 panic。
 func TestConvertToEinoMessages_InvalidJSON(t *testing.T) {
 	_, err := convertToEinoMessages([]*model.Message{{ID: 3, MessageData: []byte("{not json")}}, true)
@@ -778,7 +795,7 @@ func TestConsumeAssistantEvent_StreamingReassembly(t *testing.T) {
 	}
 
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, emit)
+	full, err := a.consumeAssistantEvent(t.Context(), mv, emit)
 	if err != nil {
 		t.Fatalf("consumeAssistantEvent: %v", err)
 	}
@@ -856,6 +873,47 @@ func TestResolveClaudeMaxTokensProvidesPositiveDefault(t *testing.T) {
 	}
 }
 
+func TestTaskModelRequestClonesAndOwnsOutputLimit(t *testing.T) {
+	original := &ChatRequest{
+		UserID:          11,
+		SessionID:       22,
+		ModelID:         "gpt-5.6-terra",
+		Provider:        "openai",
+		MaxTokens:       64000,
+		ModelMaxOutput:  2048,
+		Reasoning:       true,
+		ThinkingFormat:  string(modelbank.ThinkingFormatOpenAIGPT56),
+		ThinkingEffort:  string(modelbank.ThinkingEffortHigh),
+		RuntimeResolved: true,
+	}
+
+	got := taskModelRequest(original, 4096)
+	if got == original {
+		t.Fatal("taskModelRequest must clone the active chat request")
+	}
+	if got.UserID != original.UserID || got.SessionID != original.SessionID || got.ModelID != original.ModelID || got.Provider != original.Provider || got.RuntimeResolved != original.RuntimeResolved {
+		t.Fatalf("runtime identity changed: %#v", got)
+	}
+	if got.MaxTokens != original.ModelMaxOutput {
+		t.Fatalf("MaxTokens = %d, want model cap %d", got.MaxTokens, original.ModelMaxOutput)
+	}
+	if got.Reasoning != original.Reasoning || got.ThinkingFormat != original.ThinkingFormat || got.ThinkingEffort != original.ThinkingEffort {
+		t.Fatalf("task thinking fields changed: reasoning:%t format:%q effort:%q", got.Reasoning, got.ThinkingFormat, got.ThinkingEffort)
+	}
+	if original.MaxTokens != 64000 || !original.Reasoning || original.ThinkingFormat != string(modelbank.ThinkingFormatOpenAIGPT56) {
+		t.Fatalf("original request was mutated: %#v", original)
+	}
+
+	requestedSmaller := taskModelRequest(&ChatRequest{ModelMaxOutput: 2048}, 512)
+	if requestedSmaller.MaxTokens != 512 {
+		t.Fatalf("smaller task limit = %d, want 512", requestedSmaller.MaxTokens)
+	}
+	unknownModelLimit := taskModelRequest(&ChatRequest{}, 512)
+	if unknownModelLimit.MaxTokens != 512 {
+		t.Fatalf("unknown model limit changed task limit to %d", unknownModelLimit.MaxTokens)
+	}
+}
+
 func TestTemperaturePointerPreservesExplicitZero(t *testing.T) {
 	zero := 0.0
 	if got := ptrFloat32(nil); got != nil {
@@ -897,7 +955,7 @@ func TestConsumeAssistantEvent_InlineThinkSplit(t *testing.T) {
 	}
 
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, emit)
+	full, err := a.consumeAssistantEvent(t.Context(), mv, emit)
 	if err != nil {
 		t.Fatalf("consumeAssistantEvent: %v", err)
 	}
@@ -936,7 +994,7 @@ func TestConsumeAssistantEvent_NonStreaming(t *testing.T) {
 		return nil
 	}
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, emit)
+	full, err := a.consumeAssistantEvent(t.Context(), mv, emit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +1013,7 @@ func TestConsumeAssistantEvent_EmitCancelStopsStream(t *testing.T) {
 		Role:        schema.Assistant,
 	}
 	a := &EinoAgent{}
-	full, err := a.consumeAssistantEvent(mv, func(string, interface{}) error {
+	full, err := a.consumeAssistantEvent(t.Context(), mv, func(string, interface{}) error {
 		return context.Canceled
 	})
 	if err != context.Canceled {
@@ -976,7 +1034,7 @@ func TestConsumeAssistantEvent_CanceledStreamReturnsPartialMessage(t *testing.T)
 	mv := &adk.MessageVariant{IsStreaming: true, MessageStream: reader, Role: schema.Assistant}
 
 	var reset bool
-	full, err := (&EinoAgent{}).consumeAssistantEvent(mv, func(event string, _ interface{}) error {
+	full, err := (&EinoAgent{}).consumeAssistantEvent(t.Context(), mv, func(event string, _ interface{}) error {
 		reset = reset || event == streaming.EventAttemptReset
 		return nil
 	})
@@ -1002,7 +1060,7 @@ func TestConsumeAssistantEvent_RetryResetsPartialAttempt(t *testing.T) {
 
 	var events []string
 	var reset streaming.AttemptResetEvent
-	full, err := (&EinoAgent{}).consumeAssistantEvent(mv, func(event string, data interface{}) error {
+	full, err := (&EinoAgent{}).consumeAssistantEvent(t.Context(), mv, func(event string, data interface{}) error {
 		events = append(events, event)
 		if event == streaming.EventAttemptReset {
 			reset = data.(streaming.AttemptResetEvent)
@@ -1033,7 +1091,7 @@ func TestConsumeAssistantEvent_TerminalErrorPreservesPartialAttempt(t *testing.T
 	mv := &adk.MessageVariant{IsStreaming: true, MessageStream: reader, Role: schema.Assistant}
 
 	var reset bool
-	full, err := (&EinoAgent{}).consumeAssistantEvent(mv, func(event string, data interface{}) error {
+	full, err := (&EinoAgent{}).consumeAssistantEvent(t.Context(), mv, func(event string, data interface{}) error {
 		if event == streaming.EventAttemptReset {
 			reset = true
 		}

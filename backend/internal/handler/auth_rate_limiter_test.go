@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/config"
 )
 
 func TestAuthRateLimiterBlocksAndResets(t *testing.T) {

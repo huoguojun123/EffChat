@@ -64,5 +64,5 @@ function legacyKey(kind: "mermaid" | "graphviz", source: string) {
   for (let index = 0; index < source.length; index += 1) {
     hash = ((hash << 5) + hash) ^ source.charCodeAt(index)
   }
-  return `fchat:diagram:v1:${kind}:${source.length}:${(hash >>> 0).toString(36)}`
+  return `effchat:diagram:v1:${kind}:${source.length}:${(hash >>> 0).toString(36)}`
 }

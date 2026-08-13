@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -72,6 +73,57 @@ func TestNormalizeRedactsSecretsInDoNotRemember(t *testing.T) {
 	}
 	if !strings.Contains(out, "不要保存临时验证码") {
 		t.Fatalf("expected generic do-not-remember category, got: %q", out)
+	}
+}
+
+func TestNormalizeRejectsHighConfidenceSecretsOutsideDoNotRemember(t *testing.T) {
+	tests := []string{
+		"password=fixture-password-42",
+		"api_key: sk-test-secret-value",
+		"Authorization: Bearer fixture-bearer-token-123",
+		"github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99",
+		"-----BEGIN PRIVATE KEY-----\nZmFrZS1wcml2YXRlLWtleQ==\n-----END PRIVATE KEY-----",
+	}
+	for _, secret := range tests {
+		content := "## Project Context\n- " + secret
+		_, _, err := Normalize(content)
+		if !errors.Is(err, ErrSensitiveValue) {
+			t.Fatalf("Normalize(%q) error = %v, want ErrSensitiveValue", secret, err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked rejected secret %q: %v", secret, err)
+		}
+	}
+}
+
+func TestNormalizeAllowsOrdinaryIdentifiers(t *testing.T) {
+	content := strings.Join([]string{
+		"## Project Context",
+		"- Release ticket EC-2026-041 remains open.",
+		"- Trace ID 550e8400-e29b-41d4-a716-446655440000.",
+		"- Commit 0123456789abcdef0123456789abcdef01234567 passed.",
+		"- Greenhouse door reference 7741 is a public location code.",
+	}, "\n")
+	if _, _, err := Normalize(content); err != nil {
+		t.Fatalf("ordinary identifiers were rejected: %v", err)
+	}
+}
+
+func TestRedactSensitiveValuesProtectsLegacyPromptContent(t *testing.T) {
+	content := strings.Join([]string{
+		"## Decisions",
+		"- password=fixture-password-42",
+		"- Authorization: Bearer fixture-bearer-token-123",
+		"- Keep project EC-2026-041.",
+	}, "\n")
+	redacted := RedactSensitiveValues(content)
+	for _, leaked := range []string{"fixture-password-42", "fixture-bearer-token-123"} {
+		if strings.Contains(redacted, leaked) {
+			t.Fatalf("redacted memory leaked %q: %s", leaked, redacted)
+		}
+	}
+	if !strings.Contains(redacted, "EC-2026-041") || !strings.Contains(redacted, SensitiveValuePlaceholder) {
+		t.Fatalf("redaction damaged ordinary content or omitted placeholder: %s", redacted)
 	}
 }
 

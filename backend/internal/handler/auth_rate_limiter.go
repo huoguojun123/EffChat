@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/huoguojun123/effchat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/config"
 )
 
 const (

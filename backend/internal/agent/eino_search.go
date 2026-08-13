@@ -3,7 +3,7 @@ package agent
 import (
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 )
 
 func buildSearchInstruction(systemPrompt string, searchDecision modelbank.SearchDecision, mountedTools map[string]bool) string {

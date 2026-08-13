@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestMessageRepository_MarkAsCompressed_And_Filter(t *testing.T) {

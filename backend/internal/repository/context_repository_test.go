@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type failedMessageRows struct {
@@ -28,8 +30,23 @@ func TestContextAwareRepositoriesHonorCancellation(t *testing.T) {
 		{name: "user", run: func() error { _, err := NewUserRepository(db).GetByIDContext(ctx, 1); return err }},
 		{name: "messages", run: func() error { _, err := NewMessageRepository(db).ListBySessionContext(ctx, 1); return err }},
 		{name: "skills", run: func() error { _, err := NewSkillRepository(db).ListContext(ctx, false); return err }},
+		{name: "ai channel", run: func() error { _, err := NewChannelRepository(db).GetAIChannelContext(ctx, "test"); return err }},
+		{name: "ai channels", run: func() error { _, err := NewChannelRepository(db).ListAIChannelsContext(ctx, false); return err }},
+		{name: "external services", run: func() error { _, err := NewChannelRepository(db).ListExternalServicesContext(ctx, false); return err }},
+		{name: "tool configs", run: func() error { _, err := NewToolConfigRepository(db).ListContext(ctx); return err }},
 		{name: "attachments", run: func() error {
 			_, err := NewFileRepository(db).GetActiveFilesForSessionContext(ctx, 1, 1, []int64{1})
+			return err
+		}},
+		{name: "file create", run: func() error {
+			return NewFileRepository(db).CreateContext(ctx, &model.File{UserID: 1, FileName: "cancelled.txt", FilePath: "storage/cancelled.txt", FileType: "text/plain", FileSize: 1})
+		}},
+		{name: "file count", run: func() error {
+			_, err := NewFileRepository(db).CountActiveBySessionContext(ctx, 1, 1)
+			return err
+		}},
+		{name: "file duplicate", run: func() error {
+			_, err := NewFileRepository(db).FindActiveByHashInSessionContext(ctx, 1, 1, "hash", 1)
 			return err
 		}},
 	}
@@ -49,6 +66,16 @@ func TestContextAwareRepositoriesHonorCancellation(t *testing.T) {
 	})
 	t.Run("config int", func(t *testing.T) {
 		if _, err := configRepo.GetIntContext(ctx, "title_generation_trigger", 2); !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("config bool", func(t *testing.T) {
+		if _, err := configRepo.GetBoolContext(ctx, "extract_summary_enabled", true); !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("memory limits", func(t *testing.T) {
+		if _, err := configRepo.GetMemoryLimitsContext(ctx); !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context.Canceled", err)
 		}
 	})

@@ -1,4 +1,4 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -55,11 +55,13 @@ import {
   servicePresets,
 } from "./AdminChannelsPanel.constants";
 import { Field, Toggle } from "./AdminModelsPanel.controls";
+import { EditorOwnership } from "./editorOwnership";
 
 interface Props {
   services: ExternalService[];
   setServices: Dispatch<SetStateAction<ExternalService[]>>;
   setError: (error: string) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 type ChainKind = Exclude<ExternalServiceKind, "ocr">;
@@ -111,6 +113,7 @@ export function AdminExternalServiceChain({
   services,
   setServices,
   setError,
+  onDirtyChange,
 }: Props) {
   const [draft, setDraft] = useState<ExternalServiceInput>(() =>
     emptyServiceDraft("tavily_search", 10),
@@ -124,6 +127,13 @@ export function AdminExternalServiceChain({
     null,
   );
   const [deletingKey, setDeletingKey] = useState("");
+  const [editorOwner] = useState(() => new EditorOwnership());
+  const [deleteOwner] = useState(() => new EditorOwnership());
+  const mountedRef = useRef(true);
+  const panelDirty = editorOwner.isDirty();
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, {
@@ -143,6 +153,30 @@ export function AdminExternalServiceChain({
     [services],
   );
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      editorOwner.invalidate();
+      deleteOwner.invalidate();
+    };
+  }, [deleteOwner, editorOwner]);
+
+  function changeDraft(update: SetStateAction<ExternalServiceInput>) {
+    editorOwner.change();
+    setTestMessage("");
+    setDraft(update);
+  }
+
+  function closeEditor() {
+    if (editorOwner.isDirty() && !window.confirm("放弃当前外部服务的未保存修改？")) return;
+    editorOwner.invalidate();
+    setSaving(false);
+    setTesting(false);
+    setTestMessage("");
+    setOpen(false);
+  }
+
   function openEditor(
     service?: ExternalService,
     key?: string,
@@ -159,18 +193,25 @@ export function AdminExternalServiceChain({
         ? serviceDraftFrom(service)
         : emptyServiceDraft(nextKey, nextOrder),
     );
+    editorOwner.activate(nextKey);
+    setSaving(false);
+    setTesting(false);
     setTestMessage("");
     setOpen(true);
   }
 
   async function saveService() {
+    const currentDraft = draft;
+    const operation = editorOwner.beginOperation();
     setSaving(true);
     setError("");
     try {
       const saved = await adminApi.saveExternalService({
-        ...draft,
-        api_key: draft.api_key?.trim() || undefined,
+        ...currentDraft,
+        api_key: currentDraft.api_key?.trim() || undefined,
       });
+      // Persisted mutations always converge the shared chain; only dialog-local
+      // state is fenced when the user edits further or opens another service.
       setServices((current) =>
         sortServices(
           current.some((item) => item.key === saved.key)
@@ -178,31 +219,48 @@ export function AdminExternalServiceChain({
             : [...current, saved],
         ),
       );
-      setOpen(false);
+      if (editorOwner.owns(operation, false)) {
+        editorOwner.acknowledge(operation.revision);
+        if (editorOwner.owns(operation)) {
+          setSaving(false);
+          editorOwner.invalidate();
+          setOpen(false);
+        } else {
+          setError("已保存较早版本，当前修改仍未保存");
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "外部服务保存失败");
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "外部服务保存失败");
+      }
     } finally {
-      setSaving(false);
+      if (mountedRef.current && editorOwner.owns(operation, false)) setSaving(false);
     }
   }
 
   async function testDraft() {
+    const currentDraft = draft;
+    const operation = editorOwner.beginOperation();
     setTesting(true);
     setTestMessage("");
     try {
       const result = await adminApi.testExternalService({
-        ...draft,
-        api_key: draft.api_key?.trim() || undefined,
+        ...currentDraft,
+        api_key: currentDraft.api_key?.trim() || undefined,
       });
-      setTestMessage(
-        result.ok
-          ? `连接成功${result.duration_ms ? ` · ${result.duration_ms}ms` : ""}`
-          : result.error || "连接失败",
-      );
+      if (editorOwner.owns(operation)) {
+        setTestMessage(
+          result.ok
+            ? `连接成功${result.duration_ms ? ` · ${result.duration_ms}ms` : ""}`
+            : result.error || "连接失败",
+        );
+      }
     } catch (err) {
-      setTestMessage(err instanceof Error ? err.message : "连接失败");
+      if (editorOwner.owns(operation)) {
+        setTestMessage(err instanceof Error ? err.message : "连接失败");
+      }
     } finally {
-      setTesting(false);
+      if (mountedRef.current && editorOwner.owns(operation, false)) setTesting(false);
     }
   }
 
@@ -239,19 +297,32 @@ export function AdminExternalServiceChain({
 
   async function deleteService() {
     if (!deleteTarget) return;
-    setDeletingKey(deleteTarget.key);
+    const target = deleteTarget;
+    const operation = deleteOwner.beginOperation();
+    setDeletingKey(target.key);
     setError("");
     try {
-      await adminApi.deleteExternalService(deleteTarget.key);
+      await adminApi.deleteExternalService(target.key);
       setServices((current) =>
-        current.filter((service) => service.key !== deleteTarget.key),
+        current.filter((service) => service.key !== target.key),
       );
-      setDeleteTarget(null);
+      if (deleteOwner.owns(operation, false)) {
+        setDeletingKey("");
+        setDeleteTarget(null);
+        deleteOwner.invalidate();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "服务删除失败");
+      if (deleteOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "服务删除失败");
+      }
     } finally {
-      setDeletingKey("");
+      if (mountedRef.current && deleteOwner.owns(operation, false)) setDeletingKey("");
     }
+  }
+
+  function requestDelete(service: ExternalService) {
+    deleteOwner.activate(service.key);
+    setDeleteTarget(service);
   }
 
   return (
@@ -268,7 +339,7 @@ export function AdminExternalServiceChain({
           sensors={sensors}
           onAdd={(key) => openEditor(undefined, key, "search")}
           onEdit={openEditor}
-          onDelete={setDeleteTarget}
+          onDelete={requestDelete}
           onDragEnd={handleDragEnd}
           busy={interactionLocked(open, saving, testing, reorderingKind, deleteTarget, deletingKey)}
         />
@@ -280,7 +351,7 @@ export function AdminExternalServiceChain({
           sensors={sensors}
           onAdd={(key) => openEditor(undefined, key, "crawler")}
           onEdit={openEditor}
-          onDelete={setDeleteTarget}
+          onDelete={requestDelete}
           onDragEnd={handleDragEnd}
           busy={interactionLocked(open, saving, testing, reorderingKind, deleteTarget, deletingKey)}
           showBasic
@@ -288,11 +359,11 @@ export function AdminExternalServiceChain({
         <OCRSection
           services={grouped.ocr}
           onEdit={openEditor}
-          onDelete={setDeleteTarget}
+          onDelete={requestDelete}
           busy={interactionLocked(open, saving, testing, reorderingKind, deleteTarget, deletingKey)}
         />
       </div>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) closeEditor(); }}>
         <DialogContent className="max-w-xl rounded-md">
           <DialogHeader>
             <DialogTitle>
@@ -300,6 +371,7 @@ export function AdminExternalServiceChain({
                 draft.display_name ||
                 "服务配置"}
             </DialogTitle>
+            <DialogDescription className="sr-only">编辑外部服务地址、凭据、并发和启用状态。</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
             <Field label="Base URL">
@@ -307,7 +379,7 @@ export function AdminExternalServiceChain({
                 value={draft.base_url}
                 placeholder={servicePresets[draft.key]?.baseURL || "https://"}
                 onChange={(event) =>
-                  setDraft((current) => ({
+                  changeDraft((current) => ({
                     ...current,
                     base_url: event.target.value,
                   }))
@@ -324,7 +396,7 @@ export function AdminExternalServiceChain({
                     : "保存时留空保留现有 Key"
                 }
                 onChange={(event) =>
-                  setDraft((current) => ({
+                  changeDraft((current) => ({
                     ...current,
                     api_key: event.target.value,
                   }))
@@ -339,7 +411,7 @@ export function AdminExternalServiceChain({
                   max={20}
                   value={draft.max_concurrency || 2}
                   onChange={(event) =>
-                    setDraft((current) => ({
+                    changeDraft((current) => ({
                       ...current,
                       max_concurrency: clampConcurrency(event.target.value),
                     }))
@@ -365,7 +437,7 @@ export function AdminExternalServiceChain({
               label="状态"
               checked={draft.enabled}
               onChange={(enabled) =>
-                setDraft((current) => ({ ...current, enabled }))
+                changeDraft((current) => ({ ...current, enabled }))
               }
             />
             <div className="flex items-center gap-2">
@@ -395,7 +467,10 @@ export function AdminExternalServiceChain({
       <Dialog
         open={deleteTarget !== null}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && !deletingKey) setDeleteTarget(null);
+          if (!nextOpen && !deletingKey) {
+            deleteOwner.invalidate();
+            setDeleteTarget(null);
+          }
         }}
       >
         <DialogContent className="max-w-sm rounded-md">
@@ -570,7 +645,7 @@ function SortableServiceRow({
     >
       <button
         type="button"
-        className="flex h-8 w-7 shrink-0 cursor-grab items-center justify-center touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-11 min-h-11 w-11 min-w-11 shrink-0 cursor-grab items-center justify-center touch-none rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:min-h-8 sm:w-8 sm:min-w-8"
         aria-label={`调整 ${preset?.label || service.display_name} 顺序`}
         disabled={disabled}
         {...attributes}
@@ -581,7 +656,7 @@ function SortableServiceRow({
       <StatusIcon status={status} />
       <button
         type="button"
-        className="min-w-0 flex-1 text-left disabled:cursor-not-allowed disabled:opacity-50"
+        className="min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={onEdit}
         disabled={disabled}
       >
@@ -599,7 +674,7 @@ function SortableServiceRow({
         type="button"
         variant="ghost"
         size="icon"
-        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+        className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8"
         aria-label={`删除 ${preset?.label || service.display_name}`}
         title={`删除 ${preset?.label || service.display_name}`}
         onClick={onDelete}
@@ -654,7 +729,7 @@ function OCRSection({
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8"
               aria-label="删除 MinerU 精准解析"
               title="删除 MinerU 精准解析"
               onClick={() => onDelete(service)}

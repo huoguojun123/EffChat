@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Scan reachable Go vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+  extractor:
+    name: Python extractor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: py-extractor
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            py-extractor/requirements.lock
+            .github/requirements/pip-audit.lock
+      - run: pip install --require-hashes -r requirements.lock
+      - run: python -m unittest discover -s app -p 'test_*.py'
+      - name: Install pinned Python dependency auditor
+        run: |
+          python -m venv .pip-audit
+          .pip-audit/bin/python -m pip install --require-hashes -r ../.github/requirements/pip-audit.lock
+      - name: Audit locked Python dependencies
+        env:
+          PIP_AUDIT_BIN: ${{ github.workspace }}/py-extractor/.pip-audit/bin/pip-audit
+        run: ../scripts/audit-python-dependencies.sh requirements.lock
+
+  postgres:
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: scripts/test-postgres.sh
+
+  playwright:
+    name: Isolated Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Run deterministic isolated product flows
+        run: scripts/run-isolated-playwright.sh
+      - name: Upload Playwright and Compose failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: isolated-playwright-failure
+          path: frontend/test-results
+          if-no-files-found: error
+
+  containers:
+    name: Compose and containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Lint shell scripts
+        run: |
+          find scripts backend/migrations -type f -name '*.sh' -print0 |
+            xargs -0 docker run --rm --entrypoint shellcheck \
+              -v "$PWD:/mnt:ro" -w /mnt \
+              koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 \
+              --severity=warning
+      - name: Test PostgreSQL readiness timeout
+        run: scripts/test-postgres-readiness-timeout.sh
+      - name: Test Python dependency audit failure propagation
+        run: scripts/test-python-audit-contract.sh
+      - name: Test export target fencing
+        run: scripts/test-export-target-safety.sh
+      - name: Test Compose environment contract
+        run: scripts/test-compose-env-contract.sh
+      - name: Test upload limit contract
+        run: scripts/test-upload-limit-contract.sh
+      - name: Test storage finalization fencing
+        run: scripts/test-storage-finalization-state.sh
+      - name: Test storage verification lifecycle
+        run: scripts/test-storage-verify-lifecycle.sh
+      - name: Test deployment stage ordering
+        run: scripts/test-deployment-stage-order.sh
+      - name: Test backup artifact contract
+        run: scripts/test-backup-artifact-contract.sh
+      - name: Test isolated restore contract
+        run: scripts/test-isolated-restore-contract.sh
+      - name: Test Docker context boundary
+        run: scripts/test-docker-context-boundary.sh
+      - name: Test Git ignore boundary
+        run: scripts/test-gitignore-boundary.sh
+      - name: Test BUILD_REF inputs
+        run: scripts/test-build-ref-inputs.sh
+      - name: Test release ref gate
+        run: scripts/test-release-ref-gate.sh
+      - name: Test release image registry contract
+        run: scripts/test-release-image-contract.sh
+      - name: Verify Nginx security headers
+        run: node frontend/scripts/check-nginx-security-headers.mjs
+      - name: Test third-party license archive
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/licenses/test_collect_third_party_licenses.py
+      - name: Render Compose configuration
+        run: docker compose --env-file .env.docker.example config
+      - name: Build application images
+        run: docker compose --env-file .env.docker.example build backend web py-extractor
+      - name: Verify extractor runtime user
+        run: |
+          test "$(docker image inspect effchat-py-extractor:local --format '{{.Config.User}}')" = '10001:10001'
+          docker run --rm --entrypoint python effchat-py-extractor:local -c \
+            'import os; assert (os.getuid(), os.getgid()) == (10001, 10001)'
+      - name: Verify image license archives
+        run: scripts/check-image-licenses.sh effchat-backend:local effchat-web:local effchat-py-extractor:local

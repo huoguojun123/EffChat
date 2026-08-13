@@ -3,7 +3,7 @@ package modelbank
 import (
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestRuntimeProfileSeparatesProviderAndFamily(t *testing.T) {
@@ -76,6 +76,21 @@ func TestRuntimeProfileUsesChannelAdapterAndDisplayName(t *testing.T) {
 	}
 	if profile.ThinkingFormat != string(ThinkingFormatGeminiThinking) {
 		t.Fatalf("thinking_format = %q, want %q", profile.ThinkingFormat, ThinkingFormatGeminiThinking)
+	}
+}
+
+func TestRuntimeProfileExposesOpenAIResponsesWireProtocol(t *testing.T) {
+	profile := RuntimeProfileForModelWithAdapter(&model.Model{
+		ID:             "gpt-5.1",
+		Provider:       "openai",
+		Reasoning:      true,
+		ThinkingFormat: "openai_reasoning_effort",
+	}, "openai_responses")
+	if profile.WireProtocol != WireProtocolOpenAIResponses {
+		t.Fatalf("wire_protocol = %q, want %q", profile.WireProtocol, WireProtocolOpenAIResponses)
+	}
+	if profile.Family != "openai" {
+		t.Fatalf("family = %q, want openai", profile.Family)
 	}
 }
 

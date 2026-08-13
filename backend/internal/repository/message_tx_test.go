@@ -3,7 +3,7 @@ package repository
 import (
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestMessageRepository_CreateBatch_AtomicRollback(t *testing.T) {

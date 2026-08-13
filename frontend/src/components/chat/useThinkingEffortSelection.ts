@@ -2,7 +2,7 @@ import { useState } from "react"
 import type { Model } from "@/types"
 import { normalizeThinkingEffort, thinkingEffortOptions, type ThinkingEffort } from "@/lib/thinking"
 
-const THINKING_EFFORT_STORAGE_PREFIX = "fchat_thinking_effort:"
+const THINKING_EFFORT_STORAGE_PREFIX = "effchat_thinking_effort:"
 
 export function useThinkingEffortSelection(currentModel?: Model) {
   const [thinkingEffortByModel, setThinkingEffortByModel] = useState<Record<string, ThinkingEffort>>({})

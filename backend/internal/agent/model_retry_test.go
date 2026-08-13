@@ -14,6 +14,8 @@ import (
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
+	openaisdk "github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 )
 
@@ -40,6 +42,19 @@ func TestTransientModelRetryConfigRetriesOnlyZeroOutputTransientErrors(t *testin
 		{name: "user canceled", err: context.Canceled, wantRun: false},
 		{name: "partial content", err: errors.New("connection reset"), output: &schema.Message{Content: "partial"}, wantRun: false},
 		{name: "partial reasoning", err: errors.New("connection reset"), output: &schema.Message{ReasoningContent: "partial"}, wantRun: false},
+		{
+			name:    "named tool call",
+			err:     errors.New("connection reset"),
+			output:  &schema.Message{ToolCalls: []schema.ToolCall{{Function: schema.FunctionCall{Name: "web_search"}}}},
+			wantRun: false,
+		},
+		{
+			name:     "incomplete tool shell",
+			err:      errors.New("connection reset"),
+			output:   &schema.Message{ToolCalls: []schema.ToolCall{{ID: "call_1"}}},
+			wantRun:  true,
+			category: RuntimeErrorConnection,
+		},
 	}
 
 	for _, testCase := range cases {
@@ -92,6 +107,14 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 	anthropicResponse := &http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{
 		"Retry-After": []string{"120"},
 	}}
+	transportClient := providerhttp.NewAnthropicSingleAttemptClient(roundTripFuncForAgentTest(func(*http.Request) (*http.Response, error) {
+		return nil, syscall.ECONNREFUSED
+	}))
+	transportResponse, err := transportClient.Get("https://provider.invalid/v1/messages")
+	if err != nil {
+		t.Fatalf("create synthetic Anthropic transport response: %v", err)
+	}
+	defer transportResponse.Body.Close()
 	cases := []struct {
 		name       string
 		err        error
@@ -101,6 +124,21 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 		status     int
 		retryAfter time.Duration
 	}{
+		{
+			name: "openai responses rate limit",
+			err: &openaisdk.Error{
+				StatusCode: http.StatusTooManyRequests,
+				Message:    "rate limited",
+				Response: &http.Response{Header: http.Header{
+					"Retry-After": []string{"12"},
+				}},
+			},
+			code:       "model_rate_limited",
+			category:   RuntimeErrorTransient,
+			retryable:  true,
+			status:     http.StatusTooManyRequests,
+			retryAfter: 12 * time.Second,
+		},
 		{
 			name:      "openai rate limit",
 			err:       &einoopenai.APIError{HTTPStatusCode: http.StatusTooManyRequests},
@@ -143,6 +181,14 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 			retryAfter: maxModelRetryDelay,
 		},
 		{
+			name:      "anthropic synthetic transport error",
+			err:       &anthropic.Error{StatusCode: transportResponse.StatusCode, Response: transportResponse},
+			code:      "model_connection_failed",
+			category:  RuntimeErrorConnection,
+			retryable: true,
+			status:    599,
+		},
+		{
 			name:      "gemini access denied",
 			err:       genai.APIError{Code: http.StatusForbidden},
 			code:      "model_access_denied",
@@ -177,6 +223,12 @@ func TestClassifyModelRuntimeErrorUsesStructuredProviderSignals(t *testing.T) {
 			}
 		})
 	}
+}
+
+type roundTripFuncForAgentTest func(*http.Request) (*http.Response, error)
+
+func (f roundTripFuncForAgentTest) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestClassifyModelRuntimeErrorExposesOnlySafeUpstreamDiagnostics(t *testing.T) {

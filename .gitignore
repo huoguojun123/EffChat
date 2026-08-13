@@ -6,13 +6,10 @@
 .env.*.local
 *.env
 
-# Secrets
-*secret*
-*password*
-*key*
+# Private key material. Secret contents are enforced by Gitleaks, not by
+# guessing from arbitrary source or documentation filenames.
 *.pem
 *.key
-*.crt
 
 # Dependencies
 node_modules/

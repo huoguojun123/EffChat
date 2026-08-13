@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestMessageRepositoryConversationTurnsAndWindows(t *testing.T) {
@@ -101,6 +101,133 @@ func TestMessageRepositoryConversationTurnsAndWindows(t *testing.T) {
 	assertWindow(MessageWindowAfter, turnIDs[1], turnIDs[2:4], true, true)
 	assertWindow(MessageWindowAround, turnIDs[0], turnIDs[:4], false, true)
 	assertWindow(MessageWindowAround, turnIDs[5], turnIDs[2:], true, false)
+}
+
+func TestMessageRepositoryWindowUsesActiveCompactionCheckpoint(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "message_window_checkpoint")
+	session := &model.Session{UserID: userID, Title: "checkpoint window", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM messages WHERE session_id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM answer_attempts WHERE session_id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+
+	repo := NewMessageRepository(db)
+	createTurn := func(label string) (int64, int64) {
+		t.Helper()
+		user := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(fmt.Sprintf(`{"role":"user","content":"question %s"}`, label))}
+		if err := repo.Create(user); err != nil {
+			t.Fatal(err)
+		}
+		attemptID := insertWindowAttempt(t, db, session.ID, user.ID, 1, true)
+		assistant := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(fmt.Sprintf(`{"role":"assistant","content":"answer %s"}`, label)), AnswerAttemptID: &attemptID}
+		if err := repo.Create(assistant); err != nil {
+			t.Fatal(err)
+		}
+		return user.ID, assistant.ID
+	}
+
+	preCheckpointTurns := make([]int64, 0, 3)
+	for i := 1; i <= 3; i++ {
+		turnID, _ := createTurn(fmt.Sprintf("old-%d", i))
+		preCheckpointTurns = append(preCheckpointTurns, turnID)
+	}
+	var beforeMessageID int64
+	if err := db.QueryRow("SELECT COALESCE(MAX(id), 0) + 1 FROM messages WHERE session_id = $1", session.ID).Scan(&beforeMessageID); err != nil {
+		t.Fatal(err)
+	}
+	summary := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData: []byte(fmt.Sprintf(
+			`{"role":"user","content":"checkpoint summary","metadata":{"compaction_summary":true,"compaction_kind":"manual","compaction_before_message_id":%d}}`,
+			beforeMessageID,
+		)),
+	}
+	if err := repo.PersistCheckpoint(summary, beforeMessageID); err != nil {
+		t.Fatal(err)
+	}
+	var summaryCompressionID sql.NullInt64
+	if err := db.QueryRow("SELECT compression_summary_id FROM messages WHERE id = $1", summary.ID).Scan(&summaryCompressionID); err != nil {
+		t.Fatal(err)
+	}
+	if summaryCompressionID.Valid {
+		t.Fatalf("active checkpoint %d unexpectedly points to compression summary %d", summary.ID, summaryCompressionID.Int64)
+	}
+
+	immediate, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if immediate.FirstTurnID != preCheckpointTurns[0] || immediate.LastTurnID != preCheckpointTurns[2] || immediate.HasOlder || immediate.HasNewer {
+		t.Fatalf("immediate checkpoint bounds = %+v", immediate)
+	}
+	for _, turnID := range preCheckpointTurns {
+		if !windowContainsMessage(immediate, turnID) {
+			t.Fatalf("immediate checkpoint window hid compressed turn %d", turnID)
+		}
+	}
+	if !windowContainsMessage(immediate, summary.ID) {
+		t.Fatalf("immediate checkpoint window omitted summary %d", summary.ID)
+	}
+
+	postCheckpointTurns := make([]int64, 0, 17)
+	for i := 1; i <= 17; i++ {
+		turnID, _ := createTurn(fmt.Sprintf("new-%d", i))
+		postCheckpointTurns = append(postCheckpointTurns, turnID)
+	}
+
+	latest, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !latest.HasOlder || latest.HasNewer || latest.FirstTurnID != postCheckpointTurns[1] || latest.LastTurnID != postCheckpointTurns[16] {
+		t.Fatalf("latest post-checkpoint bounds = %+v", latest)
+	}
+	for _, message := range latest.Messages {
+		if message.ID == summary.ID {
+			t.Fatal("checkpoint leaked into a page that still has older uncompressed turns")
+		}
+	}
+
+	oldest, err := repo.ListMessageWindow(session.ID, MessageWindowBefore, latest.FirstTurnID, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest.HasOlder || !oldest.HasNewer || oldest.FirstTurnID != preCheckpointTurns[0] || oldest.LastTurnID != postCheckpointTurns[0] {
+		t.Fatalf("oldest post-checkpoint bounds = %+v", oldest)
+	}
+	for _, turnID := range preCheckpointTurns {
+		if !windowContainsMessage(oldest, turnID) {
+			t.Fatalf("oldest page hid compressed turn %d", turnID)
+		}
+	}
+	if !windowContainsMessage(oldest, summary.ID) {
+		t.Fatal("page containing the checkpoint anchor omitted the active checkpoint")
+	}
+
+	turns, total, hasMore, err := repo.ListConversationTurns(session.ID, 500, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 20 || hasMore || len(turns) != 20 || turns[0].ID != preCheckpointTurns[0] {
+		t.Fatalf("post-checkpoint turn index = len:%d total:%d hasMore:%v first:%d", len(turns), total, hasMore, turns[0].ID)
+	}
+}
+
+func windowContainsMessage(window *MessageWindow, messageID int64) bool {
+	for _, message := range window.Messages {
+		if message.ID == messageID {
+			return true
+		}
+	}
+	return false
 }
 
 func insertWindowAttempt(t *testing.T, db interface {

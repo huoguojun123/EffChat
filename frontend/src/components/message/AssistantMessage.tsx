@@ -1,8 +1,8 @@
 import { memo, useMemo, useState } from "react"
 import type { AnswerAttemptNavigation, AssistantSegment, Message } from "@/types"
-import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loader2, RotateCcw } from "lucide-react"
+import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loader2, RotateCcw, Trash2 } from "lucide-react"
 import { AppLogo } from "@/components/AppLogo"
-import { selectAnswerAttempt } from "@/api/messages"
+import { deleteAnswerAttempt, selectAnswerAttempt } from "@/api/messages"
 import { MarkdownContent } from "./MarkdownContent"
 import { useSSE } from "@/hooks/useSSE"
 import { useChatStore } from "@/stores/chat"
@@ -26,6 +26,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
   const [actionError, setActionError] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [switchingAttempt, setSwitchingAttempt] = useState<number | null>(null)
+  const [deletingAttempt, setDeletingAttempt] = useState(false)
   const { retryMessage } = useSSE()
   const streamingStatus = useChatStore((s) => s.streaming.status)
   const loadMessages = useChatStore((s) => s.loadMessages)
@@ -42,9 +43,9 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
   const isFinalizing = message.local_state === "finalizing"
   const isIncomplete = message.message_data.metadata?.incomplete === true
   const isUnsaved = message.message_data.metadata?.unsaved === true
-  const retryBusy = isStreaming || retrying || switchingAttempt !== null
+  const retryBusy = isStreaming || retrying || switchingAttempt !== null || deletingAttempt
   const navigation = message.answer_navigation
-  const canSwitchAnswer = Boolean(isLastAssistant && navigation?.can_switch && navigation.attempt_count > 1 && !isError && !isStreaming)
+  const canSwitchAnswer = Boolean(navigation?.can_switch && navigation.attempt_count > 1 && !isError && !isStreaming)
 
   function handleCopy() {
     if (!displayContent) return
@@ -84,6 +85,24 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
     }
   }
 
+  async function handleAnswerAttemptDeletion() {
+    if (retryBusy || !navigation || navigation.attempt_count <= 1) return
+    setActionError(null)
+    setDeletingAttempt(true)
+    let deletionCommitted = false
+    try {
+      await deleteAnswerAttempt(message.session_id, navigation.attempt_id)
+      deletionCommitted = true
+      await loadMessages(message.session_id)
+    } catch (err) {
+      setActionError(deletionCommitted
+        ? "回答已删除，但页面未能同步。请刷新页面后继续。"
+        : err instanceof Error ? err.message : "删除回答失败")
+    } finally {
+      setDeletingAttempt(false)
+    }
+  }
+
   return (
     <div className="group py-8">
       <div className="flex items-start gap-0 sm:gap-4">
@@ -111,7 +130,9 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
                   <AnswerAttemptControls
                     navigation={navigation}
                     switchingAttempt={switchingAttempt}
+                    deleting={deletingAttempt}
                     onSelect={handleAnswerAttemptSelection}
+                    onDelete={handleAnswerAttemptDeletion}
                   />
                 ) : null}
                 <ActionButton onClick={handleCopy} label="复制">
@@ -135,15 +156,19 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
 function AnswerAttemptControls({
   navigation,
   switchingAttempt,
+  deleting,
   onSelect,
+  onDelete,
 }: {
   navigation: AnswerAttemptNavigation
   switchingAttempt: number | null
+  deleting: boolean
   onSelect: (attemptId: number) => void
+  onDelete: () => void
 }) {
   const hasPrevious = typeof navigation.previous_attempt_id === "number"
   const hasNext = typeof navigation.next_attempt_id === "number"
-  const switching = switchingAttempt !== null
+  const switching = switchingAttempt !== null || deleting
   return (
     <div className="flex h-8 items-center border-r border-border/60 pr-2 sm:h-7">
       <button
@@ -168,6 +193,16 @@ function AnswerAttemptControls({
         className="inline-flex h-9 w-9 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-foreground disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
       >
         {switchingAttempt === navigation.next_attempt_id ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
+      </button>
+      <button
+        type="button"
+        title="删除当前回答"
+        aria-label="删除当前回答"
+        disabled={switching || navigation.attempt_count <= 1}
+        onClick={onDelete}
+        className="inline-flex h-9 w-9 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-rose-600 disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
+      >
+        {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
       </button>
     </div>
   )

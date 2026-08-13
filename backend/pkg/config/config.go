@@ -11,7 +11,7 @@ import (
 //
 // 现在项目处在预发布测试阶段，不承诺稳定 API；把版本集中放在 config 包里，
 // 避免 /health、管理后台标题、后续日志分别写死不同字符串。
-const AppVersion = "pre-release 0.3.4"
+const AppVersion = "0.3.4-beta.1"
 
 // BuildRef is set by the release image build and remains "unknown" for local Go runs.
 var BuildRef = "unknown"
@@ -50,8 +50,8 @@ type JWTConfig struct {
 const DefaultJWTSecret = "your-secret-key-change-this"
 
 type RunConfig struct {
-	MaxTotalDuration  time.Duration
-	HeartbeatInterval time.Duration
+	FirstOutputTimeout time.Duration
+	HeartbeatInterval  time.Duration
 }
 
 type SecurityConfig struct {
@@ -66,10 +66,13 @@ type AuthRateLimitConfig struct {
 }
 
 type ExtractorConfig struct {
-	Enabled bool
-	URL     string
-	Timeout time.Duration
+	Enabled        bool
+	URL            string
+	Timeout        time.Duration
+	MaxUploadBytes int64
 }
+
+const defaultExtractorMaxUploadBytes int64 = 25 * 1024 * 1024
 
 // AIConfig 只保留基础运行参数。模型渠道、API key、搜索与网页提取服务
 // 由管理员后台持久化配置，运行时不再读取 .env 作为业务配置 fallback。
@@ -89,8 +92,8 @@ func Load() *Config {
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
-			User:     getEnv("DB_USER", "postgres"),
-			Password: getEnv("DB_PASSWORD", "123456"),
+			User:     getEnv("DB_USER", "effchat"),
+			Password: getEnv("DB_PASSWORD", ""),
 			DBName:   getEnv("DB_NAME", "effchat"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
@@ -99,8 +102,8 @@ func Load() *Config {
 		},
 		AI: loadAIConfig(),
 		Run: RunConfig{
-			MaxTotalDuration:  getEnvDuration("RUN_MAX_TOTAL_DURATION", 0),
-			HeartbeatInterval: getEnvDuration("SSE_HEARTBEAT_INTERVAL", 12*time.Second),
+			FirstOutputTimeout: getEnvDuration("RUN_FIRST_OUTPUT_TIMEOUT", 0),
+			HeartbeatInterval:  getEnvDuration("SSE_HEARTBEAT_INTERVAL", 12*time.Second),
 		},
 		Security: SecurityConfig{
 			TrustProxyHeaders: getEnvBool("TRUST_PROXY_HEADERS", false),
@@ -111,9 +114,10 @@ func Load() *Config {
 			},
 		},
 		Extractor: ExtractorConfig{
-			Enabled: getEnvBool("PY_EXTRACTOR_ENABLED", true),
-			URL:     getEnv("PY_EXTRACTOR_URL", "http://py-extractor:8090"),
-			Timeout: getEnvDuration("PY_EXTRACTOR_TIMEOUT_SECONDS", 60*time.Second),
+			Enabled:        getEnvBool("PY_EXTRACTOR_ENABLED", true),
+			URL:            getEnv("PY_EXTRACTOR_URL", "http://py-extractor:8090"),
+			Timeout:        getEnvDuration("PY_EXTRACTOR_TIMEOUT_SECONDS", 60*time.Second),
+			MaxUploadBytes: getEnvPositiveInt64("PY_EXTRACTOR_MAX_UPLOAD_BYTES", defaultExtractorMaxUploadBytes),
 		},
 	}
 }
@@ -138,6 +142,18 @@ func getEnvInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvPositiveInt64(key string, defaultValue int64) int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed <= 0 {
+		return defaultValue
+	}
+	return parsed
 }
 
 // getEnvBool 解析布尔环境变量；未设置或无法解析时返回 defaultValue。

@@ -8,6 +8,7 @@ package extractor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,8 +26,18 @@ type Result struct {
 	Warnings       []string // 解析器给出的非致命告警
 }
 
-// ErrUnsupported 表示文件类型不在提取白名单内。
-var ErrUnsupported = fmt.Errorf("unsupported file type for extraction")
+var (
+	// ErrUnsupported 表示文件类型不在提取白名单内。
+	ErrUnsupported = errors.New("unsupported file type for extraction")
+	// ErrUnprocessable 表示文件类型受支持，但内容损坏或无法解析。
+	ErrUnprocessable = errors.New("file content cannot be extracted")
+	// ErrNoReadableText 表示解析器正常工作，但文件中没有可用文本。
+	ErrNoReadableText = errors.New("no readable text extracted")
+	// ErrLimitExceeded 表示输入或解析输出超过提取服务的资源上限。
+	ErrLimitExceeded = errors.New("extraction limit exceeded")
+	// ErrUnavailable 表示提取依赖、网络或响应协议故障；调用方可以安全重试。
+	ErrUnavailable = errors.New("extractor unavailable")
+)
 
 // Extract 根据声明的 MIME 与文件内容提取正文。
 // declaredMIME 来自上传校验（已过白名单），filename 用于扩展名兜底判断。
@@ -64,11 +75,15 @@ func Extract(content []byte, declaredMIME, filename string) (*Result, error) {
 func ExtractWithSidecar(ctx context.Context, content []byte, declaredMIME, filename string, sidecar *SidecarClient) (*Result, error) {
 	if ShouldUseSidecar(declaredMIME, filename) {
 		if sidecar == nil || !sidecar.Enabled() {
-			return nil, fmt.Errorf("文档解析服务未启用")
+			return nil, fmt.Errorf("%w: sidecar is not configured", ErrUnavailable)
 		}
 		return sidecar.Extract(ctx, content, declaredMIME, filename)
 	}
-	return Extract(content, declaredMIME, filename)
+	result, err := Extract(content, declaredMIME, filename)
+	if err == nil || errors.Is(err, ErrUnsupported) {
+		return result, err
+	}
+	return nil, fmt.Errorf("%w: %v", ErrUnprocessable, err)
 }
 
 // ResolveUploadType 在上传白名单校验前，用真实内容嗅探复核客户端声明的 MIME，

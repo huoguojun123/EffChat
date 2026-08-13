@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"regexp"
 	"strings"
@@ -14,10 +13,11 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 type MemoryMaintenanceRequest struct {
@@ -34,15 +34,37 @@ type MemoryMaintenanceRequest struct {
 	Force                           bool
 	IgnoreCooldown                  bool
 	ModelRequest                    *ChatRequest
+	PreparedResult                  *PreparedMemoryMaintenanceResult
+	TaskRunSink                     func(repository.RecordModelTaskRunInput)
+}
+
+// PreparedMemoryMaintenanceResult carries the validated mutation across the
+// model/persistence boundary. User-triggered RunHub operations populate this
+// value and commit it together with their durable terminal transition; the
+// automatic background path leaves it nil and keeps the existing direct save.
+type PreparedMemoryMaintenanceResult struct {
+	SaveInput *repository.SaveSessionMemoryInput
 }
 
 type memoryMaintenanceDecision struct {
-	Action  string `json:"action"`
-	Content string `json:"content"`
-	Summary string `json:"summary"`
+	Action     string                `json:"action"`
+	Content    string                `json:"content"` // legacy full-card compatibility
+	Operations []memoryMaintenanceOp `json:"operations"`
+	Summary    string                `json:"summary"`
 }
 
-const MemoryMaintenanceTimeout = 90 * time.Second
+type memoryMaintenanceOp struct {
+	Op      string `json:"op"`      // add|update|delete
+	Section string `json:"section"` // fixed section key
+	Match   string `json:"match"`   // exact existing item for update/delete
+	Content string `json:"content"` // new item for add/update
+}
+
+const (
+	MemoryMaintenanceFirstOutputTimeout = 90 * time.Second
+	memoryMaintenanceControlTimeout     = 10 * time.Second
+	memoryMaintenancePersistenceTimeout = 10 * time.Second
+)
 
 var memoryDatePattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b`)
 var memoryFencedJSONPattern = regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)\\s*```")
@@ -53,7 +75,13 @@ const memoryMaintenanceInstructionTemplate = `You maintain one conversation-scop
 The memory card is not a transcript and not a profile. It is a compact continuity aid so future turns can feel informed by shared context while remaining genuinely useful. Preserve only what a future assistant should be able to apply naturally, like a human colleague using shared history without narrating retrieval.
 
 Return strict JSON only:
-{"action":"none|update","content":"fixed-section markdown","summary":"short change summary"}
+{"action":"none|patch","operations":[{"op":"add|update|delete","section":"section_key","match":"exact existing item","content":"new item"}],"summary":"short change summary"}
+
+For patch, return only the smallest required operations. The match field must copy the
+current item exactly for update/delete; add does not use match. The content field is one
+concise bullet body, not a complete memory card. The program applies and validates
+the patch atomically. For compatibility, a full-card action=update response is
+accepted but should not be used for ordinary maintenance.
 
 Fixed sections:
 ## User Background
@@ -73,7 +101,7 @@ Rules:
 - If the user frames a scenario as fictional, simulated, roleplay, or imaginary, store persona, setting, and all inferred traits in Project Context, not User Background. Do not infer real user attributes from fictional character traits.
 - Prefer merging and replacing existing bullets over adding new bullets.
 - Do not store raw file contents, search results, web extraction text, code structure, git history, temporary bugs, or one-turn task details.
-- Do not infer private traits or sensitive facts. Store sensitive information only if the user explicitly asks to remember it.
+- Do not infer private traits or sensitive facts. Non-secret sensitive information requires an explicit user request and clear future value. Never store exact passwords, tokens, API keys, authorization credentials, private keys, or other secret values, even when the user asks.
 - Never store memory that discourages honest feedback, critical thinking, or constructive criticism.
 - Never store memory that would encourage unsafe, unhealthy, or harmful behavior, even if it appears relevant.
 - Avoid saving sensitive or upsetting content unless the user explicitly asks and the fact is necessary for safe, appropriate future help.
@@ -107,10 +135,8 @@ func (a *EinoAgent) MaintainSessionMemoryAsync(req MemoryMaintenanceRequest) {
 		if claimed {
 			defer a.memoryAutoClaims.Delete(req.SessionID)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), MemoryMaintenanceTimeout)
-		defer cancel()
 		if !req.SkipMemory {
-			if err := a.MaintainSessionMemory(ctx, req); err != nil && !errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
+			if err := a.MaintainSessionMemory(a.backgroundTaskContext(), req); err != nil && !errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
 				log.Printf("[memory_maintenance] skipped session=%d user=%d err=%v", req.SessionID, req.UserID, err)
 			}
 		}
@@ -123,8 +149,23 @@ func (a *EinoAgent) startMemoryBackgroundTask() bool {
 	if a.backgroundDraining {
 		return false
 	}
+	a.ensureBackgroundContextLocked()
 	a.memoryTasks.Add(1)
 	return true
+}
+
+func (a *EinoAgent) backgroundTaskContext() context.Context {
+	a.backgroundMu.Lock()
+	defer a.backgroundMu.Unlock()
+	a.ensureBackgroundContextLocked()
+	return a.backgroundCtx
+}
+
+func (a *EinoAgent) ensureBackgroundContextLocked() {
+	if a.backgroundCtx != nil {
+		return
+	}
+	a.backgroundCtx, a.backgroundCancel = context.WithCancel(context.Background())
 }
 
 func (a *EinoAgent) DrainMemoryTasks(ctx context.Context) bool {
@@ -133,7 +174,11 @@ func (a *EinoAgent) DrainMemoryTasks(ctx context.Context) bool {
 	}
 	a.backgroundMu.Lock()
 	a.backgroundDraining = true
+	cancel := a.backgroundCancel
 	a.backgroundMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	done := make(chan struct{})
 	go func() {
 		a.memoryTasks.Wait()
@@ -195,16 +240,27 @@ func (a *EinoAgent) RetrySessionMemory(ctx context.Context, req MemoryMaintenanc
 }
 
 func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintenanceRequest, source string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	started := time.Now()
 	taskSource := modelTaskSourceForMaintenance(source)
 	if taskSource == repository.ModelTaskSourceAuto && !req.IgnoreCooldown {
-		if cooling, err := a.taskRunRepo.LatestAutoCooldown(ctx, req.SessionID, req.UserID, repository.ModelTaskMemoryMaintenance, time.Now()); err == nil && cooling != nil {
+		controlCtx, controlCancel := memoryMaintenanceControlContext(ctx)
+		cooling, err := a.taskRunRepo.LatestAutoCooldown(controlCtx, req.SessionID, req.UserID, repository.ModelTaskMemoryMaintenance, time.Now())
+		controlCancel()
+		if err != nil {
+			return fmt.Errorf("check memory maintenance cooldown: %w", err)
+		}
+		if cooling != nil {
 			return nil
 		}
 	}
-	rawCurrent, _, err := a.memoryRepo.GetWithUpdatedAt(ctx, req.SessionID)
+	readCtx, readCancel := memoryMaintenanceControlContext(ctx)
+	rawCurrent, _, err := a.memoryRepo.GetWithUpdatedAt(readCtx, req.SessionID)
+	readCancel()
 	if err != nil {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -220,10 +276,9 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return err
 	}
-	current := sessionmemory.Serialize(mustParseMemory(rawCurrent))
-	limits := a.memoryLimits()
+	current := sessionmemory.RedactSensitiveValues(sessionmemory.Serialize(mustParseMemory(rawCurrent)))
 	if strings.TrimSpace(current) == "" && source == "compact" {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:    repository.ModelTaskMemoryMaintenance,
 			UserID:     req.UserID,
 			SessionID:  req.SessionID,
@@ -239,9 +294,11 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		return nil
 	}
 
-	chatModel, provider, modelID, err := a.buildMemoryMaintenanceModel(ctx, req)
+	configCtx, configCancel := memoryMaintenanceControlContext(ctx)
+	limits, err := a.memoryLimitsContext(configCtx)
+	configCancel()
 	if err != nil {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -253,6 +310,30 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 			ErrorType:    modelusage.ErrorType(err),
 			ErrorMessage: err.Error(),
 			RetryAfter:   retryAfterForTask(taskSource),
+			StartedAt:    started,
+			FinishedAt:   time.Now(),
+		})
+		return err
+	}
+
+	setupCtx, setupCancel := memoryMaintenanceControlContext(ctx)
+	chatModel, provider, modelID, err := a.buildMemoryMaintenanceModel(setupCtx, req, limits)
+	setupCancel()
+	if err != nil {
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
+			TaskKey:      repository.ModelTaskMemoryMaintenance,
+			UserID:       req.UserID,
+			SessionID:    req.SessionID,
+			RunID:        req.RunID,
+			Source:       taskSource,
+			Status:       repository.ModelTaskStatusFailed,
+			Provider:     provider,
+			ModelID:      modelID,
+			TargetType:   "memory",
+			TargetID:     fmt.Sprint(req.SessionID),
+			ErrorType:    memoryMaintenanceTaskErrorType(err),
+			ErrorMessage: err.Error(),
+			RetryAfter:   retryAfterForMemoryTask(taskSource, err),
 			StartedAt:    started,
 			FinishedAt:   time.Now(),
 		})
@@ -273,7 +354,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 	})
 	if err != nil {
 		err = fmt.Errorf("memory maintenance generation failed: %w", err)
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -284,9 +365,9 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 			ModelID:      modelID,
 			TargetType:   "memory",
 			TargetID:     fmt.Sprint(req.SessionID),
-			ErrorType:    modelusage.ErrorType(err),
+			ErrorType:    memoryMaintenanceTaskErrorType(err),
 			ErrorMessage: err.Error(),
-			RetryAfter:   retryAfterForTask(taskSource),
+			RetryAfter:   retryAfterForMemoryTask(taskSource, err),
 			StartedAt:    started,
 			FinishedAt:   time.Now(),
 		})
@@ -294,7 +375,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 	}
 	decision, err := parseMemoryMaintenanceDecision(output)
 	if err != nil {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -314,7 +395,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		return err
 	}
 	if strings.TrimSpace(decision.Action) == "" || strings.EqualFold(decision.Action, "none") {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:    repository.ModelTaskMemoryMaintenance,
 			UserID:     req.UserID,
 			SessionID:  req.SessionID,
@@ -331,9 +412,9 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return nil
 	}
-	if !strings.EqualFold(decision.Action, "update") {
+	if !strings.EqualFold(decision.Action, "update") && !strings.EqualFold(decision.Action, "patch") {
 		err = fmt.Errorf("unsupported memory maintenance action %q", decision.Action)
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -352,9 +433,9 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return err
 	}
-	normalized, normalizedDoc, err := sessionmemory.NormalizeWithLimits(decision.Content, limits)
+	normalized, normalizedDoc, err := applyMemoryMaintenanceDecision(current, decision, limits)
 	if err != nil {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -374,7 +455,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		return err
 	}
 	if err := validateMemoryMaintenanceLanguage(normalizedDoc); err != nil {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -394,7 +475,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		return err
 	}
 	if strings.TrimSpace(normalized) == strings.TrimSpace(current) {
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:    repository.ModelTaskMemoryMaintenance,
 			UserID:     req.UserID,
 			SessionID:  req.SessionID,
@@ -413,7 +494,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 	}
 	if err := validateMemoryMaintenanceDates(current, req.UserText+"\n"+req.ContextText, normalized, calendar.CurrentDate); err != nil {
 		err = fmt.Errorf("memory maintenance discarded: %w", err)
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -434,7 +515,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 	}
 	if err := validateMemoryMaintenanceUpdate(current, normalized, IsMemoryDeletionRequest(req.UserText)); err != nil {
 		err = fmt.Errorf("memory maintenance discarded: %w", err)
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -461,7 +542,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 	if summary == "" || !containsHan(summary) {
 		summary = memoryMaintenanceSummary(source, current, normalized)
 	}
-	_, err = a.memoryRepo.SaveWithChange(ctx, repository.SaveSessionMemoryInput{
+	saveInput := repository.SaveSessionMemoryInput{
 		SessionID:                       req.SessionID,
 		UserID:                          req.UserID,
 		Content:                         normalized,
@@ -472,10 +553,35 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		CheckBefore:                     true,
 		ExpectedAnswerSelectionRevision: req.ExpectedAnswerSelectionRevision,
 		MaxChars:                        limits.MaxChars,
-	})
+	}
+	if req.PreparedResult != nil {
+		req.PreparedResult.SaveInput = &saveInput
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
+			TaskKey:    repository.ModelTaskMemoryMaintenance,
+			UserID:     req.UserID,
+			SessionID:  req.SessionID,
+			RunID:      req.RunID,
+			Source:     taskSource,
+			Status:     repository.ModelTaskStatusSuccess,
+			Provider:   provider,
+			ModelID:    modelID,
+			TargetType: "memory",
+			TargetID:   fmt.Sprint(req.SessionID),
+			StartedAt:  started,
+			FinishedAt: time.Now(),
+		})
+		return nil
+	}
+	persistCtx, persistCancel := memoryMaintenancePersistenceContext(ctx)
+	_, err = a.memoryRepo.SaveWithChange(persistCtx, saveInput)
+	persistCancel()
 	if err != nil {
-		if errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) {
-			a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		if errors.Is(err, repository.ErrAnswerSelectionRevisionConflict) || errors.Is(err, repository.ErrSessionMemoryConflict) {
+			metadata := json.RawMessage(`{"reason":"answer_selection_changed"}`)
+			if errors.Is(err, repository.ErrSessionMemoryConflict) {
+				metadata = json.RawMessage(`{"reason":"memory_changed"}`)
+			}
+			a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 				TaskKey:    repository.ModelTaskMemoryMaintenance,
 				UserID:     req.UserID,
 				SessionID:  req.SessionID,
@@ -486,13 +592,16 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 				ModelID:    modelID,
 				TargetType: "memory",
 				TargetID:   fmt.Sprint(req.SessionID),
-				Metadata:   json.RawMessage(`{"reason":"answer_selection_changed"}`),
+				Metadata:   metadata,
 				StartedAt:  started,
 				FinishedAt: time.Now(),
 			})
-			return repository.ErrAnswerSelectionRevisionConflict
+			if errors.Is(err, repository.ErrSessionMemoryConflict) && taskSource == repository.ModelTaskSourceAuto {
+				return nil
+			}
+			return err
 		}
-		a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+		a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 			TaskKey:      repository.ModelTaskMemoryMaintenance,
 			UserID:       req.UserID,
 			SessionID:    req.SessionID,
@@ -511,7 +620,7 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		})
 		return err
 	}
-	a.recordUtilityTaskRun(ctx, repository.RecordModelTaskRunInput{
+	a.recordMemoryMaintenanceTaskRun(ctx, req, repository.RecordModelTaskRunInput{
 		TaskKey:    repository.ModelTaskMemoryMaintenance,
 		UserID:     req.UserID,
 		SessionID:  req.SessionID,
@@ -526,6 +635,14 @@ func (a *EinoAgent) runMemoryMaintenance(ctx context.Context, req MemoryMaintena
 		FinishedAt: time.Now(),
 	})
 	return err
+}
+
+func (a *EinoAgent) recordMemoryMaintenanceTaskRun(ctx context.Context, req MemoryMaintenanceRequest, input repository.RecordModelTaskRunInput) {
+	if req.TaskRunSink != nil {
+		req.TaskRunSink(input)
+		return
+	}
+	a.recordUtilityTaskRun(ctx, input)
 }
 
 func containsHan(value string) bool {
@@ -556,15 +673,18 @@ func validateMemoryMaintenanceLanguage(doc sessionmemory.Document) error {
 	return nil
 }
 
-func (a *EinoAgent) buildMemoryMaintenanceModel(ctx context.Context, req MemoryMaintenanceRequest) (einoModel.ToolCallingChatModel, string, string, error) {
+func (a *EinoAgent) buildMemoryMaintenanceModel(ctx context.Context, req MemoryMaintenanceRequest, limits sessionmemory.Limits) (einoModel.ToolCallingChatModel, string, string, error) {
 	if req.ModelRequest == nil || strings.TrimSpace(req.ModelRequest.ModelID) == "" || strings.TrimSpace(req.ModelRequest.Provider) == "" {
 		return nil, "", "", fmt.Errorf("memory maintenance requires the active chat model configuration")
 	}
-	modelReq := *req.ModelRequest
+	modelReq, err := prepareMemoryMaintenanceModelRequest(req.ModelRequest, limits)
+	if err != nil {
+		return nil, req.ModelRequest.Provider, req.ModelRequest.ModelID, err
+	}
 	modelReq.UserID = req.UserID
 	modelReq.SessionID = req.SessionID
 	modelReq.SkipUsage = false
-	cm, err := a.buildChatModel(ctx, &modelReq, modelbank.SearchDecision{})
+	cm, err := a.buildChatModel(ctx, modelReq, modelbank.SearchDecision{})
 	if err != nil {
 		return nil, modelReq.Provider, modelReq.ModelID, err
 	}
@@ -725,6 +845,9 @@ func countMemoryItems(doc sessionmemory.Document) int {
 }
 
 func buildMemoryMaintenancePrompt(current string, req MemoryMaintenanceRequest, source string, calendar memoryMaintenanceCalendar) string {
+	// current may come from a row created before the write guard. Maintenance is a model boundary,
+	// so sanitize defensively even when the caller already prepared a safe representation.
+	current = sessionmemory.RedactSensitiveValues(current)
 	var b strings.Builder
 	b.WriteString("Current date: ")
 	b.WriteString(calendar.CurrentDate)
@@ -757,29 +880,20 @@ func buildMemoryMaintenancePrompt(current string, req MemoryMaintenanceRequest, 
 }
 
 func generateMemoryMaintenanceText(ctx context.Context, chatModel einoModel.ToolCallingChatModel, messages []*schema.Message) (string, error) {
-	stream, err := chatModel.Stream(ctx, messages)
+	result, err := modelstream.Collect(ctx, chatModel, messages, MemoryMaintenanceFirstOutputTimeout)
 	if err != nil {
+		if errors.Is(err, modelstream.ErrEmptyOutput) {
+			return "", fmt.Errorf("memory maintenance returned empty output: %w", err)
+		}
 		return "", err
 	}
-	if stream == nil {
-		return "", fmt.Errorf("memory maintenance stream is nil")
-	}
-	defer stream.Close()
-
-	var b strings.Builder
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return "", err
-		}
-		if chunk != nil {
-			b.WriteString(chunk.Content)
+	if result.ResponseMeta != nil {
+		normalized := normalizeProviderFinishReason(result.ResponseMeta.FinishReason, len(result.ToolCalls) > 0)
+		if normalized.Canonical == FinishReasonOutputLimit {
+			return "", memoryMaintenanceOutputLimitError(normalized.Raw)
 		}
 	}
-	output := strings.TrimSpace(b.String())
+	output := strings.TrimSpace(result.Content)
 	if output == "" {
 		return "", fmt.Errorf("memory maintenance returned empty output")
 	}
@@ -802,6 +916,74 @@ func parseMemoryMaintenanceDecision(raw string) (memoryMaintenanceDecision, erro
 		return memoryMaintenanceDecision{}, fmt.Errorf("decode memory maintenance decision: %w", lastErr)
 	}
 	return memoryMaintenanceDecision{}, fmt.Errorf("memory maintenance returned non-json output")
+}
+
+func applyMemoryMaintenanceDecision(current string, decision memoryMaintenanceDecision, limits sessionmemory.Limits) (string, sessionmemory.Document, error) {
+	if strings.EqualFold(decision.Action, "patch") || len(decision.Operations) > 0 {
+		doc, err := sessionmemory.Parse(current)
+		if err != nil {
+			return "", sessionmemory.Document{}, err
+		}
+		for _, operation := range decision.Operations {
+			sectionKey := sessionmemory.NormalizeSectionKey(operation.Section)
+			sectionIndex := -1
+			for i := range doc.Sections {
+				if doc.Sections[i].Key == sectionKey {
+					sectionIndex = i
+					break
+				}
+			}
+			if sectionIndex < 0 {
+				return "", sessionmemory.Document{}, fmt.Errorf("memory patch section %q is invalid", operation.Section)
+			}
+			op := strings.ToLower(strings.TrimSpace(operation.Op))
+			match := strings.TrimSpace(operation.Match)
+			content := strings.TrimSpace(operation.Content)
+			switch op {
+			case "add":
+				if content == "" {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch add content is required")
+				}
+				doc.Sections[sectionIndex].Items = append(doc.Sections[sectionIndex].Items, content)
+			case "update":
+				if match == "" || content == "" {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch update requires match and content")
+				}
+				updated := false
+				for i, item := range doc.Sections[sectionIndex].Items {
+					if strings.TrimSpace(item) == match {
+						doc.Sections[sectionIndex].Items[i] = content
+						updated = true
+						break
+					}
+				}
+				if !updated {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch update target not found")
+				}
+			case "delete", "remove":
+				if match == "" {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch delete requires match")
+				}
+				removed := false
+				items := doc.Sections[sectionIndex].Items
+				for i, item := range items {
+					if strings.TrimSpace(item) == match {
+						doc.Sections[sectionIndex].Items = append(items[:i], items[i+1:]...)
+						removed = true
+						break
+					}
+				}
+				if !removed {
+					return "", sessionmemory.Document{}, fmt.Errorf("memory patch delete target not found")
+				}
+			default:
+				return "", sessionmemory.Document{}, fmt.Errorf("memory patch operation %q is invalid", operation.Op)
+			}
+		}
+		normalized, normalizedDoc, err := sessionmemory.NormalizeWithLimits(sessionmemory.Serialize(doc), limits)
+		return normalized, normalizedDoc, err
+	}
+	return sessionmemory.NormalizeWithLimits(decision.Content, limits)
 }
 
 func fencedJSONCandidates(raw string) []string {
@@ -863,18 +1045,74 @@ func retryAfterForTask(source string) *time.Time {
 	return &t
 }
 
-func (a *EinoAgent) memoryLimits() sessionmemory.Limits {
-	if a != nil && a.configRepo != nil {
-		return a.configRepo.GetMemoryLimits()
+func retryAfterForMemoryTask(source string, err error) *time.Time {
+	// A declared output-capability mismatch cannot recover with time alone.
+	// Leaving it out of cooldown lets a later model/capacity configuration
+	// change take effect on the next eligible turn instead of waiting 30 minutes.
+	if errors.Is(err, ErrMemoryMaintenanceOutputBudgetInsufficient) {
+		return nil
 	}
-	return sessionmemory.DefaultLimits()
+	return retryAfterForTask(source)
 }
 
-func (a *EinoAgent) recordUtilityTaskRun(_ context.Context, input repository.RecordModelTaskRunInput) {
+func (a *EinoAgent) memoryLimitsContext(ctx context.Context) (sessionmemory.Limits, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if a != nil && a.configRepo != nil {
+		return a.configRepo.GetMemoryLimitsContext(ctx)
+	}
+	return sessionmemory.DefaultLimits(), nil
+}
+
+// memoryMaintenanceControlContext bounds each repository/configuration/model
+// setup stage independently. The model stream itself deliberately keeps the
+// caller-owned lifecycle and only applies a first-output guard.
+func memoryMaintenanceControlContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, memoryMaintenanceControlTimeout)
+}
+
+// Persistence gets a fresh bounded child after model output is complete so a
+// slow provider cannot consume the database write budget.
+func memoryMaintenancePersistenceContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, memoryMaintenancePersistenceTimeout)
+}
+
+func (a *EinoAgent) recordUtilityTaskRun(ctx context.Context, input repository.RecordModelTaskRunInput) {
 	if a == nil || a.taskRunRepo == nil {
 		return
 	}
-	recordCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// User stop, sibling cancellation, and service drain describe lifecycle,
+	// not provider health. Preserve the failed audit row but never turn those
+	// cancellations into an automatic 30-minute retry cooldown.
+	if input.Source == repository.ModelTaskSourceAuto && ctx != nil && ctx.Err() != nil {
+		input.RetryAfter = nil
+	}
+	if ctx != nil && ctx.Err() != nil {
+		// The audit row is useful after request cancellation, but it must not add
+		// another five seconds to the canceled operation. Reuse the managed memory
+		// task lifecycle so service drain can cancel and wait for this detached write.
+		if !a.startMemoryBackgroundTask() {
+			log.Printf("[model_task_runs] record skipped during drain: task=%s session=%d", input.TaskKey, input.SessionID)
+			return
+		}
+		go func() {
+			defer a.memoryTasks.Done()
+			a.recordUtilityTaskRunNow(a.backgroundTaskContext(), input)
+		}()
+		return
+	}
+	a.recordUtilityTaskRunNow(context.Background(), input)
+}
+
+func (a *EinoAgent) recordUtilityTaskRunNow(parent context.Context, input repository.RecordModelTaskRunInput) {
+	recordCtx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	if _, err := a.taskRunRepo.Record(recordCtx, input); err != nil {
 		log.Printf("[model_task_runs] record failed: task=%s session=%d err=%v", input.TaskKey, input.SessionID, err)

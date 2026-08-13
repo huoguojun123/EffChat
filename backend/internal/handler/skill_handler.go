@@ -7,9 +7,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/service"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/service"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 func ListSkillsHandler(skillService *service.SkillService) gin.HandlerFunc {
@@ -17,7 +17,7 @@ func ListSkillsHandler(skillService *service.SkillService) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		skills, err := skillService.ListForUser(userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "list", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"skills": skills})
@@ -28,8 +28,8 @@ func UpdateSessionSkillsHandler(skillService *service.SkillService) gin.HandlerF
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		if err != nil || sessionID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 		var req service.SessionSkillsRequest
@@ -39,7 +39,7 @@ func UpdateSessionSkillsHandler(skillService *service.SkillService) gin.HandlerF
 		}
 		skills, err := skillService.UpdateSessionSkills(sessionID, userID, req.Skills)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "update_session", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"skills_enabled": skills})
@@ -50,7 +50,7 @@ func ListAdminSkillsHandler(skillService *service.SkillService) gin.HandlerFunc 
 	return func(c *gin.Context) {
 		skills, err := skillService.ListAdmin()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list skills"})
+			writeSkillError(c, "list", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"skills": skills})
@@ -65,9 +65,9 @@ func CreateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
-		skill, err := skillService.CreateManual(userID, &req)
+		skill, err := skillService.CreateManualContext(c.Request.Context(), userID, &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "create", err)
 			return
 		}
 		c.JSON(http.StatusCreated, skill)
@@ -81,9 +81,9 @@ func UpdateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 			writeInvalidJSON(c)
 			return
 		}
-		skill, err := skillService.Update(c.Param("id"), &req)
+		skill, err := skillService.UpdateContext(c.Request.Context(), middleware.GetUserID(c), c.Param("id"), &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "update", err)
 			return
 		}
 		c.JSON(http.StatusOK, skill)
@@ -92,11 +92,47 @@ func UpdateSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 
 func DeleteSkillHandler(skillService *service.SkillService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if err := skillService.Delete(c.Param("id")); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := skillService.Delete(middleware.GetUserID(c), c.Param("id")); err != nil {
+			writeSkillError(c, "delete", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "skill deleted"})
+	}
+}
+
+func ListSkillHistoryHandler(skillService *service.SkillService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		events, err := skillService.ListHistory(c.Param("id"))
+		if err != nil {
+			writeSkillError(c, "list_history", err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"events": events})
+	}
+}
+
+func RollbackSkillEventHandler(skillService *service.SkillService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		eventID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || eventID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "governance_event_invalid", "invalid governance event id", false)
+			return
+		}
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		if c.Request.ContentLength > 0 {
+			if err := c.ShouldBindJSON(&req); err != nil {
+				writeInvalidJSON(c)
+				return
+			}
+		}
+		skill, event, err := skillService.Rollback(middleware.GetUserID(c), eventID, req.Reason)
+		if err != nil {
+			writeSkillError(c, "rollback", err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"skill": skill, "event": event})
 	}
 }
 
@@ -105,7 +141,7 @@ func ListSkillFilesHandler(skillService *service.SkillService) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		files, err := skillService.ListFilesForUser(userID, c.Param("id"))
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSkillError(c, "list_files", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"files": files})
@@ -117,7 +153,7 @@ func ReadSkillFileHandler(skillService *service.SkillService) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		content, file, err := skillService.ReadFileForUser(userID, c.Param("id"), c.Query("path"))
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSkillError(c, "read_file", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"file": file, "content": content})
@@ -128,7 +164,7 @@ func ListAdminSkillFilesHandler(skillService *service.SkillService) gin.HandlerF
 	return func(c *gin.Context) {
 		files, err := skillService.ListFilesAdmin(c.Param("id"))
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSkillError(c, "list_files", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"files": files})
@@ -139,7 +175,7 @@ func ReadAdminSkillFileHandler(skillService *service.SkillService) gin.HandlerFu
 	return func(c *gin.Context) {
 		content, file, err := skillService.ReadFileAdmin(c.Param("id"), c.Query("path"))
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSkillError(c, "read_file", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"file": file, "content": content})
@@ -150,7 +186,7 @@ func ListSkillImportRecordsHandler(skillService *service.SkillService) gin.Handl
 	return func(c *gin.Context) {
 		records, err := skillService.ListImportRecords(c.Param("id"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "list_import_records", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"records": records})
@@ -168,7 +204,7 @@ func PreviewSkillGitUpdateHandler(skillService *service.SkillService) gin.Handle
 		}
 		result, err := skillService.PreviewGitUpdate(c.Request.Context(), c.Param("id"), &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "preview_update", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -185,7 +221,7 @@ func ApplySkillGitUpdateHandler(skillService *service.SkillService) gin.HandlerF
 		}
 		result, err := skillService.UpdateGit(c.Request.Context(), userID, c.Param("id"), &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "update", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -200,7 +236,7 @@ func PreviewSkillZipUpdateHandler(skillService *service.SkillService) gin.Handle
 		}
 		result, err := skillService.PreviewZipUpdate(c.Param("id"), data)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "preview_update", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -216,19 +252,19 @@ func ApplySkillZipUpdateHandler(skillService *service.SkillService) gin.HandlerF
 		}
 		sourcePath := c.PostForm("source_path")
 		if sourcePath == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "source_path is required"})
+			writePublicError(c, http.StatusBadRequest, "skill_invalid", "source_path is required", false)
 			return
 		}
 		selectedFiles, ok := selectedFileListFromForm(c)
 		if !ok {
 			return
 		}
-		result, err := skillService.UpdateZip(userID, c.Param("id"), data, &service.SkillUpdateApplyRequest{
+		result, err := skillService.UpdateZipContext(c.Request.Context(), userID, c.Param("id"), data, &service.SkillUpdateApplyRequest{
 			SourcePath:    sourcePath,
 			SelectedFiles: selectedFiles,
 		})
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "update", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -245,7 +281,7 @@ func ImportSkillsFromGitHandler(skillService *service.SkillService) gin.HandlerF
 		}
 		result, err := skillService.ImportGit(c.Request.Context(), userID, &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "import", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -261,7 +297,7 @@ func PreviewSkillsFromGitHandler(skillService *service.SkillService) gin.Handler
 		}
 		result, err := skillService.PreviewGit(c.Request.Context(), &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "preview_import", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -283,9 +319,13 @@ func ImportSkillsFromZipHandler(skillService *service.SkillService) gin.HandlerF
 		if !ok {
 			return
 		}
-		result, err := skillService.ImportZip(userID, data, selectedPaths, selectedFiles)
+		targetSkillIDs, ok := targetSkillIDsFromForm(c)
+		if !ok {
+			return
+		}
+		result, err := skillService.ImportZip(userID, data, selectedPaths, selectedFiles, targetSkillIDs)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "import", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -300,7 +340,7 @@ func PreviewSkillsFromZipHandler(skillService *service.SkillService) gin.Handler
 		}
 		result, err := skillService.PreviewZip(data)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSkillError(c, "preview_import", err)
 			return
 		}
 		c.JSON(http.StatusOK, result)
@@ -310,22 +350,30 @@ func PreviewSkillsFromZipHandler(skillService *service.SkillService) gin.Handler
 func readZipUpload(c *gin.Context) ([]byte, bool) {
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "zip file is required"})
+		writePublicError(c, http.StatusBadRequest, "skill_archive_required", "zip file is required", false)
 		return nil, false
 	}
-	if file.Size <= 0 || file.Size > skillparser.MaxArchiveBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "zip file exceeds size limit"})
+	if file.Size <= 0 {
+		writePublicError(c, http.StatusBadRequest, "skill_archive_empty", "zip file is empty", false)
+		return nil, false
+	}
+	if file.Size > skillparser.MaxArchiveBytes {
+		writePublicError(c, http.StatusRequestEntityTooLarge, "skill_archive_too_large", "zip file exceeds size limit", false)
 		return nil, false
 	}
 	src, err := file.Open()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to open zip file"})
+		writeServerError(c, http.StatusInternalServerError, "skill_archive_open_failed", "failed to open zip file", err)
 		return nil, false
 	}
 	defer src.Close()
 	data, err := io.ReadAll(io.LimitReader(src, skillparser.MaxArchiveBytes+1))
-	if err != nil || int64(len(data)) > skillparser.MaxArchiveBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read zip file"})
+	if err != nil {
+		writeServerError(c, http.StatusInternalServerError, "skill_archive_read_failed", "failed to read zip file", err)
+		return nil, false
+	}
+	if int64(len(data)) > skillparser.MaxArchiveBytes {
+		writePublicError(c, http.StatusRequestEntityTooLarge, "skill_archive_too_large", "zip file exceeds size limit", false)
 		return nil, false
 	}
 	return data, true
@@ -338,7 +386,7 @@ func selectedPathsFromForm(c *gin.Context) ([]string, bool) {
 	}
 	var selected []string
 	if err := json.Unmarshal([]byte(raw), &selected); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid selected_paths"})
+		writePublicError(c, http.StatusBadRequest, "skill_selection_invalid", "invalid selected_paths", false)
 		return nil, false
 	}
 	return selected, true
@@ -351,10 +399,23 @@ func selectedFilesFromForm(c *gin.Context) (map[string][]string, bool) {
 	}
 	var selected map[string][]string
 	if err := json.Unmarshal([]byte(raw), &selected); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid selected_files"})
+		writePublicError(c, http.StatusBadRequest, "skill_selection_invalid", "invalid selected_files", false)
 		return nil, false
 	}
 	return selected, true
+}
+
+func targetSkillIDsFromForm(c *gin.Context) (map[string]string, bool) {
+	raw, exists := c.GetPostForm("target_skill_ids")
+	if !exists {
+		return nil, true
+	}
+	var targets map[string]string
+	if err := json.Unmarshal([]byte(raw), &targets); err != nil {
+		writePublicError(c, http.StatusBadRequest, "skill_selection_invalid", "invalid target_skill_ids", false)
+		return nil, false
+	}
+	return targets, true
 }
 
 func selectedFileListFromForm(c *gin.Context) ([]string, bool) {
@@ -364,7 +425,7 @@ func selectedFileListFromForm(c *gin.Context) ([]string, bool) {
 	}
 	var selected []string
 	if err := json.Unmarshal([]byte(raw), &selected); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid selected_files"})
+		writePublicError(c, http.StatusBadRequest, "skill_selection_invalid", "invalid selected_files", false)
 		return nil, false
 	}
 	return selected, true
@@ -372,6 +433,6 @@ func selectedFileListFromForm(c *gin.Context) ([]string, bool) {
 
 func UpdateUserSkillsHandler(skillService *service.SkillService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusGone, gin.H{"error": "per-user skill permissions are deprecated; use skill min_group_level instead"})
+		writePublicError(c, http.StatusGone, "skill_user_permissions_deprecated", "per-user skill permissions are deprecated; use skill min_group_level instead", false)
 	}
 }

@@ -10,16 +10,18 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	einoModel "github.com/cloudwego/eino/components/model"
 	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/tool"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/openairesponses"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 // EinoAgent Eino ADK 驱动的 Agent
@@ -42,6 +44,8 @@ type EinoAgent struct {
 	backgroundMu       sync.Mutex
 	backgroundDraining bool
 	memoryTasks        sync.WaitGroup
+	backgroundCtx      context.Context
+	backgroundCancel   context.CancelFunc
 }
 
 // NewEinoAgent 创建 Eino Agent 实例。
@@ -56,6 +60,7 @@ func NewEinoAgent(channelService *service.ChannelService, toolService *service.T
 	if err := adk.SetLanguage(adk.LanguageChinese); err != nil {
 		log.Printf("[eino] 设置 ADK 中文提示词失败（保持英文）: %v", err)
 	}
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	return &EinoAgent{
 		channelService:    channelService,
 		toolService:       toolService,
@@ -66,6 +71,8 @@ func NewEinoAgent(channelService *service.ChannelService, toolService *service.T
 		fileRepo:          fileRepo,
 		usageService:      usageService,
 		quotaService:      quotaService,
+		backgroundCtx:     backgroundCtx,
+		backgroundCancel:  backgroundCancel,
 	}
 }
 
@@ -90,26 +97,29 @@ func hasSearchProvider(cfg service.SearchRuntimeConfig) bool {
 
 // ChatRequest Agent 聊天请求
 type ChatRequest struct {
-	UserID          int64
-	SessionID       int64
-	Messages        []*model.Message
-	ModelID         string
-	Provider        string
-	SystemName      string
-	SystemPrompt    string
-	Temperature     *float64
-	MaxTokens       int
-	SchemaVersion   string
-	MessageFormat   string
-	SessionTitle    string
-	SessionMetadata []byte
-	UserName        string
-	UserNickname    string
-	UserDisplayName string
-	UserRole        string
-	UserPreferences []byte
-	EnabledSkills   []SkillInstruction
-	PromptTime      time.Time
+	UserID               int64
+	SessionID            int64
+	Messages             []*model.Message
+	ModelID              string
+	Provider             string
+	SystemName           string
+	SystemPrompt         string
+	Temperature          *float64
+	TemperaturePolicy    string
+	TemperatureValue     *float64
+	OpenAIRequestProfile model.OpenAIRequestProfile
+	MaxTokens            int
+	SchemaVersion        string
+	MessageFormat        string
+	SessionTitle         string
+	SessionMetadata      []byte
+	UserName             string
+	UserNickname         string
+	UserDisplayName      string
+	UserRole             string
+	UserPreferences      []byte
+	EnabledSkills        []SkillInstruction
+	PromptTime           time.Time
 
 	RuntimeResolved          bool
 	RuntimeChannel           *model.AIChannel
@@ -120,11 +130,22 @@ type ChatRequest struct {
 	RuntimeToolConfigState   service.RuntimeConfigState
 	RuntimeSearchConfig      service.SearchRuntimeConfig
 	RuntimeSearchConfigState service.SearchRuntimeConfigState
-	ContextWindow            int
-	ModelMaxOutput           int
-	Vision                   bool
-	ToolUse                  bool
-	SearchImpl               modelbank.SearchImpl
+	// RuntimeExtractSummary* are the refinement policy and concrete utility
+	// dependencies accepted with the run. ModelInfo and channel stay in memory;
+	// the durable snapshot contains only their checksum, never channel secrets.
+	// PrepareChat must consume these values after snapshot validation instead of
+	// reopening live configuration and silently changing the content-sharing
+	// boundary between durable admission and execution.
+	RuntimeExtractSummaryEnabled   bool
+	RuntimeExtractSummaryModel     string
+	RuntimeExtractSummaryState     service.RuntimeConfigState
+	RuntimeExtractSummaryModelInfo *modelbank.ModelInfo
+	RuntimeExtractSummaryChannel   *model.AIChannel
+	ContextWindow                  int
+	ModelMaxOutput                 int
+	Vision                         bool
+	ToolUse                        bool
+	SearchImpl                     modelbank.SearchImpl
 
 	// Reasoning 来自模型配置，用于 auto thinking_format 判断双模式模型是否应开启思考。
 	Reasoning bool
@@ -132,6 +153,11 @@ type ChatRequest struct {
 	ThinkingFormat string
 	// ThinkingEffort 是本轮消息选择的思考投入。空/auto 表示使用当前格式的默认档位。
 	ThinkingEffort string
+	// SuppressThinking is reserved for latency- and cost-bounded utility calls.
+	// Adapters still select the model family's correct token-limit field, but
+	// they must not attach optional thinking budgets that can expand or consume
+	// the utility output allowance before the requested payload is produced.
+	SuppressThinking bool
 
 	// SearchMode 搜索模式：off / auto / on，默认 auto
 	SearchMode modelbank.SearchMode
@@ -192,23 +218,108 @@ type Usage struct {
 	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 }
 
-// StreamChat 流式对话（使用 Eino ADK）
+// PreparedChatRun owns only immutable setup output. In particular it must not
+// retain the bounded setup context: the durable run context exclusively owns
+// Runner execution, provider streaming, tools, retries, and cancellation.
 //
-// 事件循环按 ADK 的真实行为消费 AsyncIterator：
-//   - assistant 事件：流式逐帧发 content_delta / thinking_delta，拼接还原完整消息
-//   - tool 事件：发 tool_call_result，不混入助手正文
-//   - 迭代结束：iter.Next() 返回 ok=false
-//
-// 运行事件写入独立于客户端连接，后端会继续跑完并返回完整消息供持久化。
+// Fields remain private so only EinoAgent can execute or mutate the prepared
+// plan; handlers may carry the opaque value across the setup boundary.
+type PreparedChatRun struct {
+	start     func(context.Context) preparedAgentIterator
+	writer    streaming.EventWriter
+	provider  string
+	modelID   string
+	startedAt time.Time
+}
+
+type preparedAgentIterator interface {
+	Next() (*adk.AgentEvent, bool)
+}
+
+type classicPreparedIterator struct {
+	inner *adk.AsyncIterator[*adk.AgentEvent]
+}
+
+func (i *classicPreparedIterator) Next() (*adk.AgentEvent, bool) {
+	return i.inner.Next()
+}
+
+type agenticPreparedIterator struct {
+	inner *adk.AsyncIterator[*adk.TypedAgentEvent[*schema.AgenticMessage]]
+}
+
+func (i *agenticPreparedIterator) Next() (*adk.AgentEvent, bool) {
+	event, ok := i.inner.Next()
+	if !ok || event == nil {
+		return nil, ok
+	}
+	if event.Err != nil {
+		return &adk.AgentEvent{Err: event.Err}, true
+	}
+	if event.Output == nil || event.Output.MessageOutput == nil {
+		return &adk.AgentEvent{}, true
+	}
+	mv := event.Output.MessageOutput
+	role := schema.Assistant
+	convert := openairesponses.NewMessageConverter().Convert
+	if mv.AgenticRole == schema.AgenticRoleTypeUser {
+		role = schema.Tool
+		convert = openairesponses.ToolResultMessage
+	}
+	if mv.IsStreaming {
+		stream := schema.StreamReaderWithConvert(mv.MessageStream, convert)
+		return adk.EventFromMessage(nil, stream, role, ""), true
+	}
+	message, err := convert(mv.Message)
+	if err != nil {
+		return &adk.AgentEvent{Err: err}, true
+	}
+	return adk.EventFromMessage(message, nil, role, message.ToolName), true
+}
+
+// StreamChat keeps the historical single-context API for utility callers.
+// Durable RunHub execution uses PrepareChat followed by RunPreparedChat so its
+// bounded setup child cannot leak into provider streaming.
 func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer streaming.EventWriter) (*ChatResponse, error) {
+	prepared, err := a.PrepareChat(ctx, req, writer)
+	if err != nil {
+		return nil, err
+	}
+	return a.RunPreparedChat(ctx, prepared)
+}
+
+// PrepareChat resolves and constructs everything required before model
+// execution. The caller may cancel setupCtx as soon as this method succeeds;
+// no returned value retains it.
+func (a *EinoAgent) PrepareChat(setupCtx context.Context, req *ChatRequest, writer streaming.EventWriter) (*PreparedChatRun, error) {
+	if setupCtx == nil {
+		return nil, errors.New("chat setup context is required")
+	}
+	if req == nil {
+		return nil, errors.New("chat request is required")
+	}
+	if writer == nil {
+		return nil, errors.New("chat event writer is required")
+	}
 	startedAt := time.Now()
 	plan := a.buildRuntimeContextPlan(req)
 	toolRuntime := plan.toolRuntime
 	searchDecision := plan.searchDecision
 	searchRuntime := plan.searchRuntime
 
-	// 2. 根据 provider 创建对应的 ChatModel（按搜索决策挂载原生搜索能力）
-	chatModel, err := a.buildChatModel(ctx, req, searchDecision)
+	// 2. Responses 主对话必须保留 AgenticMessage 直到 Eino typed Agent，
+	// 否则 function call 会在本地 Tool/ReAct 判断前被压回普通文本协议。
+	responsesMode, err := a.usesResponsesAdapter(setupCtx, req)
+	if err != nil {
+		return nil, err
+	}
+	var chatModel einoModel.ToolCallingChatModel
+	var agenticModel einoModel.AgenticModel
+	if responsesMode {
+		agenticModel, err = a.buildResponsesAgenticModel(setupCtx, req)
+	} else {
+		chatModel, err = a.buildChatModel(setupCtx, req, searchDecision)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +330,11 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 
 	// memory 工具：仅在会话开启记忆开关时挂载，让模型跨轮记住关键事实。
 	if memoryOn {
-		tools = append(tools, tool.NewMemoryToolWithMaxChars(a.memoryRepo, req.SessionID, req.UserID, a.memoryLimits().MaxChars))
+		limits, err := a.memoryLimitsContext(setupCtx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve memory limits: %w", err)
+		}
+		tools = append(tools, tool.NewMemoryToolWithMaxChars(a.memoryRepo, req.SessionID, req.UserID, limits.MaxChars))
 	}
 	// 文件工作区工具：文本附件默认只给模型一份清单，不再全文注入上下文。
 	// 模型应先 file_list/file_search 定位，再 file_read 读取片段，避免大文件一轮塞爆。
@@ -272,9 +387,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 			tools = append(tools, webSearchTool)
 		}
 		if toolRuntime.IsEnabled("web_extract") {
-			// 网页提炼：默认用独立小模型把抓取正文按 goal 提炼成要点（仿 Claude Code），
-			// 避免整页正文塞满上下文。配置关闭或小模型构造失败时降级到截断（工具内默认 4000）。
-			summarizer, summaryEnabled := a.buildExtractSummarizer(ctx)
+			// Basic 短正文直接返回；超限正文先本地筛选，再按现有开关交给独立小模型提炼。
+			// 配置关闭或模型不可用时仍返回受限的相关原文，不把 refinement 变成可用性前提。
+			summarizer, summaryEnabled, err := a.buildExtractSummarizer(setupCtx, req)
+			if err != nil {
+				return nil, fmt.Errorf("prepare web extract refinement: %w", err)
+			}
 			webExtractTool := tool.NewWebExtractTool(tool.WebExtractConfig{
 				CrawlerImpl:      searchRuntime.CrawlerImpl,
 				CrawlerProviders: searchRuntime.CrawlerProviders,
@@ -294,16 +412,9 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		}
 	}
 
-	mountedTools := make(map[string]bool, len(tools))
-	for _, mountedTool := range tools {
-		info, err := mountedTool.Info(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to inspect mounted tool: %w", err)
-		}
-		if info == nil || strings.TrimSpace(info.Name) == "" {
-			return nil, errors.New("mounted tool has no name")
-		}
-		mountedTools[info.Name] = true
+	mountedTools, err := validateMountedToolGovernance(setupCtx, toolRuntime, tools)
+	if err != nil {
+		return nil, err
 	}
 
 	instruction, err := buildInstruction(a.configRepo, req, searchDecision, mountedTools)
@@ -322,27 +433,23 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		}
 	}
 
-	agentConfig := &adk.ChatModelAgentConfig{
-		Model:         chatModel,
-		Instruction:   instruction,
-		MaxIterations: defaultAgentMaxIterations,
-		ModelRetryConfig: transientModelRetryConfig(func(trace ModelRetryTrace) {
-			if writer == nil {
-				return
-			}
-			_ = writer.WriteEvent(streaming.EventModelRetry, streaming.ModelRetryEvent{
-				Attempt:     trace.Attempt,
-				MaxAttempts: trace.MaxAttempts,
-				DelayMs:     trace.Delay.Milliseconds(),
-				Category:    string(trace.Category),
-			})
-		}),
+	retryObserver := func(trace ModelRetryTrace) {
+		if writer == nil {
+			return
+		}
+		_ = writer.WriteEvent(streaming.EventModelRetry, streaming.ModelRetryEvent{
+			Attempt:     trace.Attempt,
+			MaxAttempts: trace.MaxAttempts,
+			DelayMs:     trace.Delay.Milliseconds(),
+			Category:    string(trace.Category),
+		})
 	}
+	toolsConfig := adk.ToolsConfig{}
 
 	var toolBudget *toolBudgetMiddleware
 	if len(tools) > 0 {
 		toolBudget = newToolBudgetMiddleware(req)
-		agentConfig.ToolsConfig = adk.ToolsConfig{
+		toolsConfig = adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: tools,
 				// 模型有时会调用未挂载的工具：跨轮切换搜索开关后历史里残留的
@@ -352,20 +459,11 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 				UnknownToolsHandler: unknownToolHandler,
 			},
 		}
-		agentConfig.ToolsConfig.ToolCallMiddlewares = []compose.ToolMiddleware{toolGovernanceMiddleware(toolRuntime, a.quotaService, a.usageService, toolBudget)}
+		toolsConfig.ToolCallMiddlewares = []compose.ToolMiddleware{toolGovernanceMiddleware(toolRuntime, a.quotaService, a.usageService, toolBudget)}
 	}
 	// 注：UseModelNativeSearch 的 params 型传参逻辑由各 provider adapter 处理
 	// （如 Gemini 的 google_search、Qwen 的 enable_search），internal 型无需处理。
 	// 应用工具是否被实际调用，交由模型根据系统指令自主决定：原生优先，不足再兜底。
-
-	if len(tools) > 0 {
-		agentConfig.Handlers = append(agentConfig.Handlers, toolBudget)
-	}
-
-	agent, err := adk.NewChatModelAgent(ctx, agentConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create agent: %w", err)
-	}
 
 	// 5. 转换历史消息为 Eino 格式
 	visionCapable := req.Vision
@@ -377,17 +475,92 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		return nil, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
-	// 6. 创建 Runner 并执行
-	// 必须显式开启 EnableStreaming，否则 ADK 默认走非流式 Invoke/Generate，
-	// 上游 OpenAI 兼容网关会收到非流式请求，前端也只能在 message_complete 时整块拿到内容。
-	runner := adk.NewRunner(ctx, adk.RunnerConfig{
-		Agent:           agent,
-		EnableStreaming: true,
-	})
-	iter := runner.Run(ctx, einoMessages)
+	prepared := &PreparedChatRun{
+		writer:    writer,
+		provider:  req.Provider,
+		modelID:   req.ModelID,
+		startedAt: startedAt,
+	}
+	if responsesMode {
+		agenticMessages, convertErr := openairesponses.ToAgenticMessages(einoMessages)
+		if convertErr != nil {
+			return nil, fmt.Errorf("failed to convert Responses messages: %w", convertErr)
+		}
+		typedConfig := &adk.TypedChatModelAgentConfig[*schema.AgenticMessage]{
+			Model: agenticModel, Instruction: instruction, MaxIterations: defaultAgentMaxIterations,
+			ToolsConfig: toolsConfig, ModelRetryConfig: transientAgenticModelRetryConfig(retryObserver),
+		}
+		if toolBudget != nil {
+			typedConfig.Handlers = append(typedConfig.Handlers, newAgenticToolBudgetMiddleware(toolBudget))
+		}
+		agent, createErr := adk.NewTypedChatModelAgent[*schema.AgenticMessage](setupCtx, typedConfig)
+		if createErr != nil {
+			return nil, fmt.Errorf("failed to create typed Responses agent: %w", createErr)
+		}
+		prepared.start = func(runCtx context.Context) preparedAgentIterator {
+			runner := adk.NewTypedRunner(adk.TypedRunnerConfig[*schema.AgenticMessage]{Agent: agent, EnableStreaming: true})
+			return &agenticPreparedIterator{inner: runner.Run(runCtx, agenticMessages)}
+		}
+		return prepared, nil
+	}
+
+	agentConfig := &adk.ChatModelAgentConfig{
+		Model: chatModel, Instruction: instruction, MaxIterations: defaultAgentMaxIterations,
+		ToolsConfig: toolsConfig, ModelRetryConfig: transientModelRetryConfig(retryObserver),
+	}
+	if toolBudget != nil {
+		agentConfig.Handlers = append(agentConfig.Handlers, toolBudget)
+	}
+	agent, err := adk.NewChatModelAgent(setupCtx, agentConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create agent: %w", err)
+	}
+	prepared.start = func(runCtx context.Context) preparedAgentIterator {
+		runner := adk.NewRunner(runCtx, adk.RunnerConfig{Agent: agent, EnableStreaming: true})
+		return &classicPreparedIterator{inner: runner.Run(runCtx, einoMessages)}
+	}
+	return prepared, nil
+}
+
+// validateMountedToolGovernance is the final assembly invariant between Eino
+// ToolInfo and the Admin/runtime catalog. A Tool that is executable but absent
+// from the catalog would otherwise be invisible to administrators and could
+// bypass the configured enabled state, so setup fails before model execution.
+func validateMountedToolGovernance(ctx context.Context, runtime service.ToolRuntimeConfigSet, tools []einoTool.BaseTool) (map[string]bool, error) {
+	mounted := make(map[string]bool, len(tools))
+	for _, mountedTool := range tools {
+		info, err := mountedTool.Info(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect mounted tool: %w", err)
+		}
+		if info == nil || strings.TrimSpace(info.Name) == "" {
+			return nil, errors.New("mounted tool has no name")
+		}
+		if !runtime.IsKnown(info.Name) {
+			return nil, fmt.Errorf("mounted tool %q is not registered in runtime governance", info.Name)
+		}
+		mounted[info.Name] = true
+	}
+	return mounted, nil
+}
+
+// RunPreparedChat executes a successfully prepared chat with the durable run
+// context. Runner construction intentionally lives here because Eino lazily
+// builds its execution graph on the first Run call.
+func (a *EinoAgent) RunPreparedChat(runCtx context.Context, prepared *PreparedChatRun) (*ChatResponse, error) {
+	if runCtx == nil {
+		return nil, errors.New("durable run context is required")
+	}
+	if prepared == nil || prepared.start == nil {
+		return nil, errors.New("prepared chat run is required")
+	}
+
+	// 6. 创建 Runner 并执行。start 封装 classic/typed Runner 差异；两条
+	// 路径都必须流式运行，并在这里统一进入 SSE/持久化契约。
+	iter := prepared.start(runCtx)
 
 	emit := func(event string, data interface{}) error {
-		_ = writer.WriteEvent(event, data)
+		_ = prepared.writer.WriteEvent(event, data)
 		return nil
 	}
 
@@ -409,12 +582,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 			if errors.As(event.Err, &willRetry) {
 				continue
 			}
-			if service.RunCancelCauseFromContext(ctx) != "" && ctx.Err() != nil {
+			if service.RunCancelCauseFromContext(runCtx) != "" && runCtx.Err() != nil {
 				canceled = true
 				finishReason = "canceled"
 				break
 			}
-			return partialChatResponse(produced, interruptedFinishReason(finishReason), usage), sanitizeModelRuntimeError(req.Provider, req.ModelID, event.Err)
+			return partialChatResponse(produced, interruptedFinishReason(finishReason), usage), sanitizeModelRuntimeError(prepared.provider, prepared.modelID, event.Err)
 		}
 
 		if event.Output == nil || event.Output.MessageOutput == nil {
@@ -439,12 +612,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 		}
 
 		// 助手事件
-		fullMsg, err := a.consumeAssistantEvent(mv, emit)
+		fullMsg, err := a.consumeAssistantEvent(runCtx, mv, emit)
 		if err != nil {
 			if fullMsg != nil {
 				produced = append(produced, messageToData(fullMsg))
 			}
-			if service.RunCancelCauseFromContext(ctx) != "" && ctx.Err() != nil {
+			if service.RunCancelCauseFromContext(runCtx) != "" && runCtx.Err() != nil {
 				canceled = true
 				finishReason = "canceled"
 				break
@@ -482,7 +655,7 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 	if usage == nil {
 		usage = &Usage{}
 	}
-	duration := time.Since(startedAt)
+	duration := time.Since(prepared.startedAt)
 	var tokensPerSecond float64
 	if duration > 0 && usage.CompletionTokens > 0 {
 		tokensPerSecond = float64(usage.CompletionTokens) / duration.Seconds()
@@ -495,12 +668,12 @@ func (a *EinoAgent) StreamChat(ctx context.Context, req *ChatRequest, writer str
 	if !canceled && !hasDisplayableAssistantOutput(produced) {
 		if fallback, ok := materializeReasoningOnlyAssistantOutput(produced); ok {
 			log.Printf("[eino] reasoning-only assistant output materialized: provider=%s model=%s finish_reason=%s prompt_tokens=%d completion_tokens=%d reasoning_tokens=%d",
-				req.Provider, req.ModelID, finishReason, usage.PromptTokens, usage.CompletionTokens, usage.ReasoningTokens)
+				prepared.provider, prepared.modelID, finishReason, usage.PromptTokens, usage.CompletionTokens, usage.ReasoningTokens)
 			if err := emit(streaming.EventContentDelta, streaming.ContentDeltaEvent{Delta: fallback}); err != nil {
 				return nil, err
 			}
 		} else {
-			return nil, newModelEmptyResponseError(req.Provider, req.ModelID, finishReason, usage)
+			return nil, newModelEmptyResponseError(prepared.provider, prepared.modelID, finishReason, usage)
 		}
 	}
 	attachRuntimeMeta(produced, duration.Milliseconds(), tokensPerSecond)

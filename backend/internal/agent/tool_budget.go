@@ -53,6 +53,68 @@ type toolContextGrant struct {
 	skill  bool
 }
 
+type agenticToolBudgetMiddleware struct {
+	*adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]
+	budget *toolBudgetMiddleware
+}
+
+func newAgenticToolBudgetMiddleware(budget *toolBudgetMiddleware) *agenticToolBudgetMiddleware {
+	return &agenticToolBudgetMiddleware{
+		TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.AgenticMessage]{},
+		budget:                            budget,
+	}
+}
+
+func (m *agenticToolBudgetMiddleware) BeforeModelRewriteState(ctx context.Context, state *adk.TypedChatModelAgentState[*schema.AgenticMessage], _ *adk.TypedModelContext[*schema.AgenticMessage]) (context.Context, *adk.TypedChatModelAgentState[*schema.AgenticMessage], error) {
+	if m == nil || m.budget == nil || state == nil {
+		return ctx, state, nil
+	}
+	b := m.budget
+	if !b.initialized {
+		b.initialized = true
+		b.baseline = len(state.Messages)
+	}
+	rounds, calls := countAgenticGeneratedToolUse(state.Messages, b.baseline)
+	actualCalls := int(b.actualCalls.Load())
+	if rounds >= b.maxRounds || calls >= b.maxCalls || actualCalls >= b.maxCalls || b.forceFinal.Load() {
+		b.forceFinal.Store(true)
+		state.ToolInfos = nil
+		state.DeferredToolInfos = nil
+		if !b.noteAdded {
+			b.noteAdded = true
+			state.Messages = append(state.Messages, schema.UserAgenticMessage(toolBudgetFinalNotice(rounds, maxInt(calls, actualCalls), b.maxRounds, b.maxCalls)))
+			log.Printf("[agent] agentic tool budget exhausted, forcing final answer: session=%d provider=%s model=%s rounds=%d calls=%d actual_calls=%d max_rounds=%d max_calls=%d",
+				b.sessionID, b.provider, b.modelID, rounds, calls, actualCalls, b.maxRounds, b.maxCalls)
+		}
+	}
+	return ctx, state, nil
+}
+
+func countAgenticGeneratedToolUse(messages []*schema.AgenticMessage, baseline int) (rounds, calls int) {
+	if baseline < 0 {
+		baseline = 0
+	}
+	if baseline > len(messages) {
+		baseline = len(messages)
+	}
+	for _, message := range messages[baseline:] {
+		if message == nil || message.Role != schema.AgenticRoleTypeAssistant {
+			continue
+		}
+		messageCalls := 0
+		for _, block := range message.ContentBlocks {
+			if block != nil && block.FunctionToolCall != nil {
+				messageCalls++
+			}
+		}
+		if messageCalls > 0 {
+			rounds++
+			calls += messageCalls
+		}
+	}
+	return rounds, calls
+}
+
 // newToolBudgetMiddleware 给单轮 Agent run 加一层工具预算保险。
 //
 // Eino ADK 的 MaxIterations 能防止无限循环，但报错方式是 "exceeds max

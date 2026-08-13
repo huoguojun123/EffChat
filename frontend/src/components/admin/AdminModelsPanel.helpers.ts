@@ -23,6 +23,12 @@ export function makeEmptyModel(provider = "openai"): ModelDraft {
     enabled: true,
     min_group_level: 0,
     sort_order: 0,
+    catalog_source: "manual",
+    catalog_checked_at: null,
+    lifecycle_status: "unknown",
+    temperature_policy: "configurable",
+    temperature_value: null,
+    openai_request_profile: {},
     ...providerDefaults[provider],
   }
 }
@@ -43,6 +49,12 @@ export function toModelDraft(model: Model): ModelDraft {
     enabled: model.enabled,
     min_group_level: model.min_group_level ?? 0,
     sort_order: model.sort_order,
+    catalog_source: model.catalog_source || "manual",
+    catalog_checked_at: model.catalog_checked_at || null,
+    lifecycle_status: model.lifecycle_status || "unknown",
+    temperature_policy: model.temperature_policy || "configurable",
+    temperature_value: model.temperature_value ?? null,
+    openai_request_profile: { ...model.openai_request_profile },
   }
 }
 
@@ -61,6 +73,12 @@ export function toModelPatch(draft: ModelDraft): UpdateModelInput {
     enabled: draft.enabled,
     min_group_level: draft.min_group_level,
     sort_order: draft.sort_order,
+    catalog_source: draft.catalog_source,
+    catalog_checked_at: draft.catalog_checked_at,
+    lifecycle_status: draft.lifecycle_status,
+    temperature_policy: draft.temperature_policy,
+    temperature_value: draft.temperature_policy === "fixed" ? draft.temperature_value : null,
+    openai_request_profile: { ...draft.openai_request_profile },
   }
 }
 
@@ -74,6 +92,29 @@ export function catalogModelPatch(model: Model): Partial<ModelDraft> {
     reasoning: model.reasoning,
     thinking_format: model.thinking_format || "auto",
     search_impl: model.search_impl,
+    catalog_source: model.catalog_source,
+    catalog_checked_at: model.catalog_checked_at || null,
+    lifecycle_status: model.lifecycle_status,
+  }
+}
+
+const catalogOwnedFields: Array<keyof ModelDraft> = [
+  "context_window", "max_output", "vision", "tool_use", "reasoning",
+  "thinking_format", "search_impl", "lifecycle_status", "temperature_policy", "temperature_value",
+  "openai_request_profile",
+]
+
+// Manual capability edits override imported directory evidence. Catalog
+// workflows carry catalog_source explicitly and therefore bypass this step.
+export function markManualCatalogOverride(patch: Partial<ModelDraft>, current?: Pick<ModelDraft, "lifecycle_status">): Partial<ModelDraft> {
+  if (patch.catalog_source !== undefined || !catalogOwnedFields.some((field) => patch[field] !== undefined)) {
+    return patch
+  }
+  return {
+    ...patch,
+    catalog_source: "manual",
+    catalog_checked_at: null,
+    lifecycle_status: patch.lifecycle_status ?? current?.lifecycle_status ?? "unknown",
   }
 }
 
@@ -115,4 +156,29 @@ export function formatContext(value: number) {
 export function formatDuration(ms: number) {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+export function catalogSourceLabel(source: Model["catalog_source"]) {
+  if (source === "models_dev") return "models.dev"
+  if (source === "channel") return "渠道目录"
+  if (source === "builtin") return "内置兜底"
+  if (source === "manual") return "管理员"
+  return "未知来源"
+}
+
+export function lifecycleStatusLabel(status: Model["lifecycle_status"]) {
+  if (status === "active") return "可用"
+  if (status === "preview") return "预览"
+  if (status === "deprecated") return "弃用中"
+  if (status === "retired") return "已退役"
+  return "待核对"
+}
+
+export function formatCatalogCheckedAt(value?: string | null) {
+  if (!value) return "未核对"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "未核对"
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).format(date)
 }

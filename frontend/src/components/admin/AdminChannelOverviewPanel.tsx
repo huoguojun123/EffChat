@@ -21,6 +21,7 @@ interface Props {
   setError: (error: string) => void
   onSaved: (key: string) => void
   onDeleted: () => void
+  onDirtyChange: (dirty: boolean) => void
   onFetchAvailableModels: () => void | Promise<void>
   onOpenModelManager: () => void
   onStartEdit: (model: Model) => void
@@ -43,6 +44,7 @@ export function AdminChannelOverviewPanel({
   setError,
   onSaved,
   onDeleted,
+  onDirtyChange,
   onFetchAvailableModels,
   onOpenModelManager,
   onStartEdit,
@@ -82,6 +84,7 @@ export function AdminChannelOverviewPanel({
           setError={setError}
           onSaved={onSaved}
           onDeleted={onDeleted}
+          onDirtyChange={onDirtyChange}
         />
       </div>
 

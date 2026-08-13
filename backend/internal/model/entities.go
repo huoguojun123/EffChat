@@ -1,23 +1,35 @@
 package model
 
-import "time"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 type User struct {
-	ID           int64      `json:"id"`
-	Username     string     `json:"username"`
-	Email        *string    `json:"email,omitempty"`
-	PasswordHash string     `json:"-"` // 不返回给前端
-	Nickname     *string    `json:"nickname,omitempty"`
-	AvatarURL    *string    `json:"avatar_url,omitempty"`
-	Role         string     `json:"role"`               // admin, user
-	GroupID      *int64     `json:"group_id,omitempty"` // 所属分级组，NULL=默认最低级
-	Permissions  []byte     `json:"permissions,omitempty"`
-	Preferences  []byte     `json:"preferences,omitempty"`
-	IsActive     bool       `json:"is_active"`
-	AuthVersion  int        `json:"-"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	ID             int64               `json:"id"`
+	Username       string              `json:"username"`
+	Email          *string             `json:"email,omitempty"`
+	PasswordHash   string              `json:"-"` // 不返回给前端
+	Nickname       *string             `json:"nickname,omitempty"`
+	AvatarURL      *string             `json:"avatar_url,omitempty"`
+	Role           string              `json:"role"`               // admin, user
+	GroupID        *int64              `json:"group_id,omitempty"` // 原始分级组；NULL 动态继承当前默认组
+	EffectiveGroup *EffectiveUserGroup `json:"-"`                  // repository 解析的当前生效组，不持久化
+	Permissions    []byte              `json:"permissions,omitempty"`
+	Preferences    []byte              `json:"preferences,omitempty"`
+	IsActive       bool                `json:"is_active"`
+	AuthVersion    int                 `json:"-"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+	LastLoginAt    *time.Time          `json:"last_login_at,omitempty"`
+}
+
+type EffectiveUserGroup struct {
+	ID    int64
+	Name  string
+	Level int
 }
 
 // UserGroup 用户分级组（user_groups 表）。level 越大权限越高。
@@ -61,6 +73,72 @@ type Session struct {
 	DeletedAt               *time.Time `json:"deleted_at,omitempty"`
 }
 
+// MarshalJSON keeps the database representation of Session.Metadata private
+// from the HTTP wire contract. The field is stored as JSONB bytes so services
+// and repositories can preserve the exact document, but encoding []byte
+// directly would expose a base64 string and make the frontend lose structured
+// session state after a refresh.
+func (s Session) MarshalJSON() ([]byte, error) {
+	type sessionAlias Session
+	encoded, err := json.Marshal(sessionAlias(s))
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	metadata := bytes.TrimSpace(s.Metadata)
+	if len(metadata) == 0 || bytes.Equal(metadata, []byte("null")) {
+		metadata = []byte("{}")
+	}
+	if !json.Valid(metadata) || metadata[0] != '{' {
+		return nil, fmt.Errorf("session metadata must be a JSON object")
+	}
+	fields["metadata"] = json.RawMessage(metadata)
+	return json.Marshal(fields)
+}
+
+// UnmarshalJSON accepts both the corrected structured object and the legacy
+// base64 string emitted by the old []byte wire shape. This keeps tests,
+// clients and migration tooling able to read historical responses while all
+// newly emitted Session payloads use an object.
+func (s *Session) UnmarshalJSON(data []byte) error {
+	type sessionAlias Session
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	metadata := bytes.TrimSpace(fields["metadata"])
+	delete(fields, "metadata")
+	withoutMetadata, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var decoded sessionAlias
+	if err := json.Unmarshal(withoutMetadata, &decoded); err != nil {
+		return err
+	}
+	*s = Session(decoded)
+	if len(metadata) == 0 || bytes.Equal(metadata, []byte("null")) {
+		s.Metadata = []byte("{}")
+		return nil
+	}
+	if metadata[0] == '"' {
+		var legacy []byte
+		if err := json.Unmarshal(metadata, &legacy); err != nil {
+			return fmt.Errorf("decode legacy session metadata: %w", err)
+		}
+		s.Metadata = legacy
+		return nil
+	}
+	if !json.Valid(metadata) || metadata[0] != '{' {
+		return fmt.Errorf("session metadata must be a JSON object")
+	}
+	s.Metadata = append([]byte(nil), metadata...)
+	return nil
+}
+
 type SessionFolder struct {
 	ID        int64      `json:"id"`
 	UserID    int64      `json:"user_id"`
@@ -96,21 +174,27 @@ type ThinkingEffortOption struct {
 // Model 模型能力记录（models 表）
 // 字段与 modelbank.ModelInfo / ModelCapabilities 对齐，由 repository 层映射。
 type Model struct {
-	ID             string    `json:"id"`
-	DisplayName    string    `json:"display_name"`
-	Provider       string    `json:"provider"`
-	Vision         bool      `json:"vision"`
-	ToolUse        bool      `json:"tool_use"`
-	Reasoning      bool      `json:"reasoning"`
-	ThinkingFormat string    `json:"thinking_format"` // auto, none, deepseek_v4, openai_reasoning_effort...
-	SearchImpl     string    `json:"search_impl"`     // '', internal, params, tool
-	ContextWindow  int       `json:"context_window"`
-	MaxOutput      int       `json:"max_output"`
-	Enabled        bool      `json:"enabled"`
-	MinGroupLevel  int       `json:"min_group_level"` // 最低可见组等级，0=所有人可见
-	SortOrder      int       `json:"sort_order"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                   string               `json:"id"`
+	DisplayName          string               `json:"display_name"`
+	Provider             string               `json:"provider"`
+	Vision               bool                 `json:"vision"`
+	ToolUse              bool                 `json:"tool_use"`
+	Reasoning            bool                 `json:"reasoning"`
+	ThinkingFormat       string               `json:"thinking_format"` // auto, none, deepseek_v4, openai_reasoning_effort...
+	SearchImpl           string               `json:"search_impl"`     // '', internal, params, tool
+	ContextWindow        int                  `json:"context_window"`
+	MaxOutput            int                  `json:"max_output"`
+	Enabled              bool                 `json:"enabled"`
+	MinGroupLevel        int                  `json:"min_group_level"` // 最低可见组等级，0=所有人可见
+	SortOrder            int                  `json:"sort_order"`
+	CatalogSource        string               `json:"catalog_source"`
+	CatalogCheckedAt     *time.Time           `json:"catalog_checked_at,omitempty"`
+	LifecycleStatus      string               `json:"lifecycle_status"`
+	TemperaturePolicy    string               `json:"temperature_policy"`
+	TemperatureValue     *float64             `json:"temperature_value,omitempty"`
+	OpenAIRequestProfile OpenAIRequestProfile `json:"openai_request_profile"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
 
 	ResolvedThinkingFormat string                 `json:"resolved_thinking_format,omitempty"`
 	DefaultThinkingEffort  string                 `json:"default_thinking_effort,omitempty"`
@@ -120,6 +204,17 @@ type Model struct {
 	ChannelAdapter         string                 `json:"channel_adapter,omitempty"`
 	ChannelEnabled         bool                   `json:"channel_enabled"`
 	ChannelConfigured      bool                   `json:"channel_configured"`
+}
+
+// OpenAIRequestProfile contains only typed, protocol-owned fields that some
+// OpenAI-compatible gateways require to be fixed explicitly. Nil means the
+// field is omitted; this deliberately avoids an arbitrary provider-parameter
+// map crossing the persisted configuration and accepted-run boundary.
+type OpenAIRequestProfile struct {
+	TopP             *float64 `json:"top_p,omitempty"`
+	N                *int     `json:"n,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 }
 
 type AIChannel struct {
@@ -171,6 +266,9 @@ type ModelRuntimeProfile struct {
 	SupportsVision        bool                   `json:"supports_vision"`
 	SupportsTools         bool                   `json:"supports_tools"`
 	SearchImpl            string                 `json:"search_impl"`
+	TemperaturePolicy     string                 `json:"temperature_policy"`
+	TemperatureValue      *float64               `json:"temperature_value,omitempty"`
+	OpenAIRequestProfile  OpenAIRequestProfile   `json:"openai_request_profile"`
 }
 
 // Prompt 预设提示词
@@ -184,7 +282,6 @@ type Prompt struct {
 	GroupID     *int64    `json:"group_id,omitempty"`
 	GroupName   string    `json:"group_name"`
 	IsPublic    bool      `json:"is_public"`
-	UseCount    int       `json:"use_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -279,30 +376,31 @@ type FontAsset struct {
 
 // File 上传文件元数据
 type File struct {
-	ID                int64      `json:"id"`
-	UserID            int64      `json:"user_id"`
-	SessionID         *int64     `json:"session_id,omitempty"`
-	FileName          string     `json:"file_name"`
-	FilePath          string     `json:"-"`
-	FileType          string     `json:"file_type"`
-	FileSize          int64      `json:"file_size"`
-	FileHash          *string    `json:"file_hash,omitempty"`
-	Status            string     `json:"status"`
-	ExtractedTextPath *string    `json:"-"` // 提取正文文件路径，仅供 file_read 工具按需读取
-	ExtractStatus     string     `json:"extract_status"`
-	ExtractError      *string    `json:"extract_error,omitempty"`
-	TokenEstimate     int        `json:"token_estimate"`
-	OCRProvider       *string    `json:"ocr_provider,omitempty"`
-	OCRTaskID         *string    `json:"ocr_task_id,omitempty"`
-	OCRPageCount      int        `json:"ocr_page_count"`
-	OCRProgressPages  int        `json:"ocr_progress_pages"`
-	OCRStartedAt      *time.Time `json:"ocr_started_at,omitempty"`
-	OCRCompletedAt    *time.Time `json:"ocr_completed_at,omitempty"`
-	OCRErrorType      *string    `json:"ocr_error_type,omitempty"`
-	OCRSourcePath     *string    `json:"-"`
-	OCRLeaseUntil     *time.Time `json:"-"`
-	OCRAttempts       int        `json:"-"`
-	OCRNextRetryAt    *time.Time `json:"-"`
-	CreatedAt         time.Time  `json:"created_at"`
-	DeletedAt         *time.Time `json:"deleted_at,omitempty"`
+	ID                 int64      `json:"id"`
+	UserID             int64      `json:"user_id"`
+	SessionID          *int64     `json:"session_id,omitempty"`
+	FileName           string     `json:"file_name"`
+	FilePath           string     `json:"-"`
+	FileType           string     `json:"file_type"`
+	FileSize           int64      `json:"file_size"`
+	FileHash           *string    `json:"file_hash,omitempty"`
+	Status             string     `json:"status"`
+	ExtractedTextPath  *string    `json:"-"` // 提取正文文件路径，仅供 file_read 工具按需读取
+	ExtractStatus      string     `json:"extract_status"`
+	ExtractError       *string    `json:"extract_error,omitempty"`
+	TokenEstimate      int        `json:"token_estimate"`
+	OCRProvider        *string    `json:"ocr_provider,omitempty"`
+	OCRTaskID          *string    `json:"ocr_task_id,omitempty"`
+	OCRPageCount       int        `json:"ocr_page_count"`
+	OCRProgressPages   int        `json:"ocr_progress_pages"`
+	OCRStartedAt       *time.Time `json:"ocr_started_at,omitempty"`
+	OCRCompletedAt     *time.Time `json:"ocr_completed_at,omitempty"`
+	OCRErrorType       *string    `json:"ocr_error_type,omitempty"`
+	OCRSourcePath      *string    `json:"-"`
+	OCRLeaseUntil      *time.Time `json:"-"`
+	OCRLeaseGeneration int64      `json:"-"`
+	OCRAttempts        int        `json:"-"`
+	OCRNextRetryAt     *time.Time `json:"-"`
+	CreatedAt          time.Time  `json:"created_at"`
+	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
 }

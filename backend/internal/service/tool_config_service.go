@@ -1,22 +1,31 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 const defaultToolTimeoutSeconds = 20
 
+var ErrToolConfigInvalid = errors.New("invalid tool configuration")
+
 type ToolConfigService struct {
-	repo *repository.ToolConfigRepository
+	repo           *repository.ToolConfigRepository
+	governanceRepo *repository.GovernanceRepository
 }
 
 func NewToolConfigService(repo *repository.ToolConfigRepository) *ToolConfigService {
 	return &ToolConfigService{repo: repo}
+}
+
+func (s *ToolConfigService) SetGovernanceRepository(repo *repository.GovernanceRepository) {
+	s.governanceRepo = repo
 }
 
 type ToolConfigInput struct {
@@ -25,6 +34,7 @@ type ToolConfigInput struct {
 	Enabled        *bool  `json:"enabled"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	SortOrder      int    `json:"sort_order"`
+	Reason         string `json:"reason"`
 }
 
 type ToolRuntimeConfig struct {
@@ -49,25 +59,69 @@ func DefaultToolConfigs() []*model.ToolConfig {
 }
 
 func (s *ToolConfigService) List() ([]*model.ToolConfig, error) {
+	return s.ListContext(context.Background())
+}
+
+func (s *ToolConfigService) ListContext(ctx context.Context) ([]*model.ToolConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if s == nil || s.repo == nil {
 		return DefaultToolConfigs(), nil
 	}
-	rows, err := s.repo.List()
+	rows, err := s.repo.ListContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return mergeToolConfigDefaults(rows), nil
 }
 
-func (s *ToolConfigService) Save(input *ToolConfigInput) (*model.ToolConfig, error) {
+func (s *ToolConfigService) Save(actorUserID int64, input *ToolConfigInput) (*model.ToolConfig, *model.GovernanceEvent, error) {
 	item, err := toolConfigFromInput(input)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if s == nil || s.repo == nil {
-		return nil, fmt.Errorf("tool config repository is not available")
+	if actorUserID <= 0 {
+		return nil, nil, fmt.Errorf("%w: admin actor is required", ErrToolConfigInvalid)
 	}
-	return s.repo.Upsert(item)
+	if s == nil || s.repo == nil || s.governanceRepo == nil {
+		return nil, nil, fmt.Errorf("tool governance repositories are not available")
+	}
+	reason := normalizeGovernanceReason(input.Reason, "admin tool update")
+	return s.repo.SaveGoverned(context.Background(), item, actorUserID, reason)
+}
+
+func (s *ToolConfigService) ListHistory(key string) ([]*model.GovernanceEvent, error) {
+	key = normalizeToolKey(key)
+	if !knownToolKey(key) {
+		return nil, fmt.Errorf("%w: unknown tool key: %s", ErrToolConfigInvalid, key)
+	}
+	if s == nil || s.governanceRepo == nil {
+		return nil, fmt.Errorf("tool governance repository is not available")
+	}
+	return s.governanceRepo.List(context.Background(), "tool", key, 50)
+}
+
+func (s *ToolConfigService) Rollback(actorUserID, eventID int64, reason string) (*model.ToolConfig, *model.GovernanceEvent, error) {
+	if actorUserID <= 0 || eventID <= 0 {
+		return nil, nil, fmt.Errorf("%w: actor and event id are required", ErrToolConfigInvalid)
+	}
+	if s == nil || s.repo == nil || s.governanceRepo == nil {
+		return nil, nil, fmt.Errorf("tool governance repositories are not available")
+	}
+	return s.repo.RollbackGoverned(context.Background(), eventID, actorUserID, normalizeGovernanceReason(reason, "admin tool rollback"))
+}
+
+func normalizeGovernanceReason(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	runes := []rune(value)
+	if len(runes) > 500 {
+		return string(runes[:500])
+	}
+	return value
 }
 
 func (s *ToolConfigService) RuntimeConfigSet() ToolRuntimeConfigSet {
@@ -76,13 +130,26 @@ func (s *ToolConfigService) RuntimeConfigSet() ToolRuntimeConfigSet {
 }
 
 func (s *ToolConfigService) ResolveRuntimeConfig() (ToolRuntimeConfigSet, RuntimeConfigState) {
+	runtime, state, _ := s.ResolveRuntimeConfigContext(context.Background())
+	return runtime, state
+}
+
+func (s *ToolConfigService) ResolveRuntimeConfigContext(ctx context.Context) (ToolRuntimeConfigSet, RuntimeConfigState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, RuntimeConfigState{}, err
+	}
 	if s == nil || s.repo == nil {
 		items := DefaultToolConfigs()
-		return toolRuntimeConfigSet(items), runtimeConfigState(RuntimeStateDefault, "builtin_default", toolConfigVersion(items))
+		return toolRuntimeConfigSet(items), runtimeConfigState(RuntimeStateDefault, "builtin_default", toolConfigVersion(items)), nil
 	}
-	rows, err := s.repo.List()
+	rows, err := s.repo.ListContext(ctx)
 	if err != nil {
-		return disabledToolRuntimeConfigSet(), runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("tools:unavailable", nil))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, RuntimeConfigState{}, ctxErr
+		}
+		runtime := disabledToolRuntimeConfigSet()
+		state := runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("tools:unavailable", nil))
+		return runtime, state, nil
 	}
 	items := mergeToolConfigDefaults(rows)
 	state := RuntimeStateReady
@@ -91,7 +158,7 @@ func (s *ToolConfigService) ResolveRuntimeConfig() (ToolRuntimeConfigSet, Runtim
 		state = RuntimeStateDefault
 		cause = "builtin_default"
 	}
-	return toolRuntimeConfigSet(items), runtimeConfigState(state, cause, toolConfigVersion(items))
+	return toolRuntimeConfigSet(items), runtimeConfigState(state, cause, toolConfigVersion(items)), nil
 }
 
 func toolRuntimeConfigSet(items []*model.ToolConfig) ToolRuntimeConfigSet {
@@ -119,9 +186,17 @@ func disabledToolRuntimeConfigSet() ToolRuntimeConfigSet {
 func (set ToolRuntimeConfigSet) IsEnabled(key string) bool {
 	cfg, ok := set[normalizeToolKey(key)]
 	if !ok {
-		return true
+		return false
 	}
 	return cfg.Enabled
+}
+
+// IsKnown reports whether a Tool belongs to the governed runtime catalog.
+// Unknown names must never become callable merely because a new Tool was
+// appended in Agent assembly without a matching Admin/configuration entry.
+func (set ToolRuntimeConfigSet) IsKnown(key string) bool {
+	_, ok := set[normalizeToolKey(key)]
+	return ok
 }
 
 func (set ToolRuntimeConfigSet) Timeout(key string) time.Duration {
@@ -134,18 +209,18 @@ func (set ToolRuntimeConfigSet) Timeout(key string) time.Duration {
 
 func toolConfigFromInput(input *ToolConfigInput) (*model.ToolConfig, error) {
 	if input == nil {
-		return nil, fmt.Errorf("tool config input is required")
+		return nil, fmt.Errorf("%w: tool config input is required", ErrToolConfigInvalid)
 	}
 	key := normalizeToolKey(input.Key)
 	if key == "" {
-		return nil, fmt.Errorf("key is required")
+		return nil, fmt.Errorf("%w: key is required", ErrToolConfigInvalid)
 	}
 	if !knownToolKey(key) {
-		return nil, fmt.Errorf("unknown tool key: %s", key)
+		return nil, fmt.Errorf("%w: unknown tool key: %s", ErrToolConfigInvalid, key)
 	}
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" {
-		return nil, fmt.Errorf("display_name is required")
+		return nil, fmt.Errorf("%w: display_name is required", ErrToolConfigInvalid)
 	}
 	enabled := true
 	if input.Enabled != nil {

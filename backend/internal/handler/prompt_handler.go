@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 type publicPromptResponse struct {
@@ -21,7 +21,6 @@ type publicPromptResponse struct {
 	GroupID     *int64    `json:"group_id,omitempty"`
 	GroupName   string    `json:"group_name"`
 	IsPublic    bool      `json:"is_public"`
-	UseCount    int       `json:"use_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -75,6 +74,10 @@ func CreatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 			writeInvalidJSON(c)
 			return
 		}
+		if err := validateCreatePromptRequest(&req); err != nil {
+			writePromptValidationError(c, err)
+			return
+		}
 
 		p := &model.Prompt{
 			UserID:      userID,
@@ -91,7 +94,7 @@ func CreatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 		}
 
 		if err := promptRepo.CreateContext(c.Request.Context(), p); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create prompt"})
+			writePromptError(c, "create", err)
 			return
 		}
 
@@ -103,33 +106,52 @@ func CreatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 func ListPromptsHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		limit, offset := parsePagination(c)
+		limit, offset, ok := parsePromptPagination(c)
+		if !ok {
+			return
+		}
 
 		prompts, err := promptRepo.ListByUser(userID, limit, offset)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list prompts"})
+			writePromptError(c, "list", err)
 			return
 		}
 		if prompts == nil {
 			prompts = []*model.Prompt{}
 		}
+		total, err := promptRepo.CountByUser(userID)
+		if err != nil {
+			writePromptError(c, "list", err)
+			return
+		}
 
-		c.JSON(http.StatusOK, gin.H{"prompts": prompts, "total": len(prompts)})
+		c.JSON(http.StatusOK, gin.H{
+			"prompts": prompts, "total": total,
+			"has_more": offset+len(prompts) < total, "next_offset": offset + len(prompts),
+		})
 	}
 }
 
 // ListPublicPromptsHandler 获取公开提示词
 func ListPublicPromptsHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		limit, offset := parsePagination(c)
+		limit, offset, ok := parsePromptPagination(c)
+		if !ok {
+			return
+		}
 
 		prompts, err := promptRepo.ListPublic(limit, offset)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list public prompts"})
+			writePromptError(c, "list_public", err)
 			return
 		}
 		if prompts == nil {
 			prompts = []*model.Prompt{}
+		}
+		total, err := promptRepo.CountPublic()
+		if err != nil {
+			writePromptError(c, "list_public", err)
+			return
 		}
 
 		publicPrompts := make([]publicPromptResponse, 0, len(prompts))
@@ -143,13 +165,15 @@ func ListPublicPromptsHandler(promptRepo *repository.PromptRepository) gin.Handl
 				GroupID:     prompt.GroupID,
 				GroupName:   prompt.GroupName,
 				IsPublic:    prompt.IsPublic,
-				UseCount:    prompt.UseCount,
 				CreatedAt:   prompt.CreatedAt,
 				UpdatedAt:   prompt.UpdatedAt,
 			})
 		}
 
-		c.JSON(http.StatusOK, gin.H{"prompts": publicPrompts, "total": len(publicPrompts)})
+		c.JSON(http.StatusOK, gin.H{
+			"prompts": publicPrompts, "total": total,
+			"has_more": offset+len(publicPrompts) < total, "next_offset": offset + len(publicPrompts),
+		})
 	}
 }
 
@@ -157,15 +181,14 @@ func ListPublicPromptsHandler(promptRepo *repository.PromptRepository) gin.Handl
 func GetPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
+		id, ok := promptID(c)
+		if !ok {
 			return
 		}
 
 		p, err := promptRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "prompt not found"})
+			writePromptError(c, "load", err)
 			return
 		}
 
@@ -179,7 +202,6 @@ func GetPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 				GroupID:     p.GroupID,
 				GroupName:   p.GroupName,
 				IsPublic:    p.IsPublic,
-				UseCount:    p.UseCount,
 				CreatedAt:   p.CreatedAt,
 				UpdatedAt:   p.UpdatedAt,
 			})
@@ -194,23 +216,18 @@ func GetPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 func UpdatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
+		id, ok := promptID(c)
+		if !ok {
 			return
 		}
 
 		p, err := promptRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "prompt not found"})
+			writePromptError(c, "load", err)
 			return
 		}
-		if p.UserID != userID {
-			c.JSON(http.StatusForbidden, gin.H{"error": "not your prompt"})
-			return
-		}
-		if p.IsPublic {
-			c.JSON(http.StatusForbidden, gin.H{"error": "shared prompts are managed by administrators"})
+		if p.UserID != userID || p.IsPublic {
+			writePublicError(c, http.StatusForbidden, "prompt_read_only", "shared prompts are managed by administrators", false)
 			return
 		}
 
@@ -219,31 +236,18 @@ func UpdatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 			writeInvalidJSON(c)
 			return
 		}
-
-		if req.Title != nil {
-			p.Title = *req.Title
-		}
-		if req.Content != nil {
-			p.Content = *req.Content
-		}
-		if req.Description != nil {
-			p.Description = req.Description
-		}
-		if req.Tags != nil {
-			p.Tags = req.Tags
-		}
-		if req.GroupID.Set {
-			p.GroupID = req.GroupID.Value
-		}
-		if req.GroupName != nil {
-			p.GroupName = *req.GroupName
-		}
-		if err := promptRepo.UpdateContext(c.Request.Context(), p); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := validateUpdatePromptRequest(&req); err != nil {
+			writePromptValidationError(c, err)
 			return
 		}
 
-		c.JSON(http.StatusOK, p)
+		updated, err := promptRepo.PatchContext(c.Request.Context(), id, userID, promptPatchFromRequest(&req, true))
+		if err != nil {
+			writePromptError(c, "update", err)
+			return
+		}
+
+		c.JSON(http.StatusOK, updated)
 	}
 }
 
@@ -251,14 +255,23 @@ func UpdatePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 func DeletePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		id, ok := promptID(c)
+		if !ok {
+			return
+		}
+
+		p, err := promptRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
+			writePromptError(c, "load", err)
+			return
+		}
+		if p.UserID != userID || p.IsPublic {
+			writePublicError(c, http.StatusForbidden, "prompt_read_only", "shared prompts are managed by administrators", false)
 			return
 		}
 
 		if err := promptRepo.Delete(id, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePromptError(c, "delete", err)
 			return
 		}
 
@@ -268,18 +281,29 @@ func DeletePromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFun
 
 func ListSharedPromptsHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		limit, offset := parsePagination(c)
+		limit, offset, ok := parsePromptPagination(c)
+		if !ok {
+			return
+		}
 
 		prompts, err := promptRepo.ListShared(limit, offset)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list prompts"})
+			writePromptError(c, "list_shared", err)
 			return
 		}
 		if prompts == nil {
 			prompts = []*model.Prompt{}
 		}
+		total, err := promptRepo.CountShared()
+		if err != nil {
+			writePromptError(c, "list_shared", err)
+			return
+		}
 
-		c.JSON(http.StatusOK, gin.H{"prompts": prompts, "total": len(prompts)})
+		c.JSON(http.StatusOK, gin.H{
+			"prompts": prompts, "total": total,
+			"has_more": offset+len(prompts) < total, "next_offset": offset + len(prompts),
+		})
 	}
 }
 
@@ -289,6 +313,10 @@ func CreateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.Hand
 		var req createPromptRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			writeInvalidJSON(c)
+			return
+		}
+		if err := validateCreatePromptRequest(&req); err != nil {
+			writePromptValidationError(c, err)
 			return
 		}
 		p := &model.Prompt{
@@ -304,7 +332,7 @@ func CreateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.Hand
 			p.Tags = []string{}
 		}
 		if err := promptRepo.CreateContext(c.Request.Context(), p); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create shared prompt"})
+			writePromptError(c, "create_shared", err)
 			return
 		}
 		c.JSON(http.StatusCreated, p)
@@ -313,15 +341,14 @@ func CreateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.Hand
 
 func UpdateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
+		id, ok := promptID(c)
+		if !ok {
 			return
 		}
 
-		p, err := promptRepo.GetSharedByID(id)
+		_, err := promptRepo.GetSharedByID(id)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "prompt not found"})
+			writePromptError(c, "load_shared", err)
 			return
 		}
 
@@ -330,38 +357,43 @@ func UpdateSharedPromptHandler(promptRepo *repository.PromptRepository) gin.Hand
 			writeInvalidJSON(c)
 			return
 		}
-
-		if req.Title != nil {
-			p.Title = *req.Title
-		}
-		if req.Content != nil {
-			p.Content = *req.Content
-		}
-		if req.Description != nil {
-			p.Description = req.Description
-		}
-		if req.Tags != nil {
-			p.Tags = req.Tags
-		}
-		if err := promptRepo.UpdateShared(p); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := validateUpdatePromptRequest(&req); err != nil {
+			writePromptValidationError(c, err)
 			return
 		}
 
-		c.JSON(http.StatusOK, p)
+		updated, err := promptRepo.PatchSharedContext(c.Request.Context(), id, promptPatchFromRequest(&req, false))
+		if err != nil {
+			writePromptError(c, "update_shared", err)
+			return
+		}
+
+		c.JSON(http.StatusOK, updated)
 	}
+}
+
+func promptPatchFromRequest(req *updatePromptRequest, includeGroups bool) repository.PromptPatch {
+	patch := repository.PromptPatch{
+		Title: req.Title, Content: req.Content,
+		Description: req.Description, DescriptionSet: req.Description != nil,
+		Tags: req.Tags, TagsSet: req.Tags != nil,
+	}
+	if includeGroups {
+		patch.GroupID, patch.GroupIDSet = req.GroupID.Value, req.GroupID.Set
+		patch.GroupName = req.GroupName
+	}
+	return patch
 }
 
 func DeleteSharedPromptHandler(promptRepo *repository.PromptRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid prompt id"})
+		id, ok := promptID(c)
+		if !ok {
 			return
 		}
 
 		if err := promptRepo.DeleteShared(id); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePromptError(c, "delete_shared", err)
 			return
 		}
 

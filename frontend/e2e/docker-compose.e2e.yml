@@ -1,0 +1,20 @@
+services:
+  model-stub:
+    image: effchat-py-extractor:local
+    restart: "no"
+    command: ["python", "/e2e/model-stub.py"]
+    volumes:
+      - ./frontend/e2e/model-stub.py:/e2e/model-stub.py:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2).read()\""]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  backend:
+    depends_on:
+      model-stub:
+        condition: service_healthy
+    environment:
+      NO_PROXY: localhost,127.0.0.1,::1,postgres,backend,web,py-extractor,model-stub
+      no_proxy: localhost,127.0.0.1,::1,postgres,backend,web,py-extractor,model-stub

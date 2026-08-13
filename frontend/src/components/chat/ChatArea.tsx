@@ -10,7 +10,6 @@ import { LoadingIndicator } from "@/components/ui/loading-indicator"
 import { AppLogo } from "@/components/AppLogo"
 import { ModelSelector } from "./ModelSelector"
 import { useSSE } from "@/hooks/useSSE"
-import { useModelStore } from "@/stores/models"
 import { useAuthStore } from "@/stores/auth"
 import { isStreamingDisplayActive } from "@/lib/streamingStatus"
 import { navigateWithFade } from "@/lib/navigation"
@@ -34,9 +33,13 @@ export function ChatArea({
   const messageLoadError = useChatStore((s) => s.messageLoadError)
   const loadMessages = useChatStore((s) => s.loadMessages)
   const createSession = useChatStore((s) => s.createSession)
+  const sessionCreateReadiness = useChatStore((s) => s.sessionCreateReadiness)
+  const isLoadingSessionCreateReadiness = useChatStore((s) => s.isLoadingSessionCreateReadiness)
+  const sessionCreateReadinessError = useChatStore((s) => s.sessionCreateReadinessError)
+  const isCreatingSession = useChatStore((s) => s.isCreatingSession)
+  const sessionCreateError = useChatStore((s) => s.sessionCreateError)
+  const loadSessionCreateReadiness = useChatStore((s) => s.loadSessionCreateReadiness)
   const streamingStatus = useChatStore((s) => s.streaming.status)
-  const models = useModelStore((s) => s.models)
-  const modelsLoaded = useModelStore((s) => s.loaded)
   const user = useAuthStore((s) => s.user)
   const location = useLocation()
   const { resumeActiveRun, disconnectActiveStream } = useSSE()
@@ -142,8 +145,12 @@ export function ChatArea({
   }, [activeSessionId, disconnectActiveStream])
 
   async function handleCreateSession() {
-    const session = await createSession()
-    navigate(`/chat/${session.id}`)
+    try {
+      const session = await createSession()
+      navigate(`/chat/${session.id}`)
+    } catch {
+      // The shared store owns the visible error and restores the button state.
+    }
   }
 
   function handleRetryLoadMessages() {
@@ -151,17 +158,27 @@ export function ChatArea({
   }
 
   const showBlockingMessageLoadError = Boolean(messageLoadError && messages.length === 0 && !isStreamingDisplayActive(streamingStatus))
+  let emptySessionContent = null
   if (!activeSessionId && !isRouteSessionPending) {
-    const noEnabledModels = modelsLoaded && !models.some((model) => model.enabled)
-    if (noEnabledModels) {
-      return (
+    if (isLoadingSessionCreateReadiness) {
+      emptySessionContent = <div className="flex min-h-0 flex-1 items-center justify-center"><LoadingIndicator label="正在检查聊天配置" /></div>
+    } else if (sessionCreateReadinessError) {
+      emptySessionContent = (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 text-center">
+          <p className="text-sm font-medium">无法检查聊天配置</p>
+          <p className="mt-1 text-sm text-muted-foreground">{sessionCreateReadinessError}</p>
+          <Button variant="outline" size="sm" className="mt-4" onClick={() => void loadSessionCreateReadiness(true)}>重新检查</Button>
+        </div>
+      )
+    } else if (!sessionCreateReadiness?.ready) {
+      emptySessionContent = (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden overscroll-none px-5 text-center">
           <Settings2 className="h-7 w-7 text-muted-foreground" />
-          <h1 className="mt-3 text-base font-semibold">还没有可用模型</h1>
+          <h1 className="mt-3 text-base font-semibold">聊天尚未准备好</h1>
           <p className="mt-1 max-w-sm text-sm leading-6 text-muted-foreground">
             {user?.role === "admin"
-              ? "先配置渠道并启用一个模型，之后就可以创建第一场对话。"
-              : "管理员尚未完成模型配置，请联系管理员后再试。"}
+              ? "请配置并选择一个可用的全局默认模型。"
+              : "默认模型尚未准备好，请联系管理员后再试。"}
           </p>
           {user?.role === "admin" ? (
             <Button variant="outline" size="sm" className="mt-4" onClick={() => navigateWithFade(navigate, "/admin/models", { state: { from: `${location.pathname}${location.search}` } })}>
@@ -169,12 +186,16 @@ export function ChatArea({
               配置模型
             </Button>
           ) : null}
+          {sessionCreateReadiness?.retryable ? (
+            <Button variant="ghost" size="sm" className="mt-2" onClick={() => void loadSessionCreateReadiness(true)}>重新检查</Button>
+          ) : null}
         </div>
       )
+    } else {
+      emptySessionContent = (
+        <EmptyGreeting showLogo onCreateSession={handleCreateSession} creating={isCreatingSession} createError={sessionCreateError} />
+      )
     }
-    return (
-      <EmptyGreeting showLogo onCreateSession={handleCreateSession} />
-    )
   }
 
   return (
@@ -224,12 +245,14 @@ export function ChatArea({
           <SessionExportDialog key={activeSessionId} sessionId={activeSessionId} />
           </div>
         ) : null}
-        <div className="pointer-events-auto min-w-0 shrink-0">
-          <ModelSelector />
-        </div>
+        {activeSessionId ? (
+          <div className="pointer-events-auto min-w-0 shrink-0">
+            <ModelSelector />
+          </div>
+        ) : null}
       </header>
       <div className="flex min-h-0 flex-1 flex-col">
-        {isSessionTransitioning ? (
+        {emptySessionContent ?? (isSessionTransitioning ? (
           <div className="flex flex-1 items-center justify-center">
             {showSessionLoading ? <LoadingIndicator label="正在加载会话" /> : null}
           </div>
@@ -247,16 +270,18 @@ export function ChatArea({
           <EmptyGreeting key={activeSessionId} withComposerInset />
         ) : (
           <MessageList />
-        )}
+        ))}
       </div>
-      <div ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-background/68 via-background/32 to-transparent pt-10 pb-[env(safe-area-inset-bottom)] sm:pb-6">
-        <div className="pointer-events-auto">
-          <ChatInput ref={chatInputRef} />
+      {activeSessionId ? (
+        <div ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-background/68 via-background/32 to-transparent pt-10 pb-[env(safe-area-inset-bottom)] sm:pb-6">
+          <div className="pointer-events-auto">
+            <ChatInput ref={chatInputRef} />
+          </div>
         </div>
-      </div>
-      <SessionFilesDrawer sessionId={activeSessionId} open={filesOpen} onOpenChange={setFilesOpen} />
+      ) : null}
+      {activeSessionId ? <SessionFilesDrawer sessionId={activeSessionId} open={filesOpen} onOpenChange={setFilesOpen} /> : null}
 
-      {dragging && (
+      {activeSessionId && dragging ? (
         <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-background/80 backdrop-blur-sm animate-in fade-in-0 motion-surface">
           <div className="m-4 flex h-[calc(100%-2rem)] w-[calc(100%-2rem)] flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-primary/50 bg-primary/5">
             <UploadCloud className="h-10 w-10 text-primary/70" />
@@ -264,7 +289,7 @@ export function ChatArea({
             <p className="text-xs text-muted-foreground">支持图片、PDF、Word、Excel、文本等</p>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -284,10 +309,14 @@ function EmptyGreeting({
   showLogo = false,
   withComposerInset = false,
   onCreateSession,
+  creating = false,
+  createError,
 }: {
   showLogo?: boolean
   withComposerInset?: boolean
   onCreateSession?: () => void
+  creating?: boolean
+  createError?: string | null
 }) {
   const hour = new Date().getHours()
   const greeting = hour < 5 ? "夜深了" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好"
@@ -304,7 +333,7 @@ function EmptyGreeting({
         <h2 className="text-sm font-medium text-muted-foreground/75">{greeting}</h2>
         <blockquote
           aria-label={quote.text}
-          className="relative mt-4 text-balance font-serif text-xl leading-9 text-foreground/82 sm:text-[1.35rem]"
+          className="empty-greeting-quote relative mt-4 text-balance font-serif text-foreground/82"
         >
           <span aria-hidden="true" className="invisible block">{quote.text}</span>
           <span aria-hidden="true" className="absolute inset-0 block">
@@ -319,10 +348,11 @@ function EmptyGreeting({
           {quote.source}
         </p>
         {onCreateSession ? (
-          <Button variant="outline" size="sm" className="mt-7" onClick={onCreateSession}>
-            新建对话
+          <Button variant="outline" size="sm" className="mt-7" onClick={onCreateSession} disabled={creating}>
+            {creating ? "正在创建..." : "新建对话"}
           </Button>
         ) : null}
+        {createError ? <p role="alert" className="mt-3 text-sm text-destructive">{createError}</p> : null}
       </div>
     </div>
   )

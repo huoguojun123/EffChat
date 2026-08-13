@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 type adminTestEnv struct {
@@ -177,6 +177,9 @@ func TestAdminListUsers(t *testing.T) {
 		if u.ID == env.adminID {
 			if u.Role != "admin" {
 				t.Errorf("first user should be admin, got role=%s", u.Role)
+			}
+			if u.GroupID != nil || !u.EffectiveGroup.Inherited || u.EffectiveGroup.ID <= 0 || u.EffectiveGroup.Name == "" {
+				t.Errorf("unassigned admin effective group = %+v raw_group_id=%v", u.EffectiveGroup, u.GroupID)
 			}
 			found = true
 		}
@@ -376,8 +379,8 @@ func TestAdminUpdateUser_NotFound(t *testing.T) {
 	w := env.doAdmin(http.MethodPatch, "/api/v1/admin/users/999999999", map[string]interface{}{
 		"is_active": false,
 	})
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("nonexistent user: want 400, got %d", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("nonexistent user: want 404, got %d", w.Code)
 	}
 }
 
@@ -389,8 +392,10 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 		t.Fatalf("got %d", w.Code)
 	}
 	var resp struct {
-		Users []*model.User `json:"users"`
-		Total int           `json:"total"`
+		Users      []*model.User `json:"users"`
+		Total      int           `json:"total"`
+		HasMore    bool          `json:"has_more"`
+		NextOffset int           `json:"next_offset"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
 	if len(resp.Users) != 1 {
@@ -398,5 +403,8 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 	}
 	if resp.Total < 2 {
 		t.Errorf("total should reflect all users (>= 2), got %d", resp.Total)
+	}
+	if !resp.HasMore || resp.NextOffset != 1 {
+		t.Errorf("first page metadata = has_more:%v next_offset:%d, want true/1", resp.HasMore, resp.NextOffset)
 	}
 }

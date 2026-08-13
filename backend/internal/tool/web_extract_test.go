@@ -3,13 +3,17 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 )
 
 // allowLoopback 放宽 basic 爬虫的 SSRF 策略，使其可访问 httptest 起在 127.0.0.1 的
@@ -38,6 +42,26 @@ func TestWebExtractConfiguresHTTPTimeout(t *testing.T) {
 	}
 	if tool.basicClient.Timeout != 4*time.Second {
 		t.Fatalf("basic client timeout = %s, want 4s", tool.basicClient.Timeout)
+	}
+}
+
+func TestNormalizeCrawlerProvidersKeepsExternalOrderAndBasicLast(t *testing.T) {
+	tests := []struct {
+		name      string
+		providers []string
+		fallback  string
+		want      []string
+	}{
+		{name: "configured order", providers: []string{"jina", "firecrawl"}, fallback: "jina", want: []string{"jina", "firecrawl", "basic"}},
+		{name: "early and duplicate basic", providers: []string{"basic", "jina", "basic", "firecrawl", "jina"}, fallback: "jina", want: []string{"jina", "firecrawl", "basic"}},
+		{name: "no external provider", fallback: "basic", want: []string{"basic"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeCrawlerProviders(tt.providers, tt.fallback); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("normalizeCrawlerProviders() = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -449,6 +473,29 @@ func TestWebExtractTool_FallbackToBasic(t *testing.T) {
 	}
 }
 
+func TestWebExtractTool_BasicFastPathSkipsRefinement(t *testing.T) {
+	pageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<html><head><title>Local</title></head><body><article><p>locally readable content</p></article></body></html>"))
+	}))
+	defer pageServer.Close()
+
+	mock := &mockSummarizer{summary: "should not run"}
+	tool := allowLoopback(NewWebExtractTool(WebExtractConfig{
+		CrawlerProviders: []string{"basic", "jina"},
+		Summarizer:       mock,
+		SummaryEnabled:   true,
+	}))
+	output := runExtract(t, tool, WebExtractInput{URL: pageServer.URL, Goal: "find the content"})
+
+	if !output.OK || output.Source != "basic" || output.Title != "Local" || output.Content != "locally readable content" {
+		t.Fatalf("output = %#v, want direct basic result", output)
+	}
+	if mock.called || output.RefinementAttempted || output.Summarized || output.Degraded {
+		t.Fatalf("basic fast path invoked refinement: output=%#v called=%t", output, mock.called)
+	}
+}
+
 func TestWebExtractTool_TavilyAndExaContracts(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -588,6 +635,7 @@ func TestWebExtractTool_FirecrawlIntegration(t *testing.T) {
 type mockSummarizer struct {
 	summary    string
 	err        error
+	delay      time.Duration
 	gotGoal    string
 	gotTitle   string
 	gotContent string
@@ -595,10 +643,32 @@ type mockSummarizer struct {
 	called     bool
 }
 
-func (m *mockSummarizer) Summarize(_ context.Context, goal, title, content, detail string) (string, error) {
+func (m *mockSummarizer) Summarize(ctx context.Context, goal, title, content, detail string) (string, error) {
 	m.called = true
 	m.gotGoal, m.gotTitle, m.gotContent, m.gotDetail = goal, title, content, detail
+	if m.delay > 0 {
+		select {
+		case <-time.After(m.delay):
+		case <-ctx.Done():
+			return "", context.Cause(ctx)
+		}
+	}
 	return m.summary, m.err
+}
+
+type cancellationStageSummarizer struct {
+	started         chan struct{}
+	firstOutput     chan struct{}
+	emitFirstOutput bool
+}
+
+func (m *cancellationStageSummarizer) Summarize(ctx context.Context, _, _, _, _ string) (string, error) {
+	close(m.started)
+	if m.emitFirstOutput {
+		close(m.firstOutput)
+	}
+	<-ctx.Done()
+	return "", context.Cause(ctx)
 }
 
 func newJinaPageTool(t *testing.T, cfg WebExtractConfig) (*WebExtractTool, string) {
@@ -657,6 +727,150 @@ func TestWebExtractTool_SummarizeSuccess(t *testing.T) {
 	}
 }
 
+func TestWebExtractTool_OwnCrawlerTimeoutRemainsBusinessJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	tool := allowMockPageTarget(NewWebExtractTool(WebExtractConfig{
+		CrawlerProviders: []string{"jina"},
+		JinaBaseURL:      server.URL,
+		Timeout:          20 * time.Millisecond,
+	}))
+	input, _ := json.Marshal(WebExtractInput{URL: "https://example.com/article"})
+	result, err := tool.InvokableRun(t.Context(), string(input))
+	if err != nil {
+		t.Fatalf("owned crawler timeout must remain a business result: %v", err)
+	}
+	var output WebExtractOutput
+	if err := json.Unmarshal([]byte(result), &output); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if output.OK || output.ErrorCode != WebErrorCodeTimeout || !output.Retryable {
+		t.Fatalf("output = %#v, want retryable upstream timeout", output)
+	}
+}
+
+func TestWebExtractTool_ParentCancellationDuringCrawlerPropagatesCause(t *testing.T) {
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	tool := allowMockPageTarget(NewWebExtractTool(WebExtractConfig{
+		CrawlerProviders: []string{"jina"},
+		JinaBaseURL:      server.URL,
+		Timeout:          time.Second,
+	}))
+	input, _ := json.Marshal(WebExtractInput{URL: "https://example.com/article"})
+	stopCause := errors.New("server draining")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	result := make(chan struct {
+		output string
+		err    error
+	}, 1)
+	go func() {
+		output, err := tool.InvokableRun(ctx, string(input))
+		result <- struct {
+			output string
+			err    error
+		}{output: output, err: err}
+	}()
+
+	<-requestStarted
+	cancel(stopCause)
+	select {
+	case got := <-result:
+		if got.err != stopCause {
+			t.Fatalf("InvokableRun() error = %v, want exact parent cause %v", got.err, stopCause)
+		}
+		if got.output != "" {
+			t.Fatalf("canceled crawler returned Tool JSON: %q", got.output)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled crawler did not return")
+	}
+}
+
+func TestWebExtractTool_RefinementDoesNotInheritCrawlerDeadline(t *testing.T) {
+	const crawlerTimeout = 20 * time.Millisecond
+	mock := &mockSummarizer{
+		summary: "慢速但完整的提炼结果",
+		delay:   4 * crawlerTimeout,
+	}
+	tool, url := newJinaPageTool(t, WebExtractConfig{
+		Summarizer:     mock,
+		SummaryEnabled: true,
+		Timeout:        crawlerTimeout,
+	})
+
+	started := time.Now()
+	output := runExtract(t, tool, WebExtractInput{URL: url, Goal: "验证分阶段超时"})
+	if !output.OK || !output.Summarized || output.Content != mock.summary {
+		t.Fatalf("output = %#v, want completed refinement", output)
+	}
+	if elapsed := time.Since(started); elapsed <= crawlerTimeout {
+		t.Fatalf("test did not run beyond crawler timeout: %s", elapsed)
+	}
+}
+
+func TestWebExtractTool_ParentCancellationDuringRefinementPropagatesBeforeAndAfterFirstOutput(t *testing.T) {
+	tests := []struct {
+		name            string
+		emitFirstOutput bool
+	}{
+		{name: "before first output"},
+		{name: "after first output", emitFirstOutput: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summarizer := &cancellationStageSummarizer{
+				started:         make(chan struct{}),
+				firstOutput:     make(chan struct{}),
+				emitFirstOutput: tt.emitFirstOutput,
+			}
+			tool, url := newJinaPageTool(t, WebExtractConfig{
+				Summarizer:     summarizer,
+				SummaryEnabled: true,
+			})
+			input, _ := json.Marshal(WebExtractInput{URL: url, Goal: "verify cancellation"})
+			stopCause := errors.New("run canceled")
+			ctx, cancel := context.WithCancelCause(t.Context())
+			result := make(chan struct {
+				output string
+				err    error
+			}, 1)
+			go func() {
+				output, err := tool.InvokableRun(ctx, string(input))
+				result <- struct {
+					output string
+					err    error
+				}{output: output, err: err}
+			}()
+
+			<-summarizer.started
+			if tt.emitFirstOutput {
+				<-summarizer.firstOutput
+			}
+			cancel(stopCause)
+			select {
+			case got := <-result:
+				if got.err != stopCause {
+					t.Fatalf("InvokableRun() error = %v, want exact parent cause %v", got.err, stopCause)
+				}
+				if got.output != "" {
+					t.Fatalf("canceled refinement returned degraded Tool JSON: %q", got.output)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("canceled refinement did not return")
+			}
+		})
+	}
+}
+
 func TestWebExtractTool_SourceSkipsSummarizerAndMarksItsMode(t *testing.T) {
 	mock := &mockSummarizer{summary: "不应出现"}
 	tool, url := newJinaPageTool(t, WebExtractConfig{Summarizer: mock, SummaryEnabled: true, MaxContent: 8})
@@ -670,6 +884,22 @@ func TestWebExtractTool_SourceSkipsSummarizerAndMarksItsMode(t *testing.T) {
 	}
 	if !strings.Contains(output.Content, "很长的网页正文") || len([]rune(output.Content)) <= 8 {
 		t.Fatalf("source content was unexpectedly summarized or truncated: %q", output.Content)
+	}
+}
+
+func TestWebExtractTool_SourceModePropagatesParentCancellation(t *testing.T) {
+	stopCause := errors.New("user stop")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	cancel(stopCause)
+	tool := NewWebExtractTool(WebExtractConfig{})
+
+	_, err := tool.finalizeContent(ctx, WebExtractOutput{
+		OK:      true,
+		URL:     "https://example.com/article",
+		Content: "source text",
+	}, "", extractDetailSource)
+	if err != stopCause {
+		t.Fatalf("finalizeContent() error = %v, want exact parent cause %v", err, stopCause)
 	}
 }
 
@@ -721,6 +951,18 @@ func TestWebExtractTool_SummarizeFailureFallsBackToTruncate(t *testing.T) {
 	if !output.Truncated {
 		t.Fatal("truncated = false, want true for bounded fallback")
 	}
+}
+
+func TestWebExtractTool_RefinementFailureLogClassifiesFirstOutputTimeout(t *testing.T) {
+	logs := captureToolLog(t)
+	mock := &mockSummarizer{err: modelstream.ErrFirstOutputTimeout}
+	tool, url := newJinaPageTool(t, WebExtractConfig{Summarizer: mock, SummaryEnabled: true})
+
+	output := runExtract(t, tool, WebExtractInput{URL: url})
+	if !output.OK || !output.Degraded || output.DegradationReason != RefinementFailed {
+		t.Fatalf("output = %#v, want degraded source fallback", output)
+	}
+	requireToolLogContains(t, logs.String(), "summarize_failed", "error_type=first_output_timeout")
 }
 
 func TestWebExtractTool_DetailedFailureDoesNotClaimCompleteRefinement(t *testing.T) {

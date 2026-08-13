@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 // modelsDevURL 是 models.dev 公布的全量模型能力目录（社区维护，约 2MB）。
@@ -196,6 +196,16 @@ func storeCatalog(catalog map[string]modelsDevProvider) {
 	catalogCachedAt = time.Now()
 }
 
+func catalogCheckedAt() *time.Time {
+	catalogCacheMu.RLock()
+	defer catalogCacheMu.RUnlock()
+	if catalogCachedAt.IsZero() {
+		return nil
+	}
+	checkedAt := catalogCachedAt
+	return &checkedAt
+}
+
 // GetModelsDevCatalogModelHandler 按 ID 返回 models.dev 的【原始能力】（admin）。
 // 区别于列表接口：本接口不回显 DB 记录，专供编辑面板用 models.dev 的精确能力刷新字段，
 // 即使该模型已存在于库中，也返回目录里的能力值供管理员确认后覆盖。
@@ -203,7 +213,7 @@ func GetModelsDevCatalogModelHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := strings.TrimSpace(modelIDParam(c))
 		if id == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "model id is required"})
+			writePublicError(c, http.StatusBadRequest, "models_dev_model_invalid", "model id is required", false)
 			return
 		}
 		provider := strings.ToLower(strings.TrimSpace(c.Query("provider")))
@@ -217,14 +227,14 @@ func GetModelsDevCatalogModelHandler() gin.HandlerFunc {
 		if provider != "" {
 			p, ok := catalog[provider]
 			if !ok {
-				c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("provider %q not found in models.dev catalog", provider)})
+				writePublicError(c, http.StatusNotFound, "models_dev_provider_not_found", "models.dev provider not found", false)
 				return
 			}
 			if meta, ok := p.Models[id]; ok {
 				c.JSON(http.StatusOK, gin.H{"model": modelsDevToModel(provider, id, meta, 0)})
 				return
 			}
-			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model %q not found in models.dev catalog provider %q", id, provider)})
+			writePublicError(c, http.StatusNotFound, "models_dev_model_not_found", "models.dev model not found", false)
 			return
 		}
 
@@ -239,7 +249,7 @@ func GetModelsDevCatalogModelHandler() gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("model %q not found in models.dev catalog", id)})
+		writePublicError(c, http.StatusNotFound, "models_dev_model_not_found", "models.dev model not found", false)
 	}
 }
 
@@ -260,18 +270,22 @@ func modelsDevToModel(provider, id string, meta modelsDevModel, index int) *mode
 		display = inferDisplayName(id)
 	}
 	m := &model.Model{
-		ID:             id,
-		DisplayName:    display,
-		Provider:       provider,
-		Enabled:        false,
-		SortOrder:      2000 + index,
-		ContextWindow:  meta.Limit.Context,
-		MaxOutput:      meta.Limit.Output,
-		Vision:         modalitiesHaveImage(meta.Modalities.Input),
-		ToolUse:        meta.ToolCall,
-		Reasoning:      meta.Reasoning,
-		ThinkingFormat: modelbank.NormalizeThinkingFormat(""),
-		SearchImpl:     searchImplForProvider(provider),
+		ID:                id,
+		DisplayName:       display,
+		Provider:          provider,
+		Enabled:           false,
+		SortOrder:         2000 + index,
+		ContextWindow:     meta.Limit.Context,
+		MaxOutput:         meta.Limit.Output,
+		Vision:            modalitiesHaveImage(meta.Modalities.Input),
+		ToolUse:           meta.ToolCall,
+		Reasoning:         meta.Reasoning,
+		ThinkingFormat:    modelbank.NormalizeThinkingFormat(""),
+		SearchImpl:        searchImplForProvider(provider),
+		CatalogSource:     model.CatalogSourceModelsDev,
+		CatalogCheckedAt:  catalogCheckedAt(),
+		LifecycleStatus:   model.InferModelLifecycleStatus(id),
+		TemperaturePolicy: model.TemperaturePolicyConfigurable,
 	}
 	return modelbank.ApplyThinkingRuntimeMetadata(m)
 }

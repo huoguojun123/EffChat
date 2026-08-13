@@ -14,6 +14,7 @@ export function Layout() {
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
   const loadSessions = useChatStore((s) => s.loadSessions)
   const loadSessionFolders = useChatStore((s) => s.loadSessionFolders)
+  const loadSessionCreateReadiness = useChatStore((s) => s.loadSessionCreateReadiness)
   const setActiveSession = useChatStore((s) => s.setActiveSession)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const sessions = useChatStore((s) => s.sessions)
@@ -41,8 +42,17 @@ export function Layout() {
   }, [loadModels])
 
   useEffect(() => {
-    const routedId = sessionId ? Number(sessionId) : null
-    if (routedId) {
+    loadSessionCreateReadiness().catch(() => undefined)
+  }, [loadSessionCreateReadiness])
+
+  useEffect(() => {
+    if (sessionId) {
+      const routedId = Number(sessionId)
+      if (!/^[1-9]\d*$/.test(sessionId) || !Number.isSafeInteger(routedId)) {
+        setActiveSession(null)
+        navigate("/", { replace: true })
+        return
+      }
       if (!sessionsLoaded || isLoadingSessions) return
       if (!sessions.some((item) => item.id === routedId)) {
         if (routeLookupRef.current === routedId) return
@@ -117,7 +127,7 @@ export function Layout() {
         inert={!sidebarOpen ? true : undefined}
         className={`
           ${isMobile ? "fixed inset-y-0 left-0 z-50" : "relative"}
-          ${isMobile ? "w-[min(84vw,300px)] transform-gpu transition-transform motion-surface" : `${sidebarOpen ? "w-[280px]" : "w-0"} transition-[width,border-color] motion-panel`}
+          ${isMobile ? "w-[min(84vw,300px)] transform-gpu transition-transform motion-surface" : `${sidebarOpen ? "w-[var(--desktop-sidebar-width)]" : "w-0"} transition-[width,border-color] motion-panel`}
           shrink-0 overflow-hidden overscroll-none
           border-r will-change-transform
           ${isMobile ? (sidebarOpen ? "pointer-events-auto translate-x-0 border-border" : "pointer-events-none -translate-x-[calc(100%+1px)] border-transparent") : ""}

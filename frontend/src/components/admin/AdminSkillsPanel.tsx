@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react"
-import { adminApi, type SkillImportPreview, type SkillInput } from "@/api/admin"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { adminApi, type SkillImportPreview, type SkillImportResult, type SkillInput } from "@/api/admin"
 import type { SkillDefinition, UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -15,16 +15,18 @@ import {
   upsertSkill,
 } from "./AdminSkillsPanel.helpers"
 import { SkillImportDialog, SkillUpdateDialog } from "./AdminSkillsDialogs"
-import type { ImportDialogState, ImportReport, SkillDraft, UpdateDialogState } from "./AdminSkillsPanel.types"
+import type { ImportDialogState, SkillDraft, UpdateDialogState } from "./AdminSkillsPanel.types"
 import { AdminSkillsLibrary } from "./AdminSkillsLibrary"
 import { AdminSkillEditor } from "./AdminSkillEditor"
 import { AdminSkillFilesPanel } from "./AdminSkillFilesPanel"
+import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 
 interface Props {
   skills: SkillDefinition[]
   setSkills: React.Dispatch<React.SetStateAction<SkillDefinition[]>>
   groups: UserGroup[]
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 const emptyDraft: SkillDraft = {
@@ -37,7 +39,7 @@ const emptyDraft: SkillDraft = {
   min_group_level: 0,
 }
 
-export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props) {
+export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyChange }: Props) {
   const [query, setQuery] = useState("")
   const [draft, setDraft] = useState<SkillDraft | null>(null)
   const [activePath, setActivePath] = useState("SKILL.md")
@@ -54,6 +56,11 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
   const [importQuery, setImportQuery] = useState("")
   const zipInputRef = useRef<HTMLInputElement>(null)
   const updateZipInputRef = useRef<HTMLInputElement>(null)
+  const [editorOwner] = useState(() => new EditorOwnership())
+  const sourceOwner = useRef(new EditorOwnership()).current
+  const updateOwner = useRef(new EditorOwnership()).current
+  const busyOwner = useRef(new BusyOwnership()).current
+  const updateCandidateGeneration = useRef(0)
   const refreshUserSkills = useSkillStore((s) => s.refreshSkills)
 
   const filteredSkills = useMemo(() => {
@@ -71,12 +78,54 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
   const importLines = importReportLines(importReport)
   const visibleImportLines = importLogExpanded ? importLog : importLog.slice(0, 2)
   const editingSkill = draft?.originalId ? skills.find((skill) => skill.id === draft.originalId) : undefined
+  const panelDirty = Boolean(draft && editorOwner.isDirty())
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   function syncSkills() {
     void refreshUserSkills().catch(() => {})
   }
 
+  function beginBusy(label: string, scope: string) {
+    const operationId = busyOwner.begin(label, scope)
+    setSaving(label)
+    return operationId
+  }
+
+  function finishBusy(operationId: number) {
+    const remainingLabel = busyOwner.release(operationId)
+    if (remainingLabel !== null) setSaving(remainingLabel)
+  }
+
+  function invalidateBusy(scope: string) {
+    setSaving(busyOwner.invalidate(scope))
+  }
+
+  function canLeaveDraft(nextEntityKey: string) {
+    if (!draft || !editorOwner.isDirty()) return true
+    if (editorOwner.currentEntityKey() === nextEntityKey) return false
+    return window.confirm("放弃当前 Skill 的未保存修改？")
+  }
+
+  function changeDraft(update: React.SetStateAction<SkillDraft | null>) {
+    editorOwner.change()
+    setDraft(update)
+  }
+
+  function closeEditor() {
+    if (!canLeaveDraft("")) return
+    invalidateBusy("editor")
+    editorOwner.invalidate()
+    setDraft(null)
+    setMobileDetailOpen(false)
+    setMobilePane("editor")
+  }
+
   function startCreate() {
+    if (!canLeaveDraft("new")) return
+    invalidateBusy("editor")
+    editorOwner.activate("new")
     setDraft({ ...emptyDraft, files: [] })
     setActivePath("SKILL.md")
     setMobilePane("editor")
@@ -84,24 +133,21 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
   }
 
   async function startEdit(skill: SkillDefinition) {
+    if (editorOwner.currentEntityKey() === skill.id && draft) return
+    if (!canLeaveDraft(skill.id)) return
+    invalidateBusy("editor")
+    editorOwner.activate(skill.id)
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(`load-${skill.id}`, "editor")
     setError("")
     setActivePath("SKILL.md")
     setMobilePane("editor")
     setMobileDetailOpen(true)
-    setDraft({
-      originalId: skill.id,
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      entry_content: "",
-      files: [],
-      enabled: skill.enabled,
-      min_group_level: skill.min_group_level ?? 0,
-    })
-    setSaving(`load-${skill.id}`)
+    setDraft(null)
     try {
       const files = skill.files?.length ? skill.files : (await adminApi.listSkillFiles(skill.id)).files
       const loaded = await Promise.all(files.map((file) => adminApi.getSkillFileContent(skill.id, file.path)))
+      if (!editorOwner.owns(operation)) return
       const entry = loaded.find((item) => item.file.kind === "entry" || item.file.path === "SKILL.md")
       const references = loaded
         .filter((item) => item.file.kind !== "entry" && item.file.path !== "SKILL.md")
@@ -117,44 +163,61 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         min_group_level: skill.min_group_level ?? 0,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载 Skill 文件失败")
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "加载 Skill 文件失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function saveDraft() {
     if (!draft) return
-    setSaving(draft.originalId || "create")
+    const currentDraft = draft
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(draft.originalId || "create", "editor")
     setError("")
     try {
       const payload: SkillInput = {
-        id: draft.id,
-        name: draft.name,
-        description: draft.description,
-        entry_content: draft.entry_content,
-        files: draft.files,
-        enabled: draft.enabled,
-        min_group_level: draft.min_group_level ?? 0,
+        id: currentDraft.id,
+        name: currentDraft.name,
+        description: currentDraft.description,
+        entry_content: currentDraft.entry_content,
+        files: currentDraft.files,
+        enabled: currentDraft.enabled,
+        min_group_level: currentDraft.min_group_level ?? 0,
       }
-      const saved = draft.originalId
-        ? await adminApi.updateSkill(draft.originalId, payload)
+      const saved = currentDraft.originalId
+        ? await adminApi.updateSkill(currentDraft.originalId, payload)
         : await adminApi.createSkill(payload)
+      // The server mutation remains authoritative even if the user has moved
+      // to another editor generation while it was in flight. Ownership only
+      // gates draft-local UI changes; the shared catalog must still converge.
       setSkills((prev) => upsertSkill(prev, saved))
-      setDraft(null)
-      setActivePath("SKILL.md")
-      setMobileDetailOpen(false)
-      setMobilePane("editor")
       syncSkills()
+      if (editorOwner.owns(operation, false)) {
+        editorOwner.acknowledge(operation.revision)
+        if (editorOwner.owns(operation)) {
+          editorOwner.invalidate()
+          setDraft(null)
+          setActivePath("SKILL.md")
+          setMobileDetailOpen(false)
+          setMobilePane("editor")
+        } else {
+          setError("已保存较早版本，当前修改仍未保存")
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存 Skill 失败")
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "保存 Skill 失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function toggleSkill(skill: SkillDefinition) {
-    setSaving(skill.id)
+    const busy = beginBusy(skill.id, `catalog:${skill.id}`)
     setError("")
     try {
       const updated = await adminApi.updateSkill(skill.id, { enabled: !skill.enabled })
@@ -163,18 +226,19 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新 Skill 失败")
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function deleteSkill(skill: SkillDefinition) {
     if (!window.confirm(`确定删除 Skill「${skill.name}」吗？旧文件包也会被清理。`)) return
-    setSaving(skill.id)
+    const busy = beginBusy(skill.id, `catalog:${skill.id}`)
     setError("")
     try {
       await adminApi.deleteSkill(skill.id)
       setSkills((prev) => prev.filter((item) => item.id !== skill.id))
-      if (draft?.originalId === skill.id) {
+      if (editorOwner.currentEntityKey() === skill.id) {
+        editorOwner.invalidate()
         setDraft(null)
         setMobileDetailOpen(false)
         setMobilePane("editor")
@@ -183,11 +247,24 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
     } catch (err) {
       setError(err instanceof Error ? err.message : "删除 Skill 失败")
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
+  function applyGovernanceRollback(skillID: string, restored: SkillDefinition | null) {
+    setSkills((current) => restored ? upsertSkill(current, restored) : current.filter((skill) => skill.id !== skillID))
+    if (!restored && editorOwner.currentEntityKey() === skillID) {
+      editorOwner.invalidate()
+      setDraft(null)
+      setMobileDetailOpen(false)
+      setMobilePane("editor")
+    }
+    syncSkills()
+  }
+
   function updateGitUrl(value: string) {
+    invalidateBusy("source")
+    sourceOwner.invalidate()
     setGitUrl(value)
     setGitRef("")
     setGitBranches([])
@@ -196,11 +273,16 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
   }
 
   async function previewGit(ref?: string) {
-    if (!gitUrl.trim()) return
-    setSaving("git-scan")
+    const url = gitUrl.trim()
+    if (!url) return
+    invalidateBusy("source")
+    sourceOwner.activate(`git:${url}:${ref || ""}`)
+    const operation = sourceOwner.beginOperation()
+    const busy = beginBusy("git-scan", "source")
     setError("")
     try {
-      const result = await adminApi.previewSkillsFromGit(gitUrl.trim(), ref || undefined)
+      const result = await adminApi.previewSkillsFromGit(url, ref || undefined)
+      if (!sourceOwner.owns(operation)) return
       setGitBranches(result.branches || [])
       setGitRef(result.selected_ref || ref || "")
       setImportLog(importReportLines(result.report))
@@ -209,7 +291,7 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
       setImportDialog({
         source: "git",
         title: "选择 Git Skills",
-        url: gitUrl.trim(),
+        url,
         ref: result.selected_ref || ref || "",
         skills: result.skills || [],
         selectedPaths: (result.skills || []).map((skill) => skill.source_path),
@@ -217,18 +299,24 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         report: result.report,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Git 扫描失败")
+      if (sourceOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "Git 扫描失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function previewZip(file?: File) {
     if (!file) return
-    setSaving("zip-scan")
+    invalidateBusy("source")
+    sourceOwner.activate(`zip:${file.name}:${file.size}:${file.lastModified}`)
+    const operation = sourceOwner.beginOperation()
+    const busy = beginBusy("zip-scan", "source")
     setError("")
     try {
       const result = await adminApi.previewSkillsFromZip(file)
+      if (!sourceOwner.owns(operation)) return
       setImportLog(importReportLines(result.report))
       setImportLogExpanded(false)
       setImportQuery("")
@@ -242,15 +330,18 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         report: result.report,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Zip 扫描失败")
+      if (sourceOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "Zip 扫描失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
       if (zipInputRef.current) zipInputRef.current.value = ""
     }
   }
 
   async function importSelectedSkills() {
     if (!importDialog || importDialog.selectedPaths.length === 0) return
+    const sourceOperation = sourceOwner.beginOperation()
     const selectedSkills = importDialog.skills.filter((skill) => importDialog.selectedPaths.includes(skill.source_path))
     const updateCandidates = selectedSkills.filter((skill) => skill.existing_skill && skill.default_action === "update")
     if (updateCandidates.length > 0) {
@@ -260,6 +351,9 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
       const currentEntryPreview = await adminApi.getSkillFileContent(current.id, "SKILL.md")
         .then((loaded) => loaded.content)
         .catch(() => "")
+      if (!sourceOwner.owns(sourceOperation, false)) return
+      updateOwner.activate(`import:${importDialog.source}:${first.source_path}`)
+      updateCandidateGeneration.current += 1
       setUpdateDialog({
         source: importDialog.source,
         title: "确认重复导入",
@@ -276,29 +370,40 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
       })
       return
     }
-    setSaving("import")
+    const busy = beginBusy("import", "source")
     setError("")
     try {
       const result = importDialog.source === "git"
         ? await adminApi.importSkillsFromGit(importDialog.url, importDialog.ref, importDialog.selectedPaths, importDialog.selectedFiles)
         : await adminApi.importSkillsFromZip(importDialog.file, importDialog.selectedPaths, importDialog.selectedFiles)
+      // Closing or replacing the preview must not hide a mutation that the
+      // server already committed. Only dialog-local feedback is owner-gated.
       setSkills((prev) => mergeSkills(prev, result.skills || []))
-      setImportLog(importReportLines(result.report))
-      setImportLogExpanded(false)
-      setImportDialog(null)
       syncSkills()
+      if (sourceOwner.owns(sourceOperation, false)) {
+        setImportLog(importReportLines(result.report))
+        setImportLogExpanded(false)
+        setImportDialog(null)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "导入 Skill 失败")
+      if (sourceOwner.owns(sourceOperation, false)) {
+        setError(err instanceof Error ? err.message : "导入 Skill 失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function previewGitUpdate(skill: SkillDefinition) {
-    setSaving(`update-${skill.id}`)
+    invalidateBusy("update-preview")
+    updateOwner.activate(`git:${skill.id}`)
+    const operation = updateOwner.beginOperation()
+    const busy = beginBusy(`update-${skill.id}`, "update-preview")
     setError("")
     try {
       const preview = await adminApi.previewSkillGitUpdate(skill.id)
+      if (!updateOwner.owns(operation)) return
+      updateCandidateGeneration.current += 1
       setUpdateDialog({
         source: "git",
         title: "检查 Git 更新",
@@ -310,18 +415,25 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         },
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "检查 Skill 更新失败")
+      if (updateOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "检查 Skill 更新失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function previewZipUpdate(skill: SkillDefinition, file?: File) {
     if (!file) return
-    setSaving(`update-${skill.id}`)
+    invalidateBusy("update-preview")
+    updateOwner.activate(`zip:${skill.id}:${file.name}:${file.size}:${file.lastModified}`)
+    const operation = updateOwner.beginOperation()
+    const busy = beginBusy(`update-${skill.id}`, "update-preview")
     setError("")
     try {
       const preview = await adminApi.previewSkillZipUpdate(skill.id, file)
+      if (!updateOwner.owns(operation)) return
+      updateCandidateGeneration.current += 1
       setUpdateDialog({
         source: "zip",
         title: "上传新版 Zip",
@@ -333,52 +445,60 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         },
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Zip 更新预览失败")
+      if (updateOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "Zip 更新预览失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
       if (updateZipInputRef.current) updateZipInputRef.current.value = ""
     }
   }
 
   async function applyUpdateDialog() {
     if (!updateDialog || !updateDialog.selectedSourcePath) return
+    const operation = updateOwner.beginOperation()
     const updates = updateDialog.pendingUpdates?.length
       ? updateDialog.pendingUpdates
       : [updateDialog.preview.candidates.find((skill) => skill.source_path === updateDialog.selectedSourcePath)].filter(Boolean) as SkillImportPreview[]
-    setSaving("skill-update")
+    const busy = beginBusy("skill-update", "update-dialog")
     setError("")
     try {
-      const updated: SkillDefinition[] = []
-      let lastReport: ImportReport | undefined
-      for (const candidate of updates) {
+      let result: SkillImportResult
+      if (importDialog && updateDialog.pendingUpdates?.length) {
+        const selectedPaths = [...updates.map((candidate) => candidate.source_path), ...(updateDialog.pendingCreates || [])]
+        const targetSkillIds = Object.fromEntries(updates.map((candidate) => [
+          candidate.source_path,
+          (candidate.existing_skill || updateDialog.preview.current).id,
+        ]))
+        result = importDialog.source === "git"
+          ? await adminApi.importSkillsFromGit(importDialog.url, importDialog.ref, selectedPaths, importDialog.selectedFiles, targetSkillIds)
+          : await adminApi.importSkillsFromZip(importDialog.file, selectedPaths, importDialog.selectedFiles, targetSkillIds)
+      } else {
+        const candidate = updates[0]
         const current = candidate.existing_skill || updateDialog.preview.current
         const selected = updateDialog.selectedFiles[candidate.source_path] || []
-        const result = updateDialog.source === "git"
-          ? await adminApi.applySkillGitUpdate(current.id, candidate.source_path, selected, updateDialog.ref, importDialog?.source === "git" ? importDialog.url : undefined)
+        const single = updateDialog.source === "git"
+          ? await adminApi.applySkillGitUpdate(current.id, candidate.source_path, selected, updateDialog.ref)
           : updateDialog.file
             ? await adminApi.applySkillZipUpdate(current.id, updateDialog.file, candidate.source_path, selected)
             : undefined
-        if (!result) throw new Error("缺少 Zip 文件")
-        updated.push(...(result.skills || []))
-        lastReport = result.report
+        if (!single) throw new Error("缺少 Zip 文件")
+        result = single
       }
-      let created: SkillDefinition[] = []
-      if (updateDialog.pendingCreates?.length && importDialog) {
-        const createResult = importDialog.source === "git"
-          ? await adminApi.importSkillsFromGit(importDialog.url, importDialog.ref, updateDialog.pendingCreates, importDialog.selectedFiles)
-          : await adminApi.importSkillsFromZip(importDialog.file, updateDialog.pendingCreates, importDialog.selectedFiles)
-        created = createResult.skills || []
-        lastReport = createResult.report || lastReport
-      }
-      setSkills((prev) => mergeSkills(prev, [...updated, ...created]))
-      setImportLog(importReportLines(lastReport))
-      setImportDialog(null)
-      setUpdateDialog(null)
+      setSkills((prev) => mergeSkills(prev, result.skills || []))
       syncSkills()
+      if (updateOwner.owns(operation, false)) {
+        setImportLog(importReportLines(result.report))
+        setImportDialog(null)
+        setUpdateDialog(null)
+        updateOwner.invalidate()
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新 Skill 失败")
+      if (updateOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "更新 Skill 失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
@@ -408,6 +528,8 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
 
   async function selectUpdateCandidate(path: string) {
     if (!updateDialog) return
+    const generation = ++updateCandidateGeneration.current
+    const dialog = updateDialog
     const candidate = updateDialog.preview.candidates.find((skill) => skill.source_path === path)
     const current = candidate?.existing_skill || updateDialog.preview.current
     let currentEntryPreview = updateDialog.preview.current_entry_preview
@@ -422,32 +544,36 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         currentEntryTruncated = false
       }
     }
-    setUpdateDialog((prev) => prev ? {
-      ...prev,
-      selectedSourcePath: path,
-      selectedFiles: {
-        ...prev.selectedFiles,
-        [path]: prev.selectedFiles[path] || defaultFilesForCandidate(current, candidate),
-      },
-      preview: {
-        ...prev.preview,
-        current,
-        current_entry_preview: currentEntryPreview,
-        current_entry_truncated: currentEntryTruncated,
-        file_changes: compareClientSkillFiles(current.files || [], candidate?.files || []),
-        default_selected_files: prev.selectedFiles[path] || defaultFilesForCandidate(current, candidate),
-      },
-    } : prev)
+    if (generation !== updateCandidateGeneration.current) return
+    setUpdateDialog((prev) => {
+      if (!prev || prev !== dialog || generation !== updateCandidateGeneration.current) return prev
+      return {
+        ...prev,
+        selectedSourcePath: path,
+        selectedFiles: {
+          ...prev.selectedFiles,
+          [path]: prev.selectedFiles[path] || defaultFilesForCandidate(current, candidate),
+        },
+        preview: {
+          ...prev.preview,
+          current,
+          current_entry_preview: currentEntryPreview,
+          current_entry_truncated: currentEntryTruncated,
+          file_changes: compareClientSkillFiles(current.files || [], candidate?.files || []),
+          default_selected_files: prev.selectedFiles[path] || defaultFilesForCandidate(current, candidate),
+        },
+      }
+    })
   }
 
   function setReferenceContent(path: string, content: string) {
-    setDraft((prev) => prev ? { ...prev, files: prev.files.map((file) => file.path === path ? { ...file, content } : file) } : prev)
+    changeDraft((prev) => prev ? { ...prev, files: prev.files.map((file) => file.path === path ? { ...file, content } : file) } : prev)
   }
 
   function renameReference(oldPath: string, path: string) {
     const clean = path.trim()
     if (!clean) return
-    setDraft((prev) => prev ? { ...prev, files: prev.files.map((file) => file.path === oldPath ? { ...file, path: clean } : file) } : prev)
+    changeDraft((prev) => prev ? { ...prev, files: prev.files.map((file) => file.path === oldPath ? { ...file, path: clean } : file) } : prev)
     setActivePath(clean)
   }
 
@@ -459,13 +585,13 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
       index += 1
       path = `references/note-${index}.md`
     }
-    setDraft((prev) => prev ? { ...prev, files: [...prev.files, { path, content: "" }] } : prev)
+    changeDraft((prev) => prev ? { ...prev, files: [...prev.files, { path, content: "" }] } : prev)
     setActivePath(path)
     setMobilePane("editor")
   }
 
   function removeReference(path: string) {
-    setDraft((prev) => prev ? { ...prev, files: prev.files.filter((file) => file.path !== path) } : prev)
+    changeDraft((prev) => prev ? { ...prev, files: prev.files.filter((file) => file.path !== path) } : prev)
     setActivePath("SKILL.md")
   }
 
@@ -535,11 +661,13 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
           onEdit={(skill) => void startEdit(skill)}
           onToggle={(skill) => void toggleSkill(skill)}
           onDelete={(skill) => void deleteSkill(skill)}
+          onRollback={applyGovernanceRollback}
+          setError={setError}
         />
 
         <AdminSkillEditor
           draft={draft}
-          setDraft={setDraft}
+          setDraft={changeDraft}
           activePath={activePath}
           activeContent={activeContent}
           mobileDetailOpen={mobileDetailOpen}
@@ -549,7 +677,7 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
           saving={saving}
           updateZipInputRef={updateZipInputRef}
           onBack={() => setMobileDetailOpen(false)}
-          onClose={() => { setDraft(null); setMobileDetailOpen(false); setMobilePane("editor") }}
+          onClose={closeEditor}
           onMobilePaneChange={setMobilePane}
           onPreviewGitUpdate={(skill) => void previewGitUpdate(skill)}
           onPreviewZipUpdate={(skill, file) => void previewZipUpdate(skill, file)}
@@ -580,7 +708,13 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
         saving={saving === "import"}
         reportLines={importLines}
         onQueryChange={setImportQuery}
-        onOpenChange={(open) => !open && setImportDialog(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            invalidateBusy("source")
+            sourceOwner.invalidate()
+            setImportDialog(null)
+          }
+        }}
         onTogglePath={toggleImportPath}
         onToggleFile={toggleImportFile}
         onSelectAll={() => importDialog && updateImportSelection(importDialog.skills.map((skill) => skill.source_path))}
@@ -591,7 +725,15 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError }: Props)
       <SkillUpdateDialog
         state={updateDialog}
         saving={saving === "skill-update"}
-        onOpenChange={(open) => !open && setUpdateDialog(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            invalidateBusy("update-preview")
+            invalidateBusy("update-dialog")
+            updateOwner.invalidate()
+            updateCandidateGeneration.current += 1
+            setUpdateDialog(null)
+          }
+        }}
         onSelectCandidate={(path) => void selectUpdateCandidate(path)}
         onToggleFile={(sourcePath, filePath) => {
           if (filePath === "SKILL.md") return

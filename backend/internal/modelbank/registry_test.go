@@ -3,7 +3,7 @@ package modelbank
 import (
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // TestLoadModels_OverridesBuiltins 验证 DB 记录能覆盖内置默认，且能力字段正确映射。
@@ -67,6 +67,32 @@ func TestBuiltinsIncludeGPT56Family(t *testing.T) {
 		}
 		if info.Capabilities.ContextWindow != 1050000 || info.Capabilities.MaxOutput != 128000 {
 			t.Fatalf("%s limits = %d/%d", id, info.Capabilities.ContextWindow, info.Capabilities.MaxOutput)
+		}
+	}
+}
+
+func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
+	resetRegistryToBuiltins()
+	cases := []struct {
+		id       string
+		provider string
+		context  int
+		output   int
+	}{
+		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000},
+		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000},
+		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536},
+	}
+	for _, tc := range cases {
+		info := Get(tc.id)
+		if info == nil {
+			t.Fatalf("missing candidate-day builtin %s", tc.id)
+		}
+		if info.Provider != tc.provider || info.Capabilities.ContextWindow != tc.context || info.Capabilities.MaxOutput != tc.output {
+			t.Fatalf("%s profile = provider:%q limits:%d/%d", tc.id, info.Provider, info.Capabilities.ContextWindow, info.Capabilities.MaxOutput)
+		}
+		if !info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+			t.Fatalf("%s lost required capability evidence: %+v", tc.id, info.Capabilities)
 		}
 	}
 }

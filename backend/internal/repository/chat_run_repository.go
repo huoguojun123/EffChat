@@ -49,6 +49,24 @@ func (r *QuotaRepository) GetChatRun(ctx context.Context, runID string) (ChatRun
 	return record, err
 }
 
+// loadTerminalChatRunForScope returns a durable terminal record only when the
+// caller still owns the same run/session/user scope. Content-plus-terminal
+// transactions use it after their active-run lock misses: a previous commit
+// may have succeeded even if its client observed a transient commit error.
+// A missing, foreign, or still-running row deliberately remains indistinct to
+// the caller, which must preserve its original active-lock error.
+func loadTerminalChatRunForScope(ctx context.Context, exec dbExecutor, runID string, sessionID, userID int64) (ChatRunRecord, bool, error) {
+	record, err := scanChatRun(exec.QueryRowContext(ctx, chatRunSelect+`
+		WHERE run_id = $1 AND session_id = $2 AND user_id = $3`, runID, sessionID, userID))
+	if err == sql.ErrNoRows {
+		return ChatRunRecord{}, false, nil
+	}
+	if err != nil {
+		return ChatRunRecord{}, false, fmt.Errorf("load terminal chat run for scope: %w", err)
+	}
+	return record, record.Status != "running", nil
+}
+
 func (r *QuotaRepository) BindChatRunUserMessage(ctx context.Context, runID string, userMessageID int64) (bool, error) {
 	if runID == "" || userMessageID <= 0 {
 		return false, nil

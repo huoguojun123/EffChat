@@ -1,13 +1,13 @@
 -- ============================================
--- EffChat 空白数据库结构初始化
--- 用途：全新部署时一次性建好全部表/索引/触发器/视图。
---      本文件只包含 schema，不写入模型、配置、用户组或测试数据。
+-- EffChat production/001 的不可变历史基线。
+-- 用途：只能由 production/001_schema.sql 引用，再继续执行后续迁移。
+--      本文件只包含历史基线 schema，不是当前快照，也不是可独立
+--      启动应用的手动 fresh-install 入口。
 --
--- 已整合迁移 001~013 的最终结构。幂等：可在空库重复执行。
+-- 首次公开后不得回改；所有结构修正只追加 production migration。
 --
--- 前置：数据库 fchat 已创建（CREATE DATABASE fchat;）。
--- 执行：psql -U postgres -d fchat -f init.sql
---      或 docker exec -i <容器> psql -U postgres -d fchat < init.sql
+-- 官方 fresh install：使用 Docker Compose migrate 服务或 ./init_db.sh，
+-- 由统一 runner 原子执行完整 production 链并写入 schema_migrations。
 --
 -- 首个注册用户自动成为管理员（由应用层 auth_service 处理，无需在此预置）。
 -- ============================================
@@ -760,19 +760,6 @@ DROP TRIGGER IF EXISTS update_tool_configs_updated_at ON tool_configs;
 CREATE TRIGGER update_tool_configs_updated_at
     BEFORE UPDATE ON tool_configs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-INSERT INTO tool_configs (tool_key, display_name, enabled, timeout_seconds, sort_order)
-VALUES
-    ('memory', 'Session memory', true, 20, 10),
-    ('file_list', 'File list', true, 20, 20),
-    ('file_search', 'File search', true, 20, 30),
-    ('file_read', 'File read', true, 20, 40),
-    ('skill_list', 'Skill list', true, 20, 50),
-    ('skill_search', 'Skill search', true, 20, 60),
-    ('skill_read', 'Skill read', true, 20, 70),
-    ('web_search', 'Web search', true, 20, 80),
-    ('web_extract', 'Web extract', true, 30, 90)
-ON CONFLICT (tool_key) DO NOTHING;
 
 COMMENT ON TABLE tool_configs IS '管理员网页配置的现有 Agent 工具治理项：启停和单次调用超时';
 COMMENT ON COLUMN tool_configs.timeout_seconds IS '单次工具调用超时，超过后返回结构化工具错误，0 不允许';

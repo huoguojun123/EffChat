@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react"
 import { adminApi } from "@/api/admin"
 import { promptsApi, type PromptInput } from "@/api/prompts"
 import { useAuthStore } from "@/stores/auth"
@@ -6,9 +6,11 @@ import type { Prompt, PromptGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { MotionView } from "@/components/ui/motion"
 import { Check, ChevronLeft, CopyPlus, Folder, FolderPlus, Globe, Lock, Pencil, Plus, Trash2, X } from "lucide-react"
+import { BusyOwnership, EditorOwnership } from "@/components/admin/editorOwnership"
 
 interface Props {
   scope: "user" | "admin"
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 const defaultGroupName = "默认分组"
@@ -23,7 +25,7 @@ const emptyDraft: PromptInput = {
   is_public: false,
 }
 
-export function PromptManager({ scope }: Props) {
+export function PromptManager({ scope, onDirtyChange }: Props) {
   const user = useAuthStore((s) => s.user)
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [groups, setGroups] = useState<PromptGroup[]>([])
@@ -33,6 +35,14 @@ export function PromptManager({ scope }: Props) {
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState("")
   const [mobileListOpen, setMobileListOpen] = useState(true)
+  const [editorOwner] = useState(() => new EditorOwnership())
+  const [loadOwner] = useState(() => new EditorOwnership())
+  const [busyOwner] = useState(() => new BusyOwnership())
+  const mountedRef = useRef(true)
+  const panelDirty = editorOwner.isDirty()
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   const selected = useMemo(
     () => prompts.find((item) => item.id === selectedId),
@@ -63,7 +73,44 @@ export function PromptManager({ scope }: Props) {
       .sort((a, b) => a.groupName.localeCompare(b.groupName, "zh-CN"))
   }, [prompts])
 
-  const selectPrompt = useCallback((prompt: Prompt) => {
+  function beginBusy(scopeName: string) {
+    const operationId = busyOwner.begin("saving", scopeName)
+    setSaving(true)
+    return operationId
+  }
+
+  function finishBusy(operationId: number) {
+    const label = busyOwner.release(operationId)
+    if (label !== null && mountedRef.current) setSaving(label !== "")
+  }
+
+  function invalidateBusy(scopeName: string) {
+    setSaving(busyOwner.invalidate(scopeName) !== "")
+  }
+
+  function promptKey(id: number | "new") {
+    return id === "new" ? "new-prompt" : `prompt:${id}`
+  }
+
+  function canLeavePrompt(nextKey: string) {
+    if (!editorOwner.isDirty()) return true
+    if (editorOwner.currentEntityKey() === nextKey) return false
+    return window.confirm("放弃当前提示词的未保存修改？")
+  }
+
+  function changeDraft(update: SetStateAction<PromptInput>) {
+    editorOwner.change()
+    setFeedback("")
+    setDraft(update)
+  }
+
+  function selectPrompt(prompt: Prompt) {
+    const key = promptKey(prompt.id)
+    if (editorOwner.currentEntityKey() === key && selectedId === prompt.id) return
+    if (!canLeavePrompt(key)) return
+    invalidateBusy("prompt-editor")
+    invalidateBusy("prompt-group")
+    editorOwner.activate(key)
     setSelectedId(prompt.id)
     setDraft({
       title: prompt.title,
@@ -74,12 +121,20 @@ export function PromptManager({ scope }: Props) {
       tags: [],
       is_public: scope === "admin",
     })
+    setFeedback("")
     setMobileListOpen(false)
-  }, [scope])
+  }
 
-  const startNew = useCallback((base?: Prompt) => {
+  function startNew(base?: Prompt) {
+    const key = "new-prompt"
+    if (!base && editorOwner.currentEntityKey() === key && selectedId === "new") return
+    if (!canLeavePrompt(key)) return
     const reusableGroupId = base?.group_id && currentUserGroupIds.has(base.group_id) ? base.group_id : null
     const reusableGroup = reusableGroupId ? groups.find((group) => group.id === reusableGroupId) : null
+    invalidateBusy("prompt-editor")
+    invalidateBusy("prompt-group")
+    editorOwner.activate(key)
+    if (base) editorOwner.change()
     setSelectedId("new")
     setMobileListOpen(false)
     setDraft(base ? {
@@ -91,107 +146,167 @@ export function PromptManager({ scope }: Props) {
       tags: [],
       is_public: false,
     } : { ...emptyDraft })
-  }, [currentUserGroupIds, groups])
+    setFeedback("")
+  }
 
   const loadData = useCallback(async () => {
+    // Scope and account jointly own the complete catalog; clearing first keeps
+    // a previous account's bounded result out of the next editor generation.
+    loadOwner.activate(`${scope}:${user?.id ?? "anonymous"}`)
+    const operation = loadOwner.beginOperation()
     setLoading(true)
     setFeedback("")
+    setPrompts([])
+    setGroups([])
     try {
       if (scope === "admin") {
-        const promptRes = await adminApi.listPrompts()
-        setPrompts(promptRes.prompts || [])
-        setGroups([])
+        const promptRes = await adminApi.listAllPrompts()
+        if (loadOwner.owns(operation)) {
+          setPrompts(promptRes)
+          setGroups([])
+        }
         return
       }
       const [mine, pub, groupRes] = await Promise.all([
-        promptsApi.listMine(),
-        promptsApi.listPublic(),
+        promptsApi.listAllMine(),
+        promptsApi.listAllPublic(),
         promptsApi.listGroups(),
       ])
       const map = new Map<number, Prompt>()
-      for (const item of [...(mine.prompts || []), ...(pub.prompts || [])]) {
+      for (const item of [...mine, ...pub]) {
         map.set(item.id, item)
       }
-      setPrompts(Array.from(map.values()))
-      setGroups(sortGroups(groupRes.groups || []))
+      if (loadOwner.owns(operation)) {
+        setPrompts(Array.from(map.values()))
+        setGroups(sortGroups(groupRes.groups || []))
+      }
+    } catch (err) {
+      if (loadOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "加载提示词失败")
+      }
     } finally {
-      setLoading(false)
+      if (mountedRef.current && loadOwner.owns(operation, false)) setLoading(false)
     }
-  }, [scope])
+  }, [loadOwner, scope, user?.id])
 
   useEffect(() => {
+    mountedRef.current = true
     void Promise.resolve().then(loadData)
-  }, [loadData])
+    return () => {
+      mountedRef.current = false
+      editorOwner.invalidate()
+      loadOwner.invalidate()
+    }
+  }, [editorOwner, loadData, loadOwner])
 
   async function handleSave() {
     if (!draft.title.trim() || !draft.content.trim()) return
-    setSaving(true)
+    const currentDraft = draft
+    const currentSelectedID = selectedId
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy("prompt-editor")
     setFeedback("")
     try {
-      const group = scope === "admin" ? null : draft.group_id == null ? null : groups.find((item) => item.id === draft.group_id) || null
+      const group = scope === "admin" ? null : currentDraft.group_id == null ? null : groups.find((item) => item.id === currentDraft.group_id) || null
       const payload = {
-        ...draft,
-        title: draft.title.trim(),
-        content: draft.content.trim(),
-        description: draft.description?.trim() || undefined,
+        ...currentDraft,
+        title: currentDraft.title.trim(),
+        content: currentDraft.content.trim(),
+        description: currentDraft.description?.trim() || undefined,
         group_id: group?.id ?? null,
         group_name: group?.name ?? defaultGroupName,
         is_public: scope === "admin",
       }
-      if (selectedId === "new") {
+      if (currentSelectedID === "new") {
         const created = scope === "admin" ? await adminApi.createPrompt(payload) : await promptsApi.create(payload)
+        // Server commits always converge the shared catalog. Selection, draft,
+        // feedback, and busy state remain fenced to the initiating editor.
         setPrompts((prev) => [created, ...prev])
-        selectPrompt(created)
+        if (editorOwner.owns(operation, false)) {
+          const unchanged = editorOwner.owns(operation)
+          editorOwner.rekey(promptKey(created.id))
+          editorOwner.acknowledge(operation.revision)
+          setSelectedId(created.id)
+          if (unchanged) {
+            setDraft({ ...payload, title: created.title, content: created.content, description: created.description || "" })
+            setFeedback("已保存")
+          } else {
+            setFeedback("已保存较早版本，当前修改仍未保存")
+          }
+        }
       } else {
         const updated = scope === "admin"
-          ? await adminApi.updatePrompt(selectedId, payload)
-          : await promptsApi.update(selectedId, payload)
+          ? await adminApi.updatePrompt(currentSelectedID, payload)
+          : await promptsApi.update(currentSelectedID, payload)
         setPrompts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
-        selectPrompt(updated)
+        if (editorOwner.owns(operation, false)) {
+          editorOwner.acknowledge(operation.revision)
+          if (editorOwner.owns(operation)) {
+            setDraft({ ...payload, title: updated.title, content: updated.content, description: updated.description || "" })
+            setFeedback("已保存")
+          } else {
+            setFeedback("已保存较早版本，当前修改仍未保存")
+          }
+        }
       }
-      setFeedback("已保存")
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "保存失败")
+      if (editorOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "保存失败")
+      }
     } finally {
-      setSaving(false)
+      finishBusy(busy)
     }
   }
 
   async function handleDelete() {
     if (selectedId === "new") return
-    setSaving(true)
+    const targetID = selectedId
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy("prompt-editor")
     setFeedback("")
     try {
       if (scope === "admin") {
-        await adminApi.deletePrompt(selectedId)
+        await adminApi.deletePrompt(targetID)
       } else {
-        await promptsApi.delete(selectedId)
+        await promptsApi.delete(targetID)
       }
-      setPrompts((prev) => prev.filter((item) => item.id !== selectedId))
-      startNew()
-      setFeedback("已删除")
+      setPrompts((prev) => prev.filter((item) => item.id !== targetID))
+      if (editorOwner.owns(operation, false)) {
+        editorOwner.activate("new-prompt")
+        setSelectedId("new")
+        setDraft({ ...emptyDraft })
+        setFeedback("已删除")
+      }
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "删除失败")
+      if (editorOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "删除失败")
+      }
     } finally {
-      setSaving(false)
+      finishBusy(busy)
     }
   }
 
   async function createGroup() {
     const name = window.prompt("输入新分组名称")
     if (!name?.trim()) return
-    setSaving(true)
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy("prompt-group")
     setFeedback("")
     try {
       if (scope === "admin") return
       const group = await promptsApi.createGroup(name.trim())
       setGroups((prev) => sortGroups([...prev, group]))
-      setDraft((prev) => ({ ...prev, group_id: group.id, group_name: group.name }))
-      setFeedback("分组已创建")
+      if (editorOwner.owns(operation)) {
+        editorOwner.change()
+        setDraft((prev) => ({ ...prev, group_id: group.id, group_name: group.name }))
+        setFeedback("分组已创建")
+      }
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "创建分组失败")
+      if (editorOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "创建分组失败")
+      }
     } finally {
-      setSaving(false)
+      finishBusy(busy)
     }
   }
 
@@ -202,19 +317,24 @@ export function PromptManager({ scope }: Props) {
     if (!group) return
     const name = window.prompt("输入新的分组名称", group.name)
     if (!name?.trim() || name.trim() === group.name) return
-    setSaving(true)
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy("prompt-group")
     setFeedback("")
     try {
       if (scope === "admin") return
       const updated = await promptsApi.updateGroup(groupID, name.trim())
       setGroups((prev) => sortGroups(prev.map((item) => (item.id === groupID ? updated : item))))
       setPrompts((prev) => prev.map((item) => (item.group_id === groupID ? { ...item, group_name: updated.name } : item)))
-      setDraft((prev) => ({ ...prev, group_name: updated.name }))
-      setFeedback("分组已重命名")
+      if (editorOwner.owns(operation)) {
+        setDraft((prev) => ({ ...prev, group_name: updated.name }))
+        setFeedback("分组已重命名")
+      }
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "重命名分组失败")
+      if (editorOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "重命名分组失败")
+      }
     } finally {
-      setSaving(false)
+      finishBusy(busy)
     }
   }
 
@@ -223,7 +343,8 @@ export function PromptManager({ scope }: Props) {
     if (groupID == null) return
     const group = groups.find((item) => item.id === groupID)
     if (!group || !window.confirm(`删除分组“${group.name}”？提示词会移动到默认分组。`)) return
-    setSaving(true)
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy("prompt-group")
     setFeedback("")
     try {
       if (scope === "admin") return
@@ -232,12 +353,16 @@ export function PromptManager({ scope }: Props) {
       setPrompts((prev) => prev.map((item) => (
         item.group_id === groupID ? { ...item, group_id: null, group_name: defaultGroupName } : item
       )))
-      setDraft((prev) => ({ ...prev, group_id: null, group_name: defaultGroupName }))
-      setFeedback("分组已删除")
+      if (editorOwner.owns(operation)) {
+        setDraft((prev) => ({ ...prev, group_id: null, group_name: defaultGroupName }))
+        setFeedback("分组已删除")
+      }
     } catch (err) {
-      setFeedback(err instanceof Error ? err.message : "删除分组失败")
+      if (editorOwner.owns(operation, false)) {
+        setFeedback(err instanceof Error ? err.message : "删除分组失败")
+      }
     } finally {
-      setSaving(false)
+      finishBusy(busy)
     }
   }
 
@@ -331,7 +456,7 @@ export function PromptManager({ scope }: Props) {
                       onChange={(e) => {
                         const groupId = e.target.value ? Number(e.target.value) : null
                         const group = groupId == null ? null : groups.find((item) => item.id === groupId) || null
-                        setDraft((prev) => ({ ...prev, group_id: group?.id ?? null, group_name: group?.name ?? defaultGroupName }))
+                        changeDraft((prev) => ({ ...prev, group_id: group?.id ?? null, group_name: group?.name ?? defaultGroupName }))
                       }}
                       disabled={!canEdit}
                       className="prompt-input"
@@ -356,7 +481,7 @@ export function PromptManager({ scope }: Props) {
                 <Field label="名称" className="mb-0">
                   <input
                     value={draft.title}
-                    onChange={(e) => setDraft((prev) => ({ ...prev, title: e.target.value }))}
+                    onChange={(e) => changeDraft((prev) => ({ ...prev, title: e.target.value }))}
                     disabled={!canEdit}
                     className="prompt-input"
                     placeholder="例如：Go 专家"
@@ -367,7 +492,7 @@ export function PromptManager({ scope }: Props) {
               <Field label="内容" className="mb-0">
                 <textarea
                   value={draft.content}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, content: e.target.value }))}
+                  onChange={(e) => changeDraft((prev) => ({ ...prev, content: e.target.value }))}
                   disabled={!canEdit}
                   className="prompt-textarea min-h-[190px]"
                 />
@@ -376,7 +501,7 @@ export function PromptManager({ scope }: Props) {
               <Field label="备注" className="mb-0">
                 <textarea
                   value={draft.description}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, description: e.target.value }))}
+                  onChange={(e) => changeDraft((prev) => ({ ...prev, description: e.target.value }))}
                   disabled={!canEdit}
                   className="prompt-textarea min-h-[72px]"
                   placeholder="写给自己看的说明"

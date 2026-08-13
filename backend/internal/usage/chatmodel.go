@@ -9,6 +9,7 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
 )
 
 // 本包把“模型调用用量”定义为上游 LLM API 审计日志，而不是业务统计报表。
@@ -30,6 +31,106 @@ func WrapChatModel(base einoModel.ToolCallingChatModel, recorder *Service, defau
 	return &recordingChatModel{base: base, recorder: recorder, defaults: defaults}
 }
 
+// WrapAgenticModel records the official Responses AgenticModel at the same raw
+// LLM boundary as classic chat models. Each ReAct model turn produces one
+// audit event; local Tool execution remains accounted by tool governance.
+func WrapAgenticModel(base einoModel.AgenticModel, recorder *Service, defaults Meta) einoModel.AgenticModel {
+	if base == nil || recorder == nil {
+		return base
+	}
+	return &recordingAgenticModel{base: base, recorder: recorder, defaults: defaults}
+}
+
+type recordingAgenticModel struct {
+	base     einoModel.AgenticModel
+	recorder *Service
+	defaults Meta
+}
+
+func (m *recordingAgenticModel) Generate(ctx context.Context, input []*schema.AgenticMessage, opts ...einoModel.Option) (*schema.AgenticMessage, error) {
+	startedAt := time.Now()
+	out, err := m.base.Generate(ctx, input, opts...)
+	m.record(ctx, out, err, time.Since(startedAt))
+	return out, err
+}
+
+func (m *recordingAgenticModel) Stream(ctx context.Context, input []*schema.AgenticMessage, opts ...einoModel.Option) (*schema.StreamReader[*schema.AgenticMessage], error) {
+	startedAt := time.Now()
+	reader, err := m.base.Stream(ctx, input, opts...)
+	if err != nil {
+		m.record(ctx, nil, err, time.Since(startedAt))
+		return nil, err
+	}
+	if reader == nil {
+		err = modelstream.ErrNilReader
+		m.record(ctx, nil, err, time.Since(startedAt))
+		return nil, err
+	}
+
+	out, writer := schema.Pipe[*schema.AgenticMessage](1)
+	go func() {
+		defer writer.Close()
+		defer reader.Close()
+		var lastUsageMsg *schema.AgenticMessage
+		var streamErr error
+		success := false
+		for {
+			chunk, recvErr := reader.Recv()
+			if errors.Is(recvErr, io.EOF) {
+				success = true
+				break
+			}
+			if recvErr != nil {
+				streamErr = recvErr
+				writer.Send(nil, recvErr)
+				break
+			}
+			if chunk != nil && chunk.ResponseMeta != nil && chunk.ResponseMeta.TokenUsage != nil {
+				lastUsageMsg = chunk
+			}
+			if closed := writer.Send(chunk, nil); closed {
+				streamErr = context.Canceled
+				break
+			}
+		}
+		if success {
+			m.record(ctx, lastUsageMsg, nil, time.Since(startedAt))
+		} else {
+			m.record(ctx, lastUsageMsg, streamErr, time.Since(startedAt))
+		}
+	}()
+	return out, nil
+}
+
+func (m *recordingAgenticModel) record(ctx context.Context, out *schema.AgenticMessage, err error, duration time.Duration) {
+	if m == nil || m.recorder == nil {
+		return
+	}
+	meta := mergeMeta(m.defaults, MetaFromContext(ctx))
+	kind := meta.Kind
+	if kind == "" {
+		kind = KindChat
+	}
+	event := Event{
+		UserID: meta.UserID, SessionID: meta.SessionID, MessageID: meta.MessageID, RunID: meta.RunID,
+		Kind: kind, Provider: meta.Provider, ModelID: meta.ModelID,
+		Success: err == nil, DurationMs: duration.Milliseconds(),
+	}
+	if out != nil && out.ResponseMeta != nil && out.ResponseMeta.TokenUsage != nil {
+		u := out.ResponseMeta.TokenUsage
+		event.PromptTokens = u.PromptTokens
+		event.CompletionTokens = u.CompletionTokens
+		event.TotalTokens = u.TotalTokens
+		event.CachedTokens = u.PromptTokenDetails.CachedTokens
+		event.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	if err != nil {
+		event.ErrorType = ErrorType(err)
+		event.ErrorMessage = err.Error()
+	}
+	m.recorder.Record(event)
+}
+
 type recordingChatModel struct {
 	base     einoModel.ToolCallingChatModel
 	recorder *Service
@@ -47,6 +148,11 @@ func (m *recordingChatModel) Stream(ctx context.Context, input []*schema.Message
 	startedAt := time.Now()
 	reader, err := m.base.Stream(ctx, input, opts...)
 	if err != nil {
+		m.record(ctx, input, nil, err, time.Since(startedAt))
+		return nil, err
+	}
+	if reader == nil {
+		err = modelstream.ErrNilReader
 		m.record(ctx, input, nil, err, time.Since(startedAt))
 		return nil, err
 	}

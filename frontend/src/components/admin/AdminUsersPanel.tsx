@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type SetStateAction } from "react"
 import { adminApi, type AdminUser, type CreateAdminUserInput, type UpdateAdminUserInput } from "@/api/admin"
 import type { UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { MotionView } from "@/components/ui/motion"
 import { ChevronLeft, ChevronRight, Plus, Search, Shield, X } from "lucide-react"
+import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 
 const PAGE_SIZE = 15
 
@@ -13,6 +14,7 @@ interface Props {
   setUsers: React.Dispatch<React.SetStateAction<AdminUser[]>>
   groups: UserGroup[]
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type UserDraft = CreateAdminUserInput & { id?: number }
@@ -26,7 +28,7 @@ const emptyUser: UserDraft = {
   is_active: true,
 }
 
-export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
+export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChange }: Props) {
   const [draft, setDraft] = useState<UserDraft | null>(null)
   const [saving, setSaving] = useState("")
   const [resetPassword, setResetPassword] = useState("")
@@ -34,8 +36,87 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
   const [resetPasswordDirty, setResetPasswordDirty] = useState(false)
   const [query, setQuery] = useState("")
   const [page, setPage] = useState(1)
+  const [editorOwner] = useState(() => new EditorOwnership())
+  const [passwordOwner] = useState(() => new EditorOwnership())
+  const [busyOwner] = useState(() => new BusyOwnership())
+  const mountedRef = useRef(true)
   const activeUserId = draft?.id
+  const editedUser = activeUserId ? users.find((user) => user.id === activeUserId) : undefined
+  const defaultGroup = groups.find((group) => group.is_default)
+  const assignedGroup = editedUser?.group_id == null ? undefined : groups.find((group) => group.id === editedUser.group_id)
+  // Group mutations update the shared group list before Users is reloaded. Derive
+  // the visible effective group from that current list so default switches and
+  // ON DELETE SET NULL semantics are not temporarily represented by stale wire data.
+  const visibleEffectiveGroup = assignedGroup || defaultGroup || editedUser?.effective_group
+  const visibleGroupID = assignedGroup?.id ?? ""
   const canResetPassword = resetPasswordOpen && resetPasswordDirty && resetPassword.length >= 6
+  const panelDirty = editorOwner.isDirty() || passwordOwner.isDirty()
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      editorOwner.invalidate()
+      passwordOwner.invalidate()
+    }
+  }, [editorOwner, passwordOwner])
+
+  function beginBusy(label: string, scope: string) {
+    const operationId = busyOwner.begin(label, scope)
+    setSaving(label)
+    return operationId
+  }
+
+  function finishBusy(operationId: number) {
+    const remainingLabel = busyOwner.release(operationId)
+    if (remainingLabel !== null && mountedRef.current) setSaving(remainingLabel)
+  }
+
+  function invalidateBusy(scope: string) {
+    setSaving(busyOwner.invalidate(scope))
+  }
+
+  function userKey(id?: number) {
+    return id ? `user:${id}` : "new-user"
+  }
+
+  function canLeaveUserEditor(nextKey: string) {
+    if (!editorOwner.isDirty() && !passwordOwner.isDirty()) return true
+    if (editorOwner.currentEntityKey() === nextKey) return false
+    return window.confirm("放弃当前用户的未保存修改？")
+  }
+
+  function activateUserEditor(nextDraft: UserDraft) {
+    const key = userKey(nextDraft.id)
+    invalidateBusy("user-editor")
+    invalidateBusy("password-editor")
+    editorOwner.activate(key)
+    passwordOwner.activate(key)
+    setDraft(nextDraft)
+    setResetPassword("")
+    setResetPasswordOpen(false)
+    setResetPasswordDirty(false)
+  }
+
+  function changeDraft(update: SetStateAction<UserDraft | null>) {
+    editorOwner.change()
+    setDraft(update)
+  }
+
+  function closeEditor() {
+    if (!canLeaveUserEditor("")) return
+    invalidateBusy("user-editor")
+    invalidateBusy("password-editor")
+    editorOwner.invalidate()
+    passwordOwner.invalidate()
+    setDraft(null)
+    setResetPassword("")
+    setResetPasswordOpen(false)
+    setResetPasswordDirty(false)
+  }
 
   // 模糊搜索：账号/昵称/邮箱任一命中即可（大小写不敏感）。
   const filtered = useMemo(() => {
@@ -53,29 +134,33 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
     [filtered, safePage]
   )
 
-  // 设置用户分级组（group_id 为 null 时清空）。
+  // group_id 只表示显式绑定；null 会在后端动态解析为当前默认组。
   async function setUserGroup(userId: number, groupId: number | null) {
-    setSaving(`group-${userId}`)
+    const editorOperation = editorOwner.beginOperation()
+    const busy = beginBusy(`group-${userId}`, `user-group:${userId}`)
     setError("")
     try {
       const updated = await adminApi.setUserGroup(userId, groupId)
       setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "用户分组失败")
+      if (editorOwner.owns(editorOperation, false)) {
+        setError(err instanceof Error ? err.message : "用户分组失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   function startCreate() {
-    setDraft(emptyUser)
-    setResetPassword("")
-    setResetPasswordOpen(false)
-    setResetPasswordDirty(false)
+    if (!canLeaveUserEditor("new-user")) return
+    activateUserEditor({ ...emptyUser })
   }
 
   function startEdit(user: AdminUser) {
-    setDraft({
+    const key = userKey(user.id)
+    if (editorOwner.currentEntityKey() === key && draft?.id === user.id) return
+    if (!canLeaveUserEditor(key)) return
+    activateUserEditor({
       id: user.id,
       username: user.username,
       password: "",
@@ -84,75 +169,122 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
       role: user.role,
       is_active: user.is_active,
     })
-    setResetPassword("")
-    setResetPasswordOpen(false)
-    setResetPasswordDirty(false)
   }
 
   async function saveUser() {
     if (!draft) return
-    setSaving(draft.id ? `user-${draft.id}` : "create")
+    const currentDraft = draft
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(currentDraft.id ? `user-${currentDraft.id}` : "create", "user-editor")
     setError("")
     try {
-      if (draft.id) {
+      if (currentDraft.id) {
         const payload: UpdateAdminUserInput = {
-          email: draft.email || "",
-          nickname: draft.nickname || "",
-          role: draft.role,
-          is_active: draft.is_active,
+          email: currentDraft.email || "",
+          nickname: currentDraft.nickname || "",
+          role: currentDraft.role,
+          is_active: currentDraft.is_active,
         }
-        const updated = await adminApi.updateUser(draft.id, payload)
+        const updated = await adminApi.updateUser(currentDraft.id, payload)
+        // A committed mutation must converge the shared catalog after navigation;
+        // only editor-local state is fenced by the captured generation/revision.
         setUsers((prev) => prev.map((user) => (user.id === updated.id ? updated : user)))
+        if (editorOwner.owns(operation, false)) {
+          editorOwner.acknowledge(operation.revision)
+          if (editorOwner.owns(operation) && !passwordOwner.isDirty()) {
+            editorOwner.invalidate()
+            passwordOwner.invalidate()
+            setDraft(null)
+          } else {
+            setError(passwordOwner.isDirty()
+              ? "用户资料已保存，当前密码输入仍未保存"
+              : "已保存较早版本，当前修改仍未保存")
+          }
+        }
       } else {
-        const created = await adminApi.createUser(draft)
+        const created = await adminApi.createUser(currentDraft)
         setUsers((prev) => [created, ...prev])
+        if (editorOwner.owns(operation, false)) {
+          const unchanged = editorOwner.owns(operation)
+          editorOwner.rekey(userKey(created.id))
+          passwordOwner.rekey(userKey(created.id))
+          editorOwner.acknowledge(operation.revision)
+          if (unchanged) {
+            editorOwner.invalidate()
+            passwordOwner.invalidate()
+            setDraft(null)
+          } else {
+            setDraft((prev) => prev ? { ...prev, id: created.id, password: "" } : prev)
+            setError("已保存较早版本，当前修改仍未保存")
+          }
+        }
       }
-      setDraft(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "用户保存失败")
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "用户保存失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function quickPatch(user: AdminUser, patch: UpdateAdminUserInput) {
-    setSaving(`user-${user.id}`)
+    const editorOperation = editorOwner.beginOperation()
+    const busy = beginBusy(`user-${user.id}`, `user-patch:${user.id}`)
     setError("")
     try {
       const updated = await adminApi.updateUser(user.id, patch)
       setUsers((prev) => prev.map((item) => (item.id === user.id ? updated : item)))
-      setDraft((prev) => {
-        if (prev?.id !== user.id) return prev
-        return {
-          ...prev,
-          ...(patch.role !== undefined ? { role: updated.role } : {}),
-          ...(patch.is_active !== undefined ? { is_active: updated.is_active } : {}),
-        }
-      })
+      if (editorOwner.owns(editorOperation)) {
+        setDraft((prev) => {
+          if (prev?.id !== user.id) return prev
+          return {
+            ...prev,
+            ...(patch.role !== undefined ? { role: updated.role } : {}),
+            ...(patch.is_active !== undefined ? { is_active: updated.is_active } : {}),
+          }
+        })
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "用户更新失败")
+      if (editorOwner.owns(editorOperation, false)) {
+        setError(err instanceof Error ? err.message : "用户更新失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function savePassword() {
     if (!draft?.id || !canResetPassword) return
-    setSaving(`password-${draft.id}`)
+    const password = resetPassword
+    const operation = passwordOwner.beginOperation()
+    const busy = beginBusy(`password-${draft.id}`, "password-editor")
     setError("")
     try {
-      await adminApi.resetUserPassword(draft.id, resetPassword)
-      setResetPassword("")
-      setResetPasswordOpen(false)
-      setResetPasswordDirty(false)
+      await adminApi.resetUserPassword(draft.id, password)
+      if (passwordOwner.owns(operation, false)) {
+        passwordOwner.acknowledge(operation.revision)
+        if (passwordOwner.owns(operation)) {
+          setResetPassword("")
+          setResetPasswordOpen(false)
+          setResetPasswordDirty(false)
+        } else {
+          setError("已提交较早的新密码，当前输入仍未保存")
+        }
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "密码重置失败")
+      if (passwordOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "密码重置失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   function closePasswordReset() {
+    if (passwordOwner.isDirty() && !window.confirm("放弃未保存的新密码？")) return
+    invalidateBusy("password-editor")
+    passwordOwner.activate(editorOwner.currentEntityKey())
     setResetPassword("")
     setResetPasswordOpen(false)
     setResetPasswordDirty(false)
@@ -173,14 +305,15 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 type="search"
-                name="fchat-user-search"
+                name="effchat-user-search"
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setPage(1) }}
                 placeholder="搜索账号 / 昵称 / 邮箱"
-                className="h-8 pl-8 text-sm"
+                aria-label="搜索用户"
+                className="h-11 pl-8 text-sm sm:h-8"
               />
             </div>
           </div>
@@ -229,17 +362,21 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
             <span>共 {filtered.length} 人{query ? `（自 ${users.length} 人筛选）` : ""}</span>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-8"
+                aria-label="上一页用户"
               >
                 <ChevronLeft className="h-3.5 w-3.5" />
               </button>
               <span className="tabular-nums">{safePage} / {totalPages}</span>
               <button
+                type="button"
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-40"
+                className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-8"
+                aria-label="下一页用户"
               >
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>
@@ -251,7 +388,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
           <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
             <div className="flex min-w-0 items-center gap-1">
               {draft ? (
-                <Button variant="ghost" size="sm" className="h-8 px-1.5 lg:hidden" onClick={() => setDraft(null)}>
+                <Button variant="ghost" size="sm" className="h-8 px-1.5 lg:hidden" onClick={closeEditor}>
                   <ChevronLeft className="h-3.5 w-3.5" />
                   返回
                 </Button>
@@ -259,7 +396,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
               <div className="truncate font-medium">{draft ? (draft.id ? "编辑用户" : "新建用户") : "用户详情"}</div>
             </div>
             {draft && (
-              <Button variant="ghost" size="sm" className="hidden lg:inline-flex" onClick={() => setDraft(null)}>
+              <Button variant="ghost" size="sm" className="hidden lg:inline-flex" onClick={closeEditor}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -274,7 +411,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
                       name={`admin-managed-username-${draft.id || "new"}`}
                       autoComplete="off"
                       value={draft.username}
-                      onChange={(e) => setDraft((prev) => prev ? { ...prev, username: e.target.value } : prev)}
+                      onChange={(e) => changeDraft((prev) => prev ? { ...prev, username: e.target.value } : prev)}
                       disabled={!!draft.id}
                     />
                   </Field>
@@ -286,7 +423,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
                         autoComplete="new-password"
                         placeholder="至少 6 位"
                         value={draft.password}
-                        onChange={(e) => setDraft((prev) => prev ? { ...prev, password: e.target.value } : prev)}
+                        onChange={(e) => changeDraft((prev) => prev ? { ...prev, password: e.target.value } : prev)}
                       />
                     </Field>
                   )}
@@ -295,7 +432,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
                       name={`admin-managed-nickname-${draft.id || "new"}`}
                       autoComplete="off"
                       value={draft.nickname || ""}
-                      onChange={(e) => setDraft((prev) => prev ? { ...prev, nickname: e.target.value } : prev)}
+                      onChange={(e) => changeDraft((prev) => prev ? { ...prev, nickname: e.target.value } : prev)}
                     />
                   </Field>
                   <Field label="邮箱">
@@ -303,33 +440,43 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
                       name={`admin-managed-email-${draft.id || "new"}`}
                       autoComplete="off"
                       value={draft.email || ""}
-                      onChange={(e) => setDraft((prev) => prev ? { ...prev, email: e.target.value } : prev)}
+                      onChange={(e) => changeDraft((prev) => prev ? { ...prev, email: e.target.value } : prev)}
                     />
                   </Field>
                   <div className="grid grid-cols-2 gap-3">
                     <Field label="角色">
-                      <select value={draft.role} onChange={(e) => setDraft((prev) => prev ? { ...prev, role: e.target.value as "admin" | "user" } : prev)} className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm">
+                      <select value={draft.role} onChange={(e) => changeDraft((prev) => prev ? { ...prev, role: e.target.value as "admin" | "user" } : prev)} className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm">
                         <option value="admin">管理员</option>
                         <option value="user">用户</option>
                       </select>
                     </Field>
                     <Field label="状态">
-                      <StatusButton active={draft.is_active} onClick={() => setDraft((prev) => prev ? { ...prev, is_active: !prev.is_active } : prev)} className="h-8 w-full justify-center rounded-md text-sm" />
+                      <StatusButton active={draft.is_active} onClick={() => changeDraft((prev) => prev ? { ...prev, is_active: !prev.is_active } : prev)} className="h-8 w-full justify-center rounded-md text-sm" />
                     </Field>
                   </div>
                   {draft.id && (
                     <Field label="分级组">
                       <select
-                        value={users.find((u) => u.id === draft.id)?.group_id ?? ""}
+                        value={visibleGroupID}
                         onChange={(e) => draft.id && setUserGroup(draft.id, e.target.value === "" ? null : Number(e.target.value))}
                         className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm"
                         disabled={saving === `group-${draft.id}`}
                       >
-                        <option value="">默认（最低级）</option>
+                        <option value="">
+                          {defaultGroup
+                            ? `继承默认组 ${defaultGroup.name}（等级 ${defaultGroup.level}）`
+                            : "继承默认组"}
+                        </option>
                         {groups.map((g) => (
                           <option key={g.id} value={g.id}>{g.name}（等级 {g.level}）</option>
                         ))}
                       </select>
+                      {visibleEffectiveGroup && (
+                        <span className="mt-1.5 block text-xs text-muted-foreground">
+                          当前生效：{assignedGroup ? "显式组 " : "继承默认组 "}
+                          {visibleEffectiveGroup.name}（等级 {visibleEffectiveGroup.level}）
+                        </span>
+                      )}
                     </Field>
                   )}
                   {draft.id && (
@@ -347,6 +494,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError }: Props) {
                               placeholder="至少 6 位"
                               value={resetPassword}
                               onChange={(e) => {
+                                passwordOwner.change()
                                 setResetPasswordDirty(true)
                                 setResetPassword(e.target.value)
                               }}

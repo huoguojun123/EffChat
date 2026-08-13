@@ -17,6 +17,10 @@ function model(patch: Partial<Model>): Model {
     enabled: true,
     min_group_level: 0,
     sort_order: 0,
+    catalog_source: "manual",
+    lifecycle_status: "unknown",
+    temperature_policy: "configurable",
+    openai_request_profile: {},
     ...patch,
   }
 }
@@ -39,6 +43,8 @@ describe("thinking model metadata helpers", () => {
         supports_vision: false,
         supports_tools: true,
         search_impl: "",
+        temperature_policy: "configurable",
+        openai_request_profile: {},
         thinking_effort_options: [
           { value: "high", label: "High", desc: "default" },
           { value: "max", label: "Max", desc: "strongest" },

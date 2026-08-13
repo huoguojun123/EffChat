@@ -3,14 +3,15 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 const skillEntryPreviewRunes = 3200
@@ -34,6 +35,9 @@ type skillFileManifestItem struct {
 
 func (s *SkillService) ListImportRecords(id string) ([]SkillImportRecordResponse, error) {
 	if _, err := s.skillRepo.Get(id, true); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	records, err := s.skillRepo.ListImportRecords(id, 50)
@@ -46,47 +50,56 @@ func (s *SkillService) ListImportRecords(id string) ([]SkillImportRecordResponse
 func (s *SkillService) PreviewGitUpdate(ctx context.Context, id string, req *SkillUpdateGitPreviewRequest) (*SkillUpdatePreviewResult, error) {
 	current, err := s.skillRepo.Get(id, true)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	if current.SourceType != SkillSourceGit || current.SourceURL == nil || strings.TrimSpace(*current.SourceURL) == "" {
-		return nil, fmt.Errorf("skill is not a git-imported skill")
+		return nil, newSkillError(SkillErrorConflict, "Skill is not Git-imported", nil)
 	}
 	ref := strings.TrimSpace(req.Ref)
 	if ref == "" && current.SourceRef != nil {
 		ref = strings.TrimSpace(*current.SourceRef)
 	}
 	if ref != "" && !safeGitRef(ref) {
-		return nil, fmt.Errorf("invalid git ref")
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git ref", nil)
 	}
 	if ref == "" {
 		branches, defaultRef, err := listGitBranches(ctx, *current.SourceURL)
 		if err != nil {
-			return nil, err
+			return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source is unavailable", err)
 		}
 		ref = selectGitRef("", defaultRef, branches)
 	}
 	parsed, report, err := scanGitRef(ctx, *current.SourceURL, ref, nil)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source could not be scanned", err)
 	}
-	return s.buildUpdatePreview(current, parsed, report), nil
+	return s.buildUpdatePreview(current, parsed, report)
 }
 
 func (s *SkillService) PreviewZipUpdate(id string, data []byte) (*SkillUpdatePreviewResult, error) {
 	current, err := s.skillRepo.Get(id, true)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	parsed, report, err := skillparser.ImportZip(data)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill archive", err)
 	}
-	return s.buildUpdatePreview(current, parsed, report), nil
+	return s.buildUpdatePreview(current, parsed, report)
 }
 
 func (s *SkillService) UpdateGit(ctx context.Context, userID int64, id string, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
 	current, err := s.skillRepo.Get(id, true)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	repoURL := strings.TrimSpace(req.URL)
@@ -94,52 +107,55 @@ func (s *SkillService) UpdateGit(ctx context.Context, userID int64, id string, r
 		repoURL = strings.TrimSpace(*current.SourceURL)
 	}
 	if repoURL == "" {
-		return nil, fmt.Errorf("git url is required")
+		return nil, newSkillError(SkillErrorInvalid, "Git repository URL is required", nil)
 	}
 	if err := validateGitURL(ctx, repoURL); err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git repository URL", err)
 	}
 	ref := strings.TrimSpace(req.Ref)
 	if ref == "" && current.SourceRef != nil {
 		ref = strings.TrimSpace(*current.SourceRef)
 	}
 	if ref != "" && !safeGitRef(ref) {
-		return nil, fmt.Errorf("invalid git ref")
+		return nil, newSkillError(SkillErrorInvalid, "invalid Git ref", nil)
 	}
 	selected := map[string][]string{req.SourcePath: req.SelectedFiles}
 	parsed, report, err := scanGitRef(ctx, repoURL, ref, selected)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorSourceUnavailable, "Skill Git source could not be scanned", err)
 	}
 	parsed = skillparser.FilterParsedBySourcePaths(parsed, []string{req.SourcePath}, &report)
 	if len(parsed) == 0 {
-		return nil, fmt.Errorf("selected skill candidate not found")
+		return nil, newSkillError(SkillErrorConflict, "selected Skill candidate is no longer available", nil)
 	}
 	sourceURL := repoURL
 	var sourceRef *string
 	if ref != "" {
 		sourceRef = &ref
 	}
-	return s.persistSkillUpdate(userID, current, parsed[0], report, SkillSourceGit, &sourceURL, sourceRef)
+	return s.persistSkillUpdate(ctx, userID, current, parsed[0], report, SkillSourceGit, &sourceURL, sourceRef)
 }
 
-func (s *SkillService) UpdateZip(userID int64, id string, data []byte, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
+func (s *SkillService) UpdateZipContext(ctx context.Context, userID int64, id string, data []byte, req *SkillUpdateApplyRequest) (*SkillImportResult, error) {
 	current, err := s.skillRepo.Get(id, true)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	selected := map[string][]string{req.SourcePath: req.SelectedFiles}
 	parsed, report, err := skillparser.ImportZipSelectedFiles(data, []string{req.SourcePath}, selected)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill archive selection", err)
 	}
 	if len(parsed) == 0 {
-		return nil, fmt.Errorf("selected skill candidate not found")
+		return nil, newSkillError(SkillErrorConflict, "selected Skill candidate is no longer available", nil)
 	}
-	return s.persistSkillUpdate(userID, current, parsed[0], report, SkillSourceZip, nil, nil)
+	return s.persistSkillUpdate(ctx, userID, current, parsed[0], report, SkillSourceZip, nil, nil)
 }
 
-func (s *SkillService) persistSkillUpdate(userID int64, current *model.Skill, item skillparser.ParsedSkill, report skillparser.ImportReport, sourceType string, sourceURL, sourceRef *string) (*SkillImportResult, error) {
+func (s *SkillService) persistSkillUpdate(ctx context.Context, userID int64, current *model.Skill, item skillparser.ParsedSkill, report skillparser.ImportReport, sourceType string, sourceURL, sourceRef *string) (*SkillImportResult, error) {
 	sourcePath := item.SourcePath
 	skill := &model.Skill{
 		ID:              current.ID,
@@ -158,16 +174,23 @@ func (s *SkillService) persistSkillUpdate(userID int64, current *model.Skill, it
 		CreatedBy:       current.CreatedBy,
 	}
 	record := s.buildImportRecord("update", skill, item, item.Files, report, &userID)
-	if err := s.persistSkillPackage(skill, item.Files, record); err != nil {
+	patch := repository.SkillMetadataPatch{Name: &skill.Name, Description: &skill.Description}
+	if err := s.persistSkillPackage(ctx, skill, item.Files, record, patch, repository.SkillGovernanceMutation{
+		Action: "import", ActorType: "import", ActorUserID: userID,
+		Reason: "admin updated Skill from imported package",
+	}); err != nil {
 		return nil, err
 	}
 	return &SkillImportResult{Skills: []*SkillResponse{toSkillResponse(skill, true)}, Report: report}, nil
 }
 
-func (s *SkillService) buildUpdatePreview(current *model.Skill, parsed []skillparser.ParsedSkill, report skillparser.ImportReport) *SkillUpdatePreviewResult {
+func (s *SkillService) buildUpdatePreview(current *model.Skill, parsed []skillparser.ParsedSkill, report skillparser.ImportReport) (*SkillUpdatePreviewResult, error) {
 	parsed = dedupeParsedSkills(parsed, &report)
 	report.Imported = len(parsed)
-	previews := s.toSkillPreviews(parsed)
+	previews, err := s.toSkillPreviews(parsed)
+	if err != nil {
+		return nil, err
+	}
 	selectedSourcePath, matchType := selectUpdateCandidate(current, parsed)
 	var changes []SkillFileChange
 	var defaultSelected []string
@@ -180,7 +203,10 @@ func (s *SkillService) buildUpdatePreview(current *model.Skill, parsed []skillpa
 			}
 		}
 	}
-	currentEntry, truncated := s.currentEntryPreview(current.ID)
+	currentEntry, truncated, err := s.currentEntryPreview(current.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &SkillUpdatePreviewResult{
 		Current:               toSkillResponse(current, true),
 		Candidates:            previews,
@@ -191,7 +217,7 @@ func (s *SkillService) buildUpdatePreview(current *model.Skill, parsed []skillpa
 		CurrentEntryPreview:   currentEntry,
 		CurrentEntryTruncated: truncated,
 		Report:                report,
-	}
+	}, nil
 }
 
 func selectUpdateCandidate(current *model.Skill, parsed []skillparser.ParsedSkill) (string, string) {
@@ -322,12 +348,13 @@ func defaultSelectedReferencePaths(current []model.SkillFile, candidate []SkillF
 	return out
 }
 
-func (s *SkillService) currentEntryPreview(skillID string) (string, bool) {
+func (s *SkillService) currentEntryPreview(skillID string) (string, bool, error) {
 	content, _, err := s.readSkillFile(skillID, "SKILL.md")
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
-	return truncateRunes(content, skillEntryPreviewRunes)
+	preview, truncated := truncateRunes(content, skillEntryPreviewRunes)
+	return preview, truncated, nil
 }
 
 func truncateRunes(value string, limit int) (string, bool) {

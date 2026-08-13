@@ -2,13 +2,12 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback, forwardRef, 
 import { useChatStore } from "@/stores/chat"
 import { useSSE } from "@/hooks/useSSE"
 import { PromptPickerDialog } from "@/components/prompts/PromptPickerDialog"
-import { getSessionMemory, updateSession } from "@/api/sessions"
+import { getSession, getSessionMemory, updateSession } from "@/api/sessions"
 import { updateSessionSkills } from "@/api/skills"
 import { useModelStore } from "@/stores/models"
 import { useSkillStore } from "@/stores/skills"
 import { isStreamingAbortable, isStreamingInteractionBusy } from "@/lib/streamingStatus"
 import { isFileSendBlocked, isOCRPending } from "@/api/files"
-import { getEnabledSkillIds } from "./chatInputMetadata"
 import {
   COMPOSER_TEXTAREA_MIN_HEIGHT,
   getComposerTextareaMaxHeight,
@@ -22,6 +21,7 @@ import { getClipboardFiles } from "./chatInputUpload"
 import { loadChatDrafts, saveChatDrafts } from "./chatDrafts"
 import { SessionMemoryDialog } from "./SessionMemoryDialog"
 import { StagedAttachmentsDrawer } from "./StagedAttachmentsDrawer"
+import { SessionSkillMutationCoordinator, sessionSkills } from "./sessionSkillMutation"
 
 
 export interface ChatInputHandle {
@@ -44,6 +44,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const handleSubmitRef = useRef<() => void>(() => {})
+  const skillMutationRef = useRef<SessionSkillMutationCoordinator | null>(null)
   const streamingStatus = useChatStore((s) => s.streaming.status)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const sessions = useChatStore((s) => s.sessions)
@@ -85,7 +86,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     })
   }, [])
 
-  const { attachments: stagedAttachments, selectedAttachments: attachments, uploading, uploadError, fileInputRef, refreshUploadLimits, uploadFiles, removeAttachment, toggleAttachment, markSent, retryAttachmentOCR, refreshStagedAttachments } = useAttachmentUploadQueue(activeSessionId)
+  const { attachments: stagedAttachments, selectedAttachments: attachments, uploading, uploadTasks, uploadError, fileInputRef, refreshUploadLimits, uploadFiles, cancelUpload, retryUpload, dismissUpload, removeAttachment, toggleAttachment, markSentForCurrentEpoch, currentAttachmentEpoch, retryAttachmentOCR, refreshStagedAttachments } = useAttachmentUploadQueue(activeSessionId)
   const activeSession = sessions.find((item) => item.id === activeSessionId)
   const compacting = Boolean(compactionOwner)
   const currentModel = models.find((item) => item.id === activeSession?.model_id && item.provider === activeSession?.provider)
@@ -93,7 +94,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   const { thinkingOptions, thinkingEffort, thinkingActive, thinkingLabel, setThinkingEffort } = useThinkingEffortSelection(currentModel)
   const searchMode: SearchMode = activeSession?.search_mode ?? "auto"
   const memoryEnabled = activeSession?.memory_enabled ?? false
-  const enabledSkillIds = getEnabledSkillIds(activeSession?.metadata)
+  const enabledSkillIds = sessionSkills(activeSession)
   const activeSkillCount = skills.filter((skill) => enabledSkillIds.includes(skill.id)).length
   const hasImageAttachments = attachments.some((file) => file.content_type.startsWith("image/"))
   const imageUnsupported = hasImageAttachments && currentModel && !currentModel.vision
@@ -147,11 +148,31 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     }
   }
 
-  const markMemorySeen = useCallback((changeId: number | null) => {
-    if (!activeSessionId || !changeId) return
-    localStorage.setItem(`session-memory-seen:${activeSessionId}`, String(changeId))
+  const markMemorySeen = useCallback((sessionId: number, changeId: number | null) => {
+    if (!changeId) return
+    localStorage.setItem(`session-memory-seen:${sessionId}`, String(changeId))
+    if (sessionId !== useChatStore.getState().activeSessionId) return
     setMemoryUnseen(false)
-  }, [activeSessionId])
+  }, [])
+
+  const handleMemoryEnabledChange = useCallback((sessionId: number, enabled: boolean) => {
+    updateSessionLocal(sessionId, { memory_enabled: enabled })
+  }, [updateSessionLocal])
+
+  if (!skillMutationRef.current) {
+    skillMutationRef.current = new SessionSkillMutationCoordinator({
+      update: updateSessionSkills,
+      reload: async (sessionId) => sessionSkills(await getSession(sessionId)),
+      applyLocal: (sessionId, skillsEnabled) => {
+        const session = useChatStore.getState().sessions.find((item) => item.id === sessionId)
+        if (!session) return
+        useChatStore.getState().updateSessionLocal(sessionId, {
+          metadata: { ...(session.metadata || {}), skills_enabled: skillsEnabled },
+        })
+      },
+      onError: (message) => setNotice(message),
+    })
+  }
 
   useEffect(() => {
     if (!activeSessionId || !memoryEnabled || streamingStatus !== "idle") {
@@ -176,18 +197,9 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     }
   }, [activeSessionId, memoryEnabled, streamingStatus])
 
-  async function toggleSkill(skillId: string) {
+  function toggleSkill(skillId: string) {
     if (!activeSessionId || !activeSession) return
-    const current = new Set(enabledSkillIds)
-    if (current.has(skillId)) current.delete(skillId)
-    else current.add(skillId)
-    const next = Array.from(current).sort()
-    updateSessionLocal(activeSessionId, { metadata: { ...(activeSession.metadata || {}), skills_enabled: next } })
-    try {
-      await updateSessionSkills(activeSessionId, next)
-    } catch {
-      updateSessionLocal(activeSessionId, { metadata: activeSession.metadata })
-    }
+    skillMutationRef.current?.toggle(activeSessionId, enabledSkillIds, skillId)
   }
 
   useEffect(() => {
@@ -197,6 +209,12 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   useEffect(() => {
     loadSkills().catch(() => {})
   }, [loadSkills])
+
+  useEffect(() => () => {
+    // A response owned by an unmounted/account-reset composer must not write
+    // into the next account's session store or surface a stale error notice.
+    skillMutationRef.current?.invalidateAll()
+  }, [])
 
   useEffect(() => {
     void refreshUploadLimits()
@@ -234,6 +252,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     }))
 
     const submittedSessionId = activeSessionId
+    const submittedAttachmentEpoch = currentAttachmentEpoch()
     const submittedInput = input
     const submittedAttachmentIds = attachments.map((item) => item.id)
     let accepted = false
@@ -250,7 +269,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           setNoticeAction(null)
         }
         clearSubmittedDraft(submittedSessionId, submittedInput)
-        markSent(submittedSessionId, submittedAttachmentIds)
+        markSentForCurrentEpoch(submittedSessionId, submittedAttachmentEpoch, submittedAttachmentIds)
       },
     }).catch((err) => {
       if (accepted || useChatStore.getState().activeSessionId !== submittedSessionId) return
@@ -390,7 +409,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
         open={memoryDialogOpen}
         sessionId={activeSessionId}
         onOpenChange={setMemoryDialogOpen}
-        onEnabledChange={(enabled) => activeSessionId && updateSessionLocal(activeSessionId, { memory_enabled: enabled })}
+        onEnabledChange={handleMemoryEnabledChange}
         onSeenChange={markMemorySeen}
       />
       <StagedAttachmentsDrawer
@@ -399,11 +418,15 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
         files={stagedAttachments}
         selected={attachments}
         uploading={uploading}
+        uploadTasks={uploadTasks}
         onUpload={() => fileInputRef.current?.click()}
         onToggle={toggleAttachment}
         onDelete={(id) => void removeAttachment(id)}
         onRetry={(id) => retryAttachmentOCR(id)}
         onRefresh={() => refreshStagedAttachments()}
+        onCancelUpload={cancelUpload}
+        onRetryUpload={retryUpload}
+        onDismissUpload={dismissUpload}
       />
     </div>
   )

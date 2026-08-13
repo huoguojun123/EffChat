@@ -68,3 +68,15 @@ export interface SelectAnswerAttemptResponse {
 export function selectAnswerAttempt(sessionId: number, attemptId: number) {
   return api.post<SelectAnswerAttemptResponse>(`/sessions/${sessionId}/answer-attempts/${attemptId}/select`, {})
 }
+
+export interface DeleteAnswerAttemptResponse {
+  deleted_attempt_id: number
+  selected_attempt_id: number
+  selection_changed: boolean
+  answer_selection_revision: number
+  memory_reconciliation_started: boolean
+}
+
+export function deleteAnswerAttempt(sessionId: number, attemptId: number) {
+  return api.delete<DeleteAnswerAttemptResponse>(`/sessions/${sessionId}/answer-attempts/${attemptId}`)
+}

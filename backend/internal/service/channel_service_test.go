@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func TestChannelFromInputNormalizesAndPreservesBlankKey(t *testing.T) {
@@ -146,6 +146,21 @@ func TestChannelServiceExternalServiceEditPreservesSortOrder(t *testing.T) {
 	}
 }
 
+func TestChannelServiceClassifiesInvalidExternalServiceOrder(t *testing.T) {
+	db := setupMessageTestDB(t)
+	defer db.Close()
+
+	svc := NewChannelService(repository.NewChannelRepository(db))
+	if _, err := svc.SaveExternalService(&ExternalServiceInput{
+		Key: "tavily_search", DisplayName: "Tavily", Kind: ServiceKindSearch, APIKey: "fixture-key",
+	}); err != nil {
+		t.Fatalf("create external service: %v", err)
+	}
+	if _, err := svc.ReorderExternalServices(ServiceKindSearch, []string{"missing"}); !errors.Is(err, ErrChannelInvalid) {
+		t.Fatalf("reorder error = %v, want invalid channel configuration", err)
+	}
+}
+
 func TestChannelServiceExternalServiceSaveHonorsLockCancellation(t *testing.T) {
 	db := setupMessageTestDB(t)
 	defer db.Close()
@@ -157,11 +172,11 @@ func TestChannelServiceExternalServiceSaveHonorsLockCancellation(t *testing.T) {
 		t.Fatalf("open advisory lock connection: %v", err)
 	}
 	defer blocker.Close()
-	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtext('fchat_external_service_order'), hashtext('search'))`); err != nil {
+	if _, err := blocker.ExecContext(context.Background(), `SELECT pg_advisory_lock(hashtext('effchat_external_service_order'), hashtext('search'))`); err != nil {
 		t.Fatalf("hold external service order lock: %v", err)
 	}
 	defer func() {
-		_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('fchat_external_service_order'), hashtext('search'))`)
+		_, _ = blocker.ExecContext(context.Background(), `SELECT pg_advisory_unlock(hashtext('effchat_external_service_order'), hashtext('search'))`)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -181,6 +196,34 @@ func TestChannelServiceExternalServiceSaveHonorsLockCancellation(t *testing.T) {
 	}
 }
 
+func TestChannelServiceExternalServiceReorderHonorsRowCancellation(t *testing.T) {
+	db := setupMessageTestDB(t)
+	defer db.Close()
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	svc := NewChannelService(repository.NewChannelRepository(db))
+	key := "tavily_search"
+	if _, err := svc.SaveExternalServiceContext(context.Background(), &ExternalServiceInput{Key: key, DisplayName: "Context Reorder", Kind: ServiceKindSearch, APIKey: "fixture-key"}); err != nil {
+		t.Fatalf("seed external service: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM external_services WHERE service_key = $1", key) })
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedKey string
+	if err := blocker.QueryRowContext(context.Background(), `SELECT service_key FROM external_services WHERE service_key = $1 FOR UPDATE`, key).Scan(&lockedKey); err != nil {
+		t.Fatalf("lock external service row: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := svc.ReorderExternalServicesContext(ctx, ServiceKindSearch, []string{key}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("reorder error = %v, want context deadline", err)
+	}
+}
+
 func TestChannelFromInputRejectsInvalidAdapter(t *testing.T) {
 	_, _, err := channelFromInput(&AIChannelInput{
 		Key:         "openai",
@@ -193,6 +236,21 @@ func TestChannelFromInputRejectsInvalidAdapter(t *testing.T) {
 	}
 }
 
+func TestChannelFromInputAcceptsOpenAIResponsesAdapter(t *testing.T) {
+	item, _, err := channelFromInput(&AIChannelInput{
+		Key:         "responses",
+		DisplayName: "OpenAI Responses",
+		Adapter:     AdapterOpenAIResponses,
+		BaseURL:     "https://api.openai.com/v1/responses",
+	})
+	if err != nil {
+		t.Fatalf("channelFromInput() error = %v", err)
+	}
+	if item.Adapter != AdapterOpenAIResponses || item.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("responses channel = %#v", item)
+	}
+}
+
 func TestNormalizeOpenAICompatibleBaseURLTrimsConcreteEndpoints(t *testing.T) {
 	tests := map[string]string{
 		"https://api.openai.com/v1/responses":        "https://api.openai.com/v1",
@@ -201,8 +259,10 @@ func TestNormalizeOpenAICompatibleBaseURLTrimsConcreteEndpoints(t *testing.T) {
 		"https://gateway.example.com":                "https://gateway.example.com",
 	}
 	for input, want := range tests {
-		if got := NormalizeOpenAICompatibleBaseURL(AdapterOpenAICompatible, input); got != want {
-			t.Fatalf("NormalizeOpenAICompatibleBaseURL(%q) = %q, want %q", input, got, want)
+		for _, adapter := range []string{AdapterOpenAICompatible, AdapterOpenAIResponses} {
+			if got := NormalizeOpenAICompatibleBaseURL(adapter, input); got != want {
+				t.Fatalf("NormalizeOpenAICompatibleBaseURL(%q, %q) = %q, want %q", adapter, input, got, want)
+			}
 		}
 	}
 }

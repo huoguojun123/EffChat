@@ -1,8 +1,7 @@
 import { test, expect, newChat } from "./helpers"
 
 // 守护压缩撤销链路：手动 /compact → 出现压缩分割线（可撤销）→ 撤销 → 分割线消失、历史恢复。
-// 压缩需要足够历史，且依赖真实模型；若本会话不满足压缩条件（后端返回 skip，无分割线），
-// 用例按“环境不满足”跳过，不误报失败。
+// 隔离模型 stub 确定性返回摘要；主链不得以 skip 吞掉模型、协议或环境回归。
 test("manual compaction then undo restores history", async ({ authed: page }) => {
   await newChat(page)
 
@@ -20,16 +19,9 @@ test("manual compaction then undo restores history", async ({ authed: page }) =>
   await page.getByTestId("chat-input").fill("/compact")
   await page.getByTestId("send-button").click()
 
-  // 等待出现可撤销的压缩分割线；压缩走小模型，给足时间。
-  // 若最终没出现（多为 skip：历史不足以压缩 / 模型异常），跳过而非误报失败。
   const undo = page.getByTestId("undo-compaction")
-  try {
-    await expect(page.getByTestId("compaction-divider")).toBeVisible({ timeout: 45_000 })
-    await expect(undo).toBeVisible({ timeout: 10_000 })
-  } catch {
-    test.skip(true, "compaction returned skip / unavailable — cannot exercise undo")
-    return
-  }
+  await expect(page.getByTestId("compaction-divider")).toBeVisible({ timeout: 45_000 })
+  await expect(undo).toBeVisible({ timeout: 10_000 })
 
   // 撤销并确认。
   await undo.click()

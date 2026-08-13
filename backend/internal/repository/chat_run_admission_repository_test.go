@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func setupChatRunAdmission(t *testing.T, name string) (*QuotaRepository, *MessageRepository, int64, *model.Session) {
@@ -343,6 +343,13 @@ func TestAdmitEditedRetryWaitsForThePreviousRunToFinish(t *testing.T) {
 	active.RetryTargetMessageID = source.ID
 	if _, err := quotaRepo.ReserveChatRun(context.Background(), active); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := quotaRepo.db.Exec(`
+		UPDATE chat_run_reservations
+		SET expires_at = NOW() - INTERVAL '1 second'
+		WHERE run_id = $1
+	`, active.RunID); err != nil {
+		t.Fatalf("age active edited-retry reservation: %v", err)
 	}
 	runID := fmt.Sprintf("edit-active-%d", time.Now().UnixNano())
 	input := admissionInput(userID, session.ID, runID, "retry", "v1:edit-active", true)

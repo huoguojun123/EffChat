@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestSkillReadPagesEntryAndReferenceFiles(t *testing.T) {
@@ -47,6 +47,22 @@ func TestSkillReadPagesEntryAndReferenceFiles(t *testing.T) {
 	}
 	if !refOut.Truncated || refOut.NextOffset <= 0 {
 		t.Fatalf("reference should be paged: %#v", refOut)
+	}
+}
+
+func TestSkillReadStorageFailureReturnsGoError(t *testing.T) {
+	tool := NewSkillReadTool([]SkillWorkspaceItem{{
+		ID:   "demo",
+		Name: "Demo",
+		Files: []model.SkillFile{{
+			RelativePath: "SKILL.md",
+			StoragePath:  "/srv/private/missing-skill.md",
+			Kind:         "entry",
+		}},
+	}})
+	raw, err := tool.InvokableRun(context.Background(), `{"skill_id":"demo","path":"SKILL.md"}`)
+	if err == nil || raw != "" || !strings.Contains(err.Error(), "read skill file") {
+		t.Fatalf("storage failure was not preserved for Tool governance: raw=%q err=%v", raw, err)
 	}
 }
 

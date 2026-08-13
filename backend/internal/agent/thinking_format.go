@@ -6,7 +6,9 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/claude"
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
-	"github.com/huoguojun123/effchat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 	"google.golang.org/genai"
 )
 
@@ -20,6 +22,17 @@ const (
 // 关键点：这里不能只看 provider。用户可能把 DeepSeek V4 接在 provider=openai
 // 或 NewAPI 的 OpenAI 兼容通道下；真正决定请求体形状的是 model_id + 管理员覆盖项。
 func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig) {
+	if req != nil && req.SuppressThinking {
+		// Some OpenAI-compatible reasoning models default to thinking even when
+		// the request omits every reasoning field. Utility tasks need a hard
+		// output-budget boundary, so explicitly disable DeepSeek V4 thinking
+		// instead of relying on omission to mean "off".
+		format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+		if format == modelbank.ThinkingFormatDeepSeekV4 || format == modelbank.ThinkingFormatDeepSeekV4Disabled {
+			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+		}
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
@@ -61,7 +74,37 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 	logThinkingFormat(req, format, effort)
 }
 
+// openAIResponsesReasoning maps only the effort values accepted by the typed
+// Responses SDK. Vendor-specific thinking formats and EffChat's forward-looking
+// "max" value must not leak into this wire protocol as unvalidated strings.
+func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
+	if req == nil || req.SuppressThinking {
+		return nil
+	}
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if format != modelbank.ThinkingFormatOpenAIReasoningEffort && format != modelbank.ThinkingFormatOpenAIGPT56 {
+		return nil
+	}
+	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
+	switch effort {
+	case modelbank.ThinkingEffortNone,
+		modelbank.ThinkingEffortLow,
+		modelbank.ThinkingEffortMedium,
+		modelbank.ThinkingEffortHigh,
+		modelbank.ThinkingEffortXHigh:
+		return &responses.ReasoningParam{
+			Effort:  shared.ReasoningEffort(effort),
+			Summary: shared.ReasoningSummaryAuto,
+		}
+	default:
+		return nil
+	}
+}
+
 func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
+	if req != nil && req.SuppressThinking {
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
@@ -85,6 +128,9 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 }
 
 func applyGeminiThinking(req *ChatRequest, cfg *gemini.Config) {
+	if req != nil && req.SuppressThinking {
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	if format == modelbank.ThinkingFormatGeminiThinking {

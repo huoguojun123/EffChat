@@ -15,14 +15,14 @@ import (
 )
 
 func TestLongSSESurvivesWhileSlowHeadersAreBounded(t *testing.T) {
-	if os.Getenv("FCHAT_LONG_STREAM_TEST") != "1" {
-		t.Skip("set FCHAT_LONG_STREAM_TEST=1 to run the 15-minute SSE acceptance test")
+	if os.Getenv("EFFCHAT_LONG_STREAM_TEST") != "1" {
+		t.Skip("set EFFCHAT_LONG_STREAM_TEST=1 to run the 15-minute SSE acceptance test")
 	}
 	duration := 15*time.Minute + 5*time.Second
-	if raw := os.Getenv("FCHAT_LONG_SSE_DURATION"); raw != "" {
+	if raw := os.Getenv("EFFCHAT_LONG_SSE_DURATION"); raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil || parsed <= 0 {
-			t.Fatalf("invalid FCHAT_LONG_SSE_DURATION %q", raw)
+			t.Fatalf("invalid EFFCHAT_LONG_SSE_DURATION %q", raw)
 		}
 		duration = parsed
 	}

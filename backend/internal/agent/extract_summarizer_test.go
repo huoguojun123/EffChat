@@ -9,14 +9,17 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/testutil"
-	internaltool "github.com/huoguojun123/effchat/internal/tool"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/testutil"
+	internaltool "github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 func TestExtractSummaryErrorMessageIsStable(t *testing.T) {
+	if got := extractSummaryErrorMessage("first_output_timeout"); got != "网页内容提炼等待首个输出超时" {
+		t.Fatalf("first-output timeout message = %q", got)
+	}
 	if got := extractSummaryErrorMessage("timeout"); got != "网页内容提炼超时" {
 		t.Fatalf("timeout message = %q", got)
 	}
@@ -26,18 +29,43 @@ func TestExtractSummaryErrorMessageIsStable(t *testing.T) {
 }
 
 type captureSummaryChatModel struct {
-	messages []*schema.Message
-	calls    int
+	messages       []*schema.Message
+	calls          int
+	generateCalled bool
+	chunks         []*schema.Message
 }
 
-func (m *captureSummaryChatModel) Generate(_ context.Context, messages []*schema.Message, _ ...einoModel.Option) (*schema.Message, error) {
+func (m *captureSummaryChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...einoModel.Option) (*schema.Message, error) {
+	m.generateCalled = true
+	return nil, fmt.Errorf("Generate must not be called")
+}
+
+func (m *captureSummaryChatModel) Stream(_ context.Context, messages []*schema.Message, _ ...einoModel.Option) (*schema.StreamReader[*schema.Message], error) {
 	m.messages = messages
 	m.calls++
-	return schema.AssistantMessage("提炼结果", nil), nil
+	if m.chunks != nil {
+		return schema.StreamReaderFromArray(m.chunks), nil
+	}
+	return schema.StreamReaderFromArray([]*schema.Message{
+		{Role: schema.Assistant, Content: "提炼"},
+		{Role: schema.Assistant, Content: "结果"},
+	}), nil
 }
 
-func (m *captureSummaryChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...einoModel.Option) (*schema.StreamReader[*schema.Message], error) {
-	return nil, nil
+func TestExtractSummarizerStripsLegacyInlineThinking(t *testing.T) {
+	model := &captureSummaryChatModel{chunks: []*schema.Message{
+		{Role: schema.Assistant, Content: "<think>内部推理"},
+		{Role: schema.Assistant, Content: "过程</think>页面标题：RFC 9110"},
+	}}
+	summarizer := &extractSummarizer{chatModel: model}
+
+	got, err := summarizer.Summarize(t.Context(), "提取标题", "RFC", "page text", "summary")
+	if err != nil {
+		t.Fatalf("Summarize returned error: %v", err)
+	}
+	if got != "页面标题：RFC 9110" {
+		t.Fatalf("summary = %q, want legacy thinking removed", got)
+	}
 }
 
 func (m *captureSummaryChatModel) WithTools(_ []*schema.ToolInfo) (einoModel.ToolCallingChatModel, error) {
@@ -72,6 +100,9 @@ func TestExtractSummarizerBuildsReusableEvidencePrompt(t *testing.T) {
 	}
 	if got != "提炼结果" {
 		t.Fatalf("summary = %q", got)
+	}
+	if model.generateCalled {
+		t.Fatal("extract summarizer must use Stream, not Generate")
 	}
 	if len(model.messages) != 2 {
 		t.Fatalf("messages len = %d, want 2", len(model.messages))

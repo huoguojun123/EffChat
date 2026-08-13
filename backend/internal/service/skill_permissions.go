@@ -3,15 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"sort"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
-
-func (s *SkillService) UpdateUserSkills(userID int64, ids []string) (*UserResponse, error) {
-	return nil, fmt.Errorf("per-user skill permissions are deprecated; use skill min_group_level instead")
-}
 
 func (s *SkillService) UpdateSessionSkills(sessionID, userID int64, ids []string) ([]string, error) {
 	user, err := s.userRepo.GetByID(userID)
@@ -30,10 +27,13 @@ func (s *SkillService) UpdateSessionSkills(sessionID, userID int64, ids []string
 	clean := dedupeSkillIDs(ids)
 	for _, id := range clean {
 		if _, ok := allowed[id]; !ok {
-			return nil, fmt.Errorf("skill %s is not authorized", id)
+			return nil, newSkillError(SkillErrorNotAuthorized, "Skill is not authorized", nil)
 		}
 	}
 	if err := s.sessionRepo.UpdateEnabledSkills(sessionID, userID, clean); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorSessionNotFound, "session not found", err)
+		}
 		return nil, err
 	}
 	return clean, nil
@@ -45,10 +45,6 @@ func (s *SkillService) UpdateSessionSkills(sessionID, userID int64, ids []string
 // 管理员调高 min_group_level、禁用 Skill，或用户被移动到更低分级组后，浏览器里的
 // skills_enabled 不一定马上刷新。因此这里每轮运行都重新按用户角色、用户组等级、
 // Skill 启停状态和会话勾选列表过滤，确保旧前端状态不能绕过权限。
-func (s *SkillService) EnabledInstructionsForSession(user *model.User, sessionMetadata []byte) ([]SkillInstruction, error) {
-	return s.EnabledInstructionsForSessionContext(context.Background(), user, sessionMetadata)
-}
-
 func (s *SkillService) EnabledInstructionsForSessionContext(ctx context.Context, user *model.User, sessionMetadata []byte) ([]SkillInstruction, error) {
 	if user == nil {
 		return nil, nil

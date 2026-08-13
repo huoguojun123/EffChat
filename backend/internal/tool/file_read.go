@@ -11,8 +11,8 @@ import (
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // FileReadStore 是 file_read 工具依赖的最小仓库接口。
@@ -116,12 +116,14 @@ func (t *FileReadTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	}, nil
 }
 
-// InvokableRun 执行文件读取。除了输入 JSON 结构不可解析这种协议错误外，业务失败
-// 都返回结构化 JSON，不抛 Go error，避免因为某个附件不可读而中断整轮 Agent。
+// InvokableRun executes bounded file reads. User-correctable input and
+// ownership failures remain structured results; repository and sidecar I/O
+// failures return wrapped Go errors so Tool governance can keep the cause in
+// private diagnostics while exposing a stable public failure to the model.
 func (t *FileReadTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var input FileReadInput
 	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
-		return marshalFileReadOutput(FileReadOutput{Error: "invalid input: " + err.Error(), Message: "file_read input is invalid."})
+		return marshalFileReadOutput(FileReadOutput{Error: "invalid input", Message: "file_read input is invalid."})
 	}
 	if input.FileID <= 0 {
 		return marshalFileReadOutput(FileReadOutput{FileID: input.FileID, Error: "file_id must be positive", Message: "file_id must be positive."})
@@ -133,6 +135,8 @@ func (t *FileReadTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	maxChars := clampFileReadMaxChars(input.MaxChars, t.defaultMaxChars, t.hardMaxChars)
 	f, err := t.store.GetReadableFileForAgent(t.userID, t.sessionID, input.FileID)
 	if err != nil {
+		// The repository intentionally hides both ownership and existence. Keep
+		// that boundary in the Tool result instead of exposing its private cause.
 		return marshalFileReadOutput(FileReadOutput{
 			FileID:  input.FileID,
 			Error:   "file is not readable in this conversation",
@@ -153,15 +157,13 @@ func (t *FileReadTool) InvokableRun(ctx context.Context, argumentsInJSON string,
 	if strings.TrimSpace(f.ExtractStatus) != "" && f.ExtractStatus != "ready" {
 		out.Message = fmt.Sprintf("File text is not ready (status=%s).", f.ExtractStatus)
 		if f.ExtractError != nil && strings.TrimSpace(*f.ExtractError) != "" {
-			out.Error = strings.TrimSpace(*f.ExtractError)
+			out.Error = "file text extraction failed"
 		}
 		return marshalFileReadOutput(out)
 	}
 	text, readErr := extractedTextFromFile(f)
 	if readErr != nil {
-		out.Error = readErr.Error()
-		out.Message = "Failed to read extracted text sidecar for this file."
-		return marshalFileReadOutput(out)
+		return "", fmt.Errorf("read extracted text sidecar: %w", readErr)
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestCompactionSummaryPromptSharedShape(t *testing.T) {
@@ -53,14 +53,54 @@ func TestBuildCompactionSummaryMessage_SharedPostprocess(t *testing.T) {
 	}
 }
 
+func TestExtractSummarySectionDropsOrphanAnalysisTail(t *testing.T) {
+	raw := "write in Chinese</analysis>\n<summary>有效摘要"
+	if got := extractSummarySection(raw); got != "有效摘要" {
+		t.Fatalf("extractSummarySection() = %q, want 有效摘要", got)
+	}
+}
+
 func TestBuildCompactionSummaryBody_TruncatesOversizedSummary(t *testing.T) {
 	raw := "<summary>" + strings.Repeat("长", compactionSummaryMaxChars+100) + "</summary>"
 	body := buildCompactionSummaryBody(raw, nil)
-	if len([]rune(body)) > compactionSummaryMaxChars+40 {
-		t.Fatalf("summary not truncated enough: chars=%d", len([]rune(body)))
+	if estimateTextTokens(body) > compactionSummaryMaxTokens {
+		t.Fatalf("summary exceeds token budget: tokens=%d", estimateTextTokens(body))
 	}
-	if !strings.Contains(body, "已截断") {
-		t.Fatalf("truncated body should explain truncation: %q", body[len(body)-120:])
+	if !strings.Contains(body, "…") {
+		t.Fatalf("truncated body should retain an explicit boundary marker: %q", body[len(body)-120:])
+	}
+}
+
+func TestRenderRecentVerbatimWithinTokenBudgetKeepsTenFairly(t *testing.T) {
+	messages := make([]*model.Message, 0, recentVerbatimCount)
+	for i := 0; i < recentVerbatimCount; i++ {
+		content := "短消息"
+		if i == recentVerbatimCount-1 {
+			content = strings.Repeat("很长的复制内容 ", 500)
+		}
+		messages = append(messages, &model.Message{MessageData: []byte(`{"role":"user","content":"` + content + `"}`)})
+	}
+	budget := 240
+	got := renderRecentVerbatimWithinTokenBudget(messages, recentVerbatimCount, budget)
+	if estimateTextTokens(got) > budget {
+		t.Fatalf("recent window exceeds token budget: tokens=%d budget=%d", estimateTextTokens(got), budget)
+	}
+	if strings.Count(got, "用户：") != recentVerbatimCount {
+		t.Fatalf("recent window lost messages: count=%d want=%d", strings.Count(got, "用户："), recentVerbatimCount)
+	}
+	if !strings.Contains(got, "很长的复制内容") {
+		t.Fatal("longest recent message should remain represented")
+	}
+}
+
+func TestBuildCompactionSummaryBodyFinalTokenBoundWithRecentWindow(t *testing.T) {
+	messages := make([]*model.Message, 0, recentVerbatimCount)
+	for i := 0; i < recentVerbatimCount; i++ {
+		messages = append(messages, &model.Message{MessageData: []byte(`{"role":"assistant","content":"` + strings.Repeat("上下文 ", 800) + `"}`)})
+	}
+	body := buildCompactionSummaryBody("<summary>"+strings.Repeat("摘要 ", 5000)+"</summary>", messages)
+	if estimateTextTokens(body) > compactionSummaryMaxTokens {
+		t.Fatalf("final checkpoint exceeds token budget: tokens=%d budget=%d", estimateTextTokens(body), compactionSummaryMaxTokens)
 	}
 }
 

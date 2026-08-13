@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 type modelListConfig struct {
@@ -57,13 +57,13 @@ func channelModelListConfig(channelService *service.ChannelService, requestedCha
 
 func modelListConfigForChannel(channel *model.AIChannel) (modelListConfig, error) {
 	if channel == nil {
-		return modelListConfig{}, fmt.Errorf("channel is not configured")
+		return modelListConfig{}, service.ErrChannelNotFound
 	}
 	if strings.TrimSpace(channel.APIKey) == "" {
-		return modelListConfig{}, fmt.Errorf("channel %q has no API key configured", channel.Key)
+		return modelListConfig{}, service.ErrChannelUnavailable
 	}
 	if !supportedModelListAdapter(channel.Adapter) {
-		return modelListConfig{}, fmt.Errorf("channel %q uses unsupported adapter %q", channel.Key, channel.Adapter)
+		return modelListConfig{}, service.ErrChannelUnavailable
 	}
 	baseURL := strings.TrimSpace(channel.BaseURL)
 	if baseURL == "" {
@@ -79,7 +79,7 @@ func modelListConfigForChannel(channel *model.AIChannel) (modelListConfig, error
 
 func supportedModelListAdapter(adapter string) bool {
 	switch adapter {
-	case service.AdapterOpenAICompatible, service.AdapterAnthropic, service.AdapterGoogle:
+	case service.AdapterOpenAICompatible, service.AdapterOpenAIResponses, service.AdapterAnthropic, service.AdapterGoogle:
 		return true
 	default:
 		return false
@@ -134,7 +134,7 @@ type upstreamModelMeta struct {
 
 func fetchChannelModels(ctx context.Context, cfg modelListConfig) ([]upstreamModelMeta, error) {
 	switch cfg.adapter {
-	case service.AdapterOpenAICompatible:
+	case service.AdapterOpenAICompatible, service.AdapterOpenAIResponses:
 		return fetchGatewayModels(ctx, cfg.baseURL, cfg.apiKey)
 	case service.AdapterAnthropic:
 		return fetchAnthropicModels(ctx, cfg.baseURL, cfg.apiKey)
@@ -488,23 +488,28 @@ func inferModelForChannel(meta upstreamModelMeta, index int, cfg modelListConfig
 
 func inferModelForProvider(meta upstreamModelMeta, index int, fallbackProvider string, enabledProviders map[string]bool) *model.Model {
 	provider := inferProviderForMeta(meta, fallbackProvider, enabledProviders)
+	checkedAt := time.Now().UTC()
 	displaySource := meta.ID
 	if meta.Name != "" {
 		displaySource = meta.Name
 	}
 	m := &model.Model{
-		ID:             meta.ID,
-		DisplayName:    inferDisplayName(displaySource),
-		Provider:       provider,
-		Enabled:        false,
-		SortOrder:      1000 + index,
-		ContextWindow:  meta.ContextWindow,
-		MaxOutput:      meta.MaxOutput,
-		Vision:         meta.Vision,
-		ToolUse:        meta.ToolUse,
-		Reasoning:      meta.Reasoning,
-		ThinkingFormat: modelbank.NormalizeThinkingFormat(""),
-		SearchImpl:     meta.SearchImpl,
+		ID:                meta.ID,
+		DisplayName:       inferDisplayName(displaySource),
+		Provider:          provider,
+		Enabled:           false,
+		SortOrder:         1000 + index,
+		ContextWindow:     meta.ContextWindow,
+		MaxOutput:         meta.MaxOutput,
+		Vision:            meta.Vision,
+		ToolUse:           meta.ToolUse,
+		Reasoning:         meta.Reasoning,
+		ThinkingFormat:    modelbank.NormalizeThinkingFormat(""),
+		SearchImpl:        meta.SearchImpl,
+		CatalogSource:     model.CatalogSourceChannel,
+		CatalogCheckedAt:  &checkedAt,
+		LifecycleStatus:   model.InferModelLifecycleStatus(meta.ID),
+		TemperaturePolicy: model.TemperaturePolicyConfigurable,
 	}
 
 	switch provider {

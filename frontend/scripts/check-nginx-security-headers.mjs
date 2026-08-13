@@ -7,6 +7,10 @@ const securityHeaders = await readFile(resolve(root, 'nginx-security-headers.con
 const indexHtml = await readFile(resolve(root, 'index.html'), 'utf8')
 const healthLocation = config.match(/location = \/health \{([\s\S]*?)\n  \}/)
 
+if (!config.includes('client_max_body_size ${EFFCHAT_NGINX_MAX_BODY_BYTES};')) {
+  throw new Error('Nginx upload limit must be rendered from the shared deployment ceiling')
+}
+
 if (!healthLocation?.[1].includes('include /etc/nginx/conf.d/security-headers.conf;')) {
   throw new Error('/health must include the shared security headers')
 }

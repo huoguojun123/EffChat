@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { Message, Session } from "@/types"
+import type { Message, Session, SessionFolder } from "@/types"
 import { assistantErrorDetail, assistantErrorDiagnostic, editableTailUserMessageId, isErrorAssistant, normalizeMessages } from "@/lib/chatMessages"
 import { useChatStore } from "@/stores/chat"
 import * as messagesApi from "@/api/messages"
@@ -17,6 +17,7 @@ vi.mock("@/api/sessions", () => ({
   createSessionFolder: vi.fn(),
   updateSessionFolder: vi.fn(),
   deleteSessionFolder: vi.fn(),
+  getSessionCreateReadiness: vi.fn(),
   createSession: vi.fn(),
   updateSession: vi.fn(),
   deleteSession: vi.fn(),
@@ -41,6 +42,8 @@ const listConversationTurnsMock = vi.mocked(messagesApi.listConversationTurns)
 const listMessageWindowMock = vi.mocked(messagesApi.listMessageWindow)
 const listSessionsMock = vi.mocked(sessionsApi.listSessions)
 const listSessionFoldersMock = vi.mocked(sessionsApi.listSessionFolders)
+const updateSessionFolderMock = vi.mocked(sessionsApi.updateSessionFolder)
+const getSessionCreateReadinessMock = vi.mocked(sessionsApi.getSessionCreateReadiness)
 const createSessionMock = vi.mocked(sessionsApi.createSession)
 const updateSessionMock = vi.mocked(sessionsApi.updateSession)
 const deleteSessionMock = vi.mocked(sessionsApi.deleteSession)
@@ -59,11 +62,14 @@ beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
   listConversationTurnsMock.mockResolvedValue({ turns: [], total: 0, has_more: false, next_before_turn_id: null })
+  getSessionCreateReadinessMock.mockResolvedValue({ ready: true, retryable: false })
   useChatStore.setState({
     sessions: [],
     sessionFolders: [],
     activeFolderId: "all",
     activeSessionId: null,
+    activeSessionGeneration: 0,
+    messageWindowGeneration: 0,
     messages: [],
     conversationTurns: [],
     totalConversationTurns: 0,
@@ -89,6 +95,11 @@ beforeEach(() => {
     firstLoadedTurnId: null,
     lastLoadedTurnId: null,
     compactionOwners: {},
+    sessionCreateReadiness: { ready: true, retryable: false },
+    isLoadingSessionCreateReadiness: false,
+    sessionCreateReadinessError: null,
+    isCreatingSession: false,
+    sessionCreateError: null,
   })
 })
 
@@ -123,6 +134,151 @@ function session(id: number, title: string, folderId: number | null = null): Ses
   }
 }
 
+function folder(id: number, name: string, pinnedAt: string | null = null): SessionFolder {
+  return {
+    id,
+    user_id: 1,
+    name,
+    pinned_at: pinnedAt,
+    created_at: `2026-06-15T12:${String(id).padStart(2, "0")}:00Z`,
+    updated_at: `2026-06-15T12:${String(id).padStart(2, "0")}:00Z`,
+  }
+}
+
+describe("sidebar pin mutation ownership", () => {
+  it("does not let a failed session pin replace another session's successful pin", async () => {
+    const first = deferred<Session>()
+    const second = deferred<Session>()
+    updateSessionMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    useChatStore.setState({ sessions: [session(1, "first"), session(2, "second")] })
+
+    const failed = useChatStore.getState().setSessionPinned(1, true)
+    const failedResult = expect(failed).rejects.toThrow("pin failed")
+    const succeeded = useChatStore.getState().setSessionPinned(2, true)
+    second.resolve({ ...session(2, "second"), pinned_at: "2026-08-06T01:00:00Z" })
+    await succeeded
+    first.reject(new Error("pin failed"))
+    await failedResult
+
+    expect(useChatStore.getState().sessions.find((item) => item.id === 2)?.pinned_at).toBeTruthy()
+  })
+
+  it("does not let a failed folder pin replace another folder's canonical success", async () => {
+    const first = deferred<SessionFolder>()
+    const second = deferred<SessionFolder>()
+    updateSessionFolderMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    useChatStore.setState({ sessionFolders: [folder(1, "first"), folder(2, "second")] })
+
+    const succeeded = useChatStore.getState().setSessionFolderPinned(1, true)
+    const failed = useChatStore.getState().setSessionFolderPinned(2, true)
+    const failedResult = expect(failed).rejects.toThrow("pin failed")
+    first.resolve(folder(1, "server first", "2026-08-06T01:00:00Z"))
+    await succeeded
+    second.reject(new Error("pin failed"))
+    await failedResult
+
+    expect(useChatStore.getState().sessionFolders.find((item) => item.id === 1)?.pinned_at).toBe("2026-08-06T01:00:00Z")
+  })
+
+  it("ignores an older folder pin success after a newer unpin succeeds", async () => {
+    const older = deferred<SessionFolder>()
+    const newer = deferred<SessionFolder>()
+    updateSessionFolderMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+    useChatStore.setState({ sessionFolders: [folder(1, "folder")] })
+
+    const pin = useChatStore.getState().setSessionFolderPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(1))
+    const unpin = useChatStore.getState().setSessionFolderPinned(1, false)
+    expect(updateSessionFolderMock).toHaveBeenCalledTimes(1)
+    older.resolve(folder(1, "folder", "2026-08-06T01:00:00Z"))
+    await pin
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(2))
+    newer.resolve(folder(1, "folder", null))
+    await unpin
+
+    expect(useChatStore.getState().sessionFolders[0]?.pinned_at).toBeNull()
+  })
+
+  it("ignores an older session pin failure after a newer intent and local update", async () => {
+    const older = deferred<Session>()
+    const newer = deferred<Session>()
+    updateSessionMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+    useChatStore.setState({ sessions: [session(1, "original")] })
+
+    const pin = useChatStore.getState().setSessionPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(1))
+    const unpin = useChatStore.getState().setSessionPinned(1, false)
+    expect(updateSessionMock).toHaveBeenCalledTimes(1)
+    useChatStore.getState().updateSessionLocal(1, { title: "new title" })
+    older.reject(new Error("pin failed"))
+    await pin
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(2))
+    newer.resolve({ ...session(1, "original"), pinned_at: null })
+    await unpin
+
+    expect(useChatStore.getState().sessions[0]).toMatchObject({ title: "new title", pinned_at: null })
+  })
+
+  it("preserves an optimistic session pin while a stale list reload completes", async () => {
+    const pin = deferred<Session>()
+    const reload = deferred<{ sessions: Session[]; has_more: boolean; next_offset: number }>()
+    updateSessionMock.mockReturnValue(pin.promise)
+    listSessionsMock.mockReturnValue(reload.promise)
+    useChatStore.setState({ sessions: [session(1, "session")] })
+
+    const pendingPin = useChatStore.getState().setSessionPinned(1, true)
+    const pendingReload = useChatStore.getState().loadSessions()
+    reload.resolve({ sessions: [session(1, "session")], has_more: false, next_offset: 0 })
+    await pendingReload
+
+    expect(useChatStore.getState().sessions[0]?.pinned_at).toBeTruthy()
+    pin.resolve({ ...session(1, "session"), pinned_at: "2026-08-06T01:00:00Z" })
+    await pendingPin
+  })
+
+  it("does not let a list response started before a folder pin overwrite its success", async () => {
+    const reload = deferred<{ folders: SessionFolder[] }>()
+    listSessionFoldersMock.mockReturnValue(reload.promise)
+    updateSessionFolderMock.mockResolvedValue(folder(1, "folder", "2026-08-06T01:00:00Z"))
+    useChatStore.setState({ sessionFolders: [folder(1, "folder")] })
+
+    const pendingReload = useChatStore.getState().loadSessionFolders()
+    await useChatStore.getState().setSessionFolderPinned(1, true)
+    reload.resolve({ folders: [folder(1, "folder")] })
+    await pendingReload
+
+    expect(useChatStore.getState().sessionFolders[0]?.pinned_at).toBe("2026-08-06T01:00:00Z")
+  })
+
+  it("does not restore sessions when an old pin fails after account reset", async () => {
+    const stale = deferred<Session>()
+    updateSessionMock.mockReturnValue(stale.promise)
+    useChatStore.setState({ sessions: [session(1, "old account")] })
+
+    const pending = useChatStore.getState().setSessionPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionMock).toHaveBeenCalledTimes(1))
+    useChatStore.getState().resetAccountState()
+    stale.reject(new Error("pin failed"))
+    await expect(pending).resolves.toBeUndefined()
+
+    expect(useChatStore.getState().sessions).toEqual([])
+  })
+
+  it("does not restore folders when an old pin fails after account reset", async () => {
+    const stale = deferred<SessionFolder>()
+    updateSessionFolderMock.mockReturnValue(stale.promise)
+    useChatStore.setState({ sessionFolders: [folder(1, "old account")] })
+
+    const pending = useChatStore.getState().setSessionFolderPinned(1, true)
+    await vi.waitFor(() => expect(updateSessionFolderMock).toHaveBeenCalledTimes(1))
+    useChatStore.getState().resetAccountState()
+    stale.reject(new Error("pin failed"))
+    await expect(pending).resolves.toBeUndefined()
+
+    expect(useChatStore.getState().sessionFolders).toEqual([])
+  })
+})
+
 describe("account-scoped requests", () => {
   it("ignores a session folder response from before account reset", async () => {
     const stale = deferred<{ folders: Array<{ id: number; user_id: number; name: string; pinned_at: null; created_at: string; updated_at: string }> }>()
@@ -134,6 +290,18 @@ describe("account-scoped requests", () => {
     await pending
 
     expect(useChatStore.getState().sessionFolders).toEqual([])
+  })
+
+  it("ignores session readiness returned after account reset", async () => {
+    const stale = deferred<sessionsApi.SessionCreateReadiness>()
+    getSessionCreateReadinessMock.mockReturnValue(stale.promise)
+
+    const pending = useChatStore.getState().loadSessionCreateReadiness(true)
+    useChatStore.getState().resetAccountState()
+    stale.resolve({ ready: true, retryable: false })
+    await pending
+
+    expect(useChatStore.getState().sessionCreateReadiness).toBeNull()
   })
 })
 
@@ -170,6 +338,30 @@ describe("session view transitions", () => {
       hasMoreMessages: false,
       isLoadingOlder: false,
     })
+  })
+
+  it("does not send an empty create request while the default model is not ready", async () => {
+    useChatStore.setState({
+      sessionCreateReadiness: { ready: false, retryable: false, code: "default_model_not_configured" },
+    })
+
+    await expect(useChatStore.getState().createSession()).rejects.toThrow("尚未配置默认模型")
+
+    expect(createSessionMock).not.toHaveBeenCalled()
+    expect(useChatStore.getState()).toMatchObject({ isCreatingSession: false, sessionCreateError: "尚未配置默认模型" })
+  })
+
+  it("shares one busy owner across duplicate create attempts", async () => {
+    const pending = deferred<Session>()
+    createSessionMock.mockReturnValue(pending.promise)
+
+    const first = useChatStore.getState().createSession()
+    await expect(useChatStore.getState().createSession()).rejects.toThrow("正在创建对话")
+    expect(createSessionMock).toHaveBeenCalledTimes(1)
+
+    pending.resolve(session(2, "new session"))
+    await first
+    expect(useChatStore.getState().isCreatingSession).toBe(false)
   })
 })
 
@@ -828,7 +1020,7 @@ describe("session folder and pagination state", () => {
   })
 
   it("移入文件夹后从未分组视图移除该话题", async () => {
-    updateSessionMock.mockResolvedValue({ message: "session updated" })
+    updateSessionMock.mockResolvedValue({ ...session(1, "unfiled", 9), folder_id: 9 })
     useChatStore.setState({
       activeFolderId: "unfiled",
       sessions: [session(1, "unfiled"), session(2, "stay")],
@@ -999,6 +1191,131 @@ describe("chat message loading guards", () => {
     expect(useChatStore.getState().messages[0].session_id).toBe(21)
     expect(useChatStore.getState().messages[0].message_data.content).toBe("current session")
     expect(useChatStore.getState().isLoadingOlder).toBe(false)
+  })
+
+  it("向上分页在途时串行拒绝向下分页并在下一次调用恢复", async () => {
+    const older = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock
+      .mockImplementationOnce(() => older.promise)
+      .mockResolvedValueOnce({
+        messages: [user(110, "newer")],
+        first_turn_id: 110,
+        last_turn_id: 110,
+        has_older: true,
+        has_newer: false,
+      })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "middle")],
+      hasMoreMessages: true,
+      hasNewerMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingOlder = useChatStore.getState().loadOlderMessages()
+    await expect(useChatStore.getState().loadNewerMessages()).resolves.toBe(0)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(1)
+
+    older.resolve({ messages: [user(90, "older")], first_turn_id: 90, last_turn_id: 90, has_older: false, has_newer: true })
+    await expect(loadingOlder).resolves.toBe(1)
+    expect(useChatStore.getState()).toMatchObject({ isLoadingOlder: false, isLoadingNewer: false })
+
+    await expect(useChatStore.getState().loadNewerMessages()).resolves.toBe(1)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("向下分页在途时串行拒绝向上分页并在下一次调用恢复", async () => {
+    const newer = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock
+      .mockImplementationOnce(() => newer.promise)
+      .mockResolvedValueOnce({
+        messages: [user(90, "older")],
+        first_turn_id: 90,
+        last_turn_id: 90,
+        has_older: false,
+        has_newer: true,
+      })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "middle")],
+      hasMoreMessages: true,
+      hasNewerMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingNewer = useChatStore.getState().loadNewerMessages()
+    await expect(useChatStore.getState().loadOlderMessages()).resolves.toBe(0)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(1)
+
+    newer.resolve({ messages: [user(110, "newer")], first_turn_id: 110, last_turn_id: 110, has_older: true, has_newer: false })
+    await expect(loadingNewer).resolves.toBe(1)
+    expect(useChatStore.getState()).toMatchObject({ isLoadingOlder: false, isLoadingNewer: false })
+
+    await expect(useChatStore.getState().loadOlderMessages()).resolves.toBe(1)
+    expect(listMessageWindowMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("around 替换窗口后丢弃旧向上分页响应并主动释放 loading", async () => {
+    const older = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock.mockImplementation((_sessionId, options) => {
+      if (options?.beforeTurnId) return older.promise
+      if (options?.aroundTurnId === 500) return Promise.resolve({
+        messages: [user(500, "target")],
+        first_turn_id: 500,
+        last_turn_id: 500,
+        has_older: true,
+        has_newer: true,
+      })
+      throw new Error(`unexpected options ${JSON.stringify(options)}`)
+    })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "old window")],
+      hasMoreMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingOlder = useChatStore.getState().loadOlderMessages()
+    await expect(useChatStore.getState().loadMessageWindowAround(500)).resolves.toBe(true)
+    expect(useChatStore.getState().isLoadingOlder).toBe(false)
+
+    older.resolve({ messages: [user(90, "stale older")], first_turn_id: 90, last_turn_id: 90, has_older: false, has_newer: true })
+    await expect(loadingOlder).resolves.toBe(0)
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual([500])
+    expect(useChatStore.getState()).toMatchObject({ firstLoadedTurnId: 500, lastLoadedTurnId: 500 })
+  })
+
+  it("full reload 替换窗口后丢弃旧向下分页响应", async () => {
+    const newer = deferred<messagesApi.MessageWindowResponse>()
+    listMessageWindowMock.mockImplementation((_sessionId, options) => {
+      if (options?.afterTurnId) return newer.promise
+      if (options?.latest) return Promise.resolve({
+        messages: [user(500, "latest")],
+        first_turn_id: 500,
+        last_turn_id: 500,
+        has_older: true,
+        has_newer: false,
+      })
+      throw new Error(`unexpected options ${JSON.stringify(options)}`)
+    })
+    useChatStore.setState({
+      activeSessionId: 1,
+      messages: [user(100, "old window")],
+      hasNewerMessages: true,
+      firstLoadedTurnId: 100,
+      lastLoadedTurnId: 100,
+    })
+
+    const loadingNewer = useChatStore.getState().loadNewerMessages()
+    await expect(useChatStore.getState().loadMessages(1)).resolves.toBe(true)
+
+    newer.resolve({ messages: [user(110, "stale newer")], first_turn_id: 110, last_turn_id: 110, has_older: true, has_newer: true })
+    await expect(loadingNewer).resolves.toBe(0)
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual([500])
+    expect(useChatStore.getState()).toMatchObject({ firstLoadedTurnId: 500, lastLoadedTurnId: 500, isLoadingNewer: false })
   })
 
   it("向上合并后不会把接口页的新端边界误当成本地窗口缺口", async () => {

@@ -22,7 +22,7 @@ import { AdminToolsPanel } from "./AdminToolsPanel"
 import { AdminUsagePanel } from "./AdminUsagePanel"
 import { AdminUsersPanel } from "./AdminUsersPanel"
 import { adminDirtyChanged, adminLoadFailed, adminLoadStarted, adminLoadSucceeded, initialAdminPanelState } from "./AdminPanelState"
-import { ADMIN_NAV, adminTab, isAdminTabKey, isConfigTab, type AdminTabKey } from "./adminNavigation"
+import { ADMIN_NAV, adminTab, isAdminTabKey, type AdminTabKey } from "./adminNavigation"
 
 type AdminResource = "channels" | "config" | "fonts" | "groups" | "models" | "services" | "skills" | "tools" | "users"
 
@@ -60,7 +60,7 @@ export function AdminPage() {
   const [tools, setTools] = useState<ToolConfig[]>([])
   const [selectedFontIds, setSelectedFontIds] = useState<ChatFontSelection>({})
   const [panelState, setPanelState] = useState(initialAdminPanelState)
-  const [configDirty, setConfigDirty] = useState(false)
+  const [panelDirty, setPanelDirtyState] = useState(false)
   const [configResetSignal, setConfigResetSignal] = useState(0)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [statusRefreshSignal, setStatusRefreshSignal] = useState(0)
@@ -69,7 +69,7 @@ export function AdminPage() {
   const loadRequestRef = useRef(0)
   const previousTabRef = useRef(tab)
 
-  const blocker = useBlocker(useCallback(() => configDirty && isConfigTab(tab), [configDirty, tab]))
+  const blocker = useBlocker(useCallback(() => panelDirty, [panelDirty]))
 
   const loadResources = useCallback(async (resources: AdminResource[], force = false) => {
     const required = resources.filter((resource) => force || !loadedResourcesRef.current.has(resource))
@@ -82,8 +82,8 @@ export function AdminPage() {
     try {
       await Promise.all(required.map(async (resource) => {
         if (resource === "users") {
-          const result = await adminApi.listUsers()
-          if (requestId === loadRequestRef.current) setUsers(result.users || [])
+          const result = await adminApi.listAllUsers()
+          if (requestId === loadRequestRef.current) setUsers(result)
         }
         if (resource === "models") {
           const result = await adminApi.listModels()
@@ -147,29 +147,25 @@ export function AdminPage() {
       setTabDirection(nextIndex > previousIndex ? "forward" : "back")
       previousTabRef.current = tab
     }
-    if (!isConfigTab(tab)) {
-      setConfigDirty(false)
-      setPanelState((previousState) => adminDirtyChanged(previousState, false))
-    }
     void loadResources(tabResources[tab])
   }, [loadResources, navigate, section, tab])
 
   useEffect(() => {
-    if (!configDirty) return
+    if (!panelDirty) return
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
       event.returnValue = ""
     }
     window.addEventListener("beforeunload", handleBeforeUnload)
     return () => window.removeEventListener("beforeunload", handleBeforeUnload)
-  }, [configDirty])
+  }, [panelDirty])
 
   const setPanelError = useCallback((error: string) => {
     setPanelState((previous) => ({ ...previous, error }))
   }, [])
 
   const setPanelDirty = useCallback((dirty: boolean) => {
-    setConfigDirty(dirty)
+    setPanelDirtyState(dirty)
     setPanelState((previous) => adminDirtyChanged(previous, dirty))
   }, [])
 
@@ -194,29 +190,29 @@ export function AdminPage() {
   }, [activeSessionId, location.state, navigate])
 
   const discardBlockedNavigation = useCallback(() => {
-    setConfigDirty(false)
+    setPanelDirtyState(false)
     setConfigResetSignal((value) => value + 1)
     setPanelState((previous) => adminDirtyChanged(previous, false))
     blocker.proceed?.()
   }, [blocker])
 
   const renderPanel = useMemo(() => {
-    if (tab === "channels") return <AdminChannelsPanel services={externalServices} setServices={setExternalServices} setError={setPanelError} />
-    if (tab === "models") return <AdminModelsPanel models={models} setModels={setModels} groups={groups} channels={channels} setChannels={setChannels} setError={setPanelError} />
+    if (tab === "channels") return <AdminChannelsPanel services={externalServices} setServices={setExternalServices} setError={setPanelError} onDirtyChange={setPanelDirty} />
+    if (tab === "models") return <AdminModelsPanel models={models} setModels={setModels} groups={groups} channels={channels} setChannels={setChannels} setError={setPanelError} onDirtyChange={setPanelDirty} />
     if (tab === "tools") return <AdminToolsPanel tools={tools} setTools={setTools} setError={setPanelError} />
     if (tab === "usage") return <AdminUsagePanel setError={setPanelError} />
     if (tab === "status") return <AdminStatusPanel refreshSignal={statusRefreshSignal} setError={setPanelError} />
-    if (tab === "users") return <AdminUsersPanel users={users} setUsers={setUsers} groups={groups} setError={setPanelError} />
-    if (tab === "groups") return <AdminGroupsPanel groups={groups} setGroups={setGroups} setError={setPanelError} />
+    if (tab === "users") return <AdminUsersPanel users={users} setUsers={setUsers} groups={groups} setError={setPanelError} onDirtyChange={setPanelDirty} />
+    if (tab === "groups") return <AdminGroupsPanel groups={groups} setGroups={setGroups} setError={setPanelError} onDirtyChange={setPanelDirty} />
     if (tab === "systemPrompt") {
       return <AdminConfigPanel key={`systemPrompt-${configResetSignal}`} configItems={configItems} setConfigItems={setConfigItems} models={models} setError={setPanelError} includeKeys={["system_prompt_template"]} onDirtyChange={setPanelDirty} />
     }
     if (tab === "config") {
       return <AdminConfigPanel key={`config-${configResetSignal}`} configItems={configItems} setConfigItems={setConfigItems} models={models} setError={setPanelError} excludeKeys={["system_prompt_template"]} onDirtyChange={setPanelDirty} />
     }
-    if (tab === "prompts") return <PromptManager scope="admin" />
+    if (tab === "prompts") return <PromptManager scope="admin" onDirtyChange={setPanelDirty} />
     if (tab === "fonts") return <AdminFontsPanel fonts={fonts} selectedFontIds={selectedFontIds} setFonts={setFonts} setSelectedFontIds={setSelectedFontIds} setError={setPanelError} />
-    return <AdminSkillsPanel skills={skills} setSkills={setSkills} groups={groups} setError={setPanelError} />
+    return <AdminSkillsPanel skills={skills} setSkills={setSkills} groups={groups} setError={setPanelError} onDirtyChange={setPanelDirty} />
   }, [channels, configItems, configResetSignal, externalServices, fonts, groups, models, selectedFontIds, setModels, setPanelDirty, setPanelError, skills, statusRefreshSignal, tab, tools, users])
 
   const busy = panelState.loading || panelState.refreshing
@@ -224,21 +220,21 @@ export function AdminPage() {
   return (
     <div className="flex h-[100dvh] min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/70 px-3 sm:px-5">
-        <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{currentTab.label}</h1>
         </div>
-        <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={refreshCurrent} disabled={busy} aria-label="刷新当前页面" title="刷新当前页面">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={refreshCurrent} disabled={busy} aria-label="刷新当前页面" title="刷新当前页面">
           <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin motion-reduce:animate-none" : ""}`} />
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="打开管理导航" title="管理导航">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="打开管理导航" title="管理导航">
           <Menu className="h-4 w-4" />
         </Button>
       </header>
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[var(--admin-nav-width)_minmax(0,1fr)]">
         <nav className="hidden min-h-0 overflow-y-auto border-r border-border/70 px-3 py-4 lg:block" aria-label="管理后台导航">
           {ADMIN_NAV.map((group) => (
             <section key={group.key} className="mb-5 last:mb-0">
@@ -265,7 +261,7 @@ export function AdminPage() {
           <DialogHeader className="flex-row items-center border-b border-border/70 px-4 py-3">
             <DialogTitle className="text-sm">管理后台</DialogTitle>
             <DialogDescription className="sr-only">选择管理后台栏目。</DialogDescription>
-            <Button type="button" variant="ghost" size="icon" className="ml-auto h-9 w-9" onClick={() => setMobileNavOpen(false)} aria-label="关闭管理导航">
+            <Button type="button" variant="ghost" size="icon" className="ml-auto h-11 min-h-11 w-11 min-w-11 shrink-0" onClick={() => setMobileNavOpen(false)} aria-label="关闭管理导航">
               <X className="h-4 w-4" />
             </Button>
           </DialogHeader>

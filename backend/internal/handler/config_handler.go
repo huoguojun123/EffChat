@@ -2,14 +2,15 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/config"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/config"
 )
 
 // ListConfigHandler 获取所有系统配置
@@ -17,7 +18,7 @@ func ListConfigHandler(configRepo *repository.ConfigRepository) gin.HandlerFunc 
 	return func(c *gin.Context) {
 		items, err := configRepo.ListAdminEditable()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list config"})
+			writeServerError(c, http.StatusInternalServerError, "config_list_failed", "failed to list config", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"config": items})
@@ -64,12 +65,12 @@ func UpdateConfigHandler(configRepo *repository.ConfigRepository, modelServices 
 			return
 		}
 		if err := validateDefaultModelConfig(key, req.Value, modelServices...); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeConfigError(c, "update", err)
 			return
 		}
 
 		if err := configRepo.UpdateAdminEditable(key, req.Value); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeConfigError(c, "update", err)
 			return
 		}
 
@@ -88,12 +89,12 @@ func UpdateConfigBatchHandler(configRepo *repository.ConfigRepository, modelServ
 		}
 		for key, value := range req.Updates {
 			if err := validateDefaultModelConfig(key, value, modelServices...); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				writeConfigError(c, "update", err)
 				return
 			}
 		}
-		if err := configRepo.UpdateAdminEditableBatch(req.Updates); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := configRepo.UpdateAdminEditableBatchContext(c.Request.Context(), req.Updates); err != nil {
+			writeConfigError(c, "update", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "config updated", "updated": len(req.Updates)})
@@ -106,10 +107,7 @@ func validateDefaultModelConfig(key string, value json.RawMessage, modelServices
 	}
 	var modelID string
 	if err := json.Unmarshal(value, &modelID); err != nil {
-		return fmt.Errorf("default_model_id must be a valid model id")
-	}
-	if modelID == "" {
-		return nil
+		return fmt.Errorf("%w: default_model_id must be a valid model id", repository.ErrConfigInvalid)
 	}
 	if len(modelServices) == 0 || modelServices[0] == nil {
 		return fmt.Errorf("default model validation is unavailable")
@@ -118,4 +116,13 @@ func validateDefaultModelConfig(key string, value json.RawMessage, modelServices
 		return err
 	}
 	return nil
+}
+
+func writeConfigError(c *gin.Context, operation string, err error) {
+	switch {
+	case errors.Is(err, repository.ErrConfigInvalid), errors.Is(err, service.ErrModelInvalid):
+		writePublicError(c, http.StatusBadRequest, "config_invalid", err.Error(), false)
+	default:
+		writeServerError(c, http.StatusInternalServerError, "config_"+operation+"_failed", "failed to "+operation+" config", err)
+	}
 }

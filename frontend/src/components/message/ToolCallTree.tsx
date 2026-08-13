@@ -1,8 +1,8 @@
 import { useId, useState } from "react"
 import type { ToolCall } from "@/types"
-import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, Globe, Loader2, Search, Wrench } from "lucide-react"
+import { AlertCircle, AlertTriangle, Check, ChevronDown, ChevronRight, ExternalLink, Globe, Loader2, Search, Wrench } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { cleanUrl, getToolArguments, getToolName, hostOf, normalizeCitation, parseExtractResult, parseSearchResult, parseToolFailure, searchQueryFromArguments, toolNameLabel, toolSourceLabel, type ExtractResult, type SearchResult, type ToolFailure } from "@/lib/toolResults"
+import { cleanUrl, extractResultWarning, getToolArguments, getToolName, hostOf, normalizeCitation, parseExtractResult, parseSearchResult, parseToolFailure, searchQueryFromArguments, toolNameLabel, toolSourceLabel, type ExtractResult, type SearchResult, type ToolFailure } from "@/lib/toolResults"
 
 export function ToolCallTree({
   toolCalls,
@@ -40,7 +40,8 @@ function ToolCallNode({
   const sourceLabel = toolSourceLabel(searchResult?.source || extractResult?.source)
   const citationsCount = searchResult?.citations?.length || 0
   const hasChildren = (toolCall.children?.length || 0) > 0
-  const displayStatus = toolFailure ? "error" : status
+  const extractWarning = extractResult ? extractResultWarning(extractResult) : ""
+  const displayStatus = toolFailure || status === "error" ? "error" : extractWarning ? "warning" : status
   const hasDetail = hasChildren || searchResult || extractResult || toolFailure || toolArguments || toolCall.result
   const detailId = useId()
 
@@ -118,10 +119,12 @@ function StatusBadge({ status }: { status: string }) {
     <span className={cn(
       "inline-flex items-center gap-1 text-[11px]",
       status === "done" && "text-emerald-600 dark:text-emerald-400",
+      status === "warning" && "text-amber-700 dark:text-amber-300",
       status === "error" && "text-rose-600 dark:text-rose-400",
       status === "running" && "text-blue-600 dark:text-blue-400"
     )}>
       {status === "done" ? <Check className="h-3 w-3" /> : null}
+      {status === "warning" ? <><AlertTriangle className="h-3 w-3" /><span>内容受限</span></> : null}
       {status === "error" ? <AlertCircle className="h-3 w-3" /> : null}
       {status === "running" ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
     </span>
@@ -169,16 +172,29 @@ function SearchResultView({ result, query }: { result: SearchResult; query?: str
 
 function ExtractResultView({ result }: { result: ExtractResult }) {
   const normalizedUrl = cleanUrl(result.url)
+  const warning = extractResultWarning(result)
   return (
     <div>
       <div className="mb-2 flex items-center gap-2 text-xs font-medium">
         <span className="min-w-0 flex-1 truncate">{result.title || "网页内容"}</span>
         {normalizedUrl ? (
-          <a href={normalizedUrl} target="_blank" rel="noreferrer" className="text-muted-foreground hover:text-foreground">
+          <a
+            href={normalizedUrl}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`打开来源：${result.title || "网页内容"}`}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground"
+          >
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
         ) : null}
       </div>
+      {warning ? (
+        <div className="mb-1.5 flex items-start gap-1.5 text-xs leading-5 text-amber-800 dark:text-amber-200">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{warning}</span>
+        </div>
+      ) : null}
       {result.ok === false ? (
         <div className="text-xs leading-6 text-muted-foreground">
           网页不可直接读取

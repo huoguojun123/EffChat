@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func setupTestDB(t *testing.T) *sql.DB {
@@ -21,7 +21,7 @@ func createRepositoryTestUser(t *testing.T, db *sql.DB, name string) int64 {
 
 	repo := NewUserRepository(db)
 	user := &model.User{
-		Username:     fmt.Sprintf("repo_%s_%d", name, time.Now().UnixNano()),
+		Username:     fmt.Sprintf("repo_%s_%x", name, time.Now().UnixNano()),
 		PasswordHash: "hashed_password",
 		Role:         "user",
 		IsActive:     true,
@@ -33,6 +33,31 @@ func createRepositoryTestUser(t *testing.T, db *sql.DB, name string) int64 {
 	}
 
 	return user.ID
+}
+
+func claimRepositoryOCRFile(t *testing.T, db *sql.DB, fileID int64) *model.File {
+	t.Helper()
+	return claimRepositoryOCRFileWithProvider(t, db, fileID, fmt.Sprintf("test-ocr-%d", fileID))
+}
+
+func claimRepositoryOCRFileWithProvider(t *testing.T, db *sql.DB, fileID int64, provider string) *model.File {
+	t.Helper()
+	now := time.Now()
+	if _, err := db.Exec(`
+		UPDATE files
+		SET ocr_provider = $2, ocr_lease_until = NULL, ocr_next_retry_at = $3
+		WHERE id = $1
+	`, fileID, provider, now); err != nil {
+		t.Fatalf("prepare OCR claim: %v", err)
+	}
+	claimed, err := NewFileRepository(db).ClaimRecoverableOCRTasks(provider, now, time.Minute, 1)
+	if err != nil {
+		t.Fatalf("claim OCR file: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != fileID || claimed[0].OCRLeaseGeneration <= 0 {
+		t.Fatalf("claimed OCR file = %+v, want file %d with a positive generation", claimed, fileID)
+	}
+	return claimed[0]
 }
 
 func TestUserRepository_Create(t *testing.T) {

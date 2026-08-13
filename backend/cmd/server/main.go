@@ -16,11 +16,11 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/huoguojun123/effchat/internal/handler"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/pkg/config"
-	"github.com/huoguojun123/effchat/pkg/db"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/internal/handler"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/db"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 	"github.com/joho/godotenv"
 )
 

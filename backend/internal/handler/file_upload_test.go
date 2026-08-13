@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -18,7 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
+	"github.com/gin-gonic/gin"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func uploadTestPNG(t *testing.T) []byte {
@@ -181,6 +185,171 @@ func TestUploadLimits_ReturnsConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestUploadLimitsClampsLegacyPolicyToDeploymentCeiling(t *testing.T) {
+	env := setupTestEnv(t)
+	var previous []byte
+	_ = env.db.QueryRow("SELECT value FROM system_config WHERE key = 'file_upload_max_size_mb'").Scan(&previous)
+	if _, err := env.db.Exec(`
+		INSERT INTO system_config (key, value, config_type)
+		VALUES ('file_upload_max_size_mb', '50', 'number')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, config_type = EXCLUDED.config_type
+	`); err != nil {
+		t.Fatalf("seed legacy upload size: %v", err)
+	}
+	t.Cleanup(func() {
+		if previous == nil {
+			_, _ = env.db.Exec("DELETE FROM system_config WHERE key = 'file_upload_max_size_mb'")
+			return
+		}
+		_, _ = env.db.Exec("UPDATE system_config SET value = $1 WHERE key = 'file_upload_max_size_mb'", previous)
+	})
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("user_id", env.userID)
+		c.Next()
+	})
+	router.GET("/limits", UploadLimitsHandler(repository.NewConfigRepository(env.db), 25<<20))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/limits", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		MaxFileSizeMB int `json:"max_file_size_mb"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode limits: %v", err)
+	}
+	if body.MaxFileSizeMB != 25 {
+		t.Fatalf("effective upload limit=%d, want 25", body.MaxFileSizeMB)
+	}
+}
+
+func TestUploadPolicyEndpointsFailClosedWhenConfigurationIsUnavailable(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	configRepo := repository.NewConfigRepository(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close test database: %v", err)
+	}
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("request_id", "req-file-policy")
+		c.Next()
+	})
+	router.GET("/limits", UploadLimitsHandler(configRepo, defaultDeploymentUploadMaxBytes))
+	router.POST("/files", UploadFileHandler(nil, configRepo))
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/limits"},
+		{method: http.MethodPost, path: "/files"},
+	}
+	for _, test := range tests {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(test.method, test.path, nil))
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s %s status=%d, want %d (body: %s)", test.method, test.path, w.Code, http.StatusServiceUnavailable, w.Body.String())
+		}
+		var body struct {
+			Code      string `json:"code"`
+			Retryable bool   `json:"retryable"`
+			RequestID string `json:"request_id"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %s %s response: %v", test.method, test.path, err)
+		}
+		if body.Code != "file_policy_unavailable" {
+			t.Fatalf("%s %s code=%q, want file_policy_unavailable", test.method, test.path, body.Code)
+		}
+		if !body.Retryable || body.RequestID != "req-file-policy" {
+			t.Fatalf("%s %s response=%+v, want retryable request correlation", test.method, test.path, body)
+		}
+	}
+}
+
+func TestFilePoliciesKeepLastStrictValuesAfterParseFailure(t *testing.T) {
+	db := setupHandlerTestDB(t)
+	defer db.Close()
+	configRepo := repository.NewConfigRepository(db)
+	if _, err := db.Exec(`
+		INSERT INTO system_config (key, value, config_type) VALUES
+			('file_upload_max_size_mb', '1', 'number'),
+			('file_upload_max_session_files', '1', 'number'),
+			('file_upload_allowed_types', '["text/plain"]', 'json'),
+			('attachment_extract_enabled', 'false', 'boolean'),
+			('attachment_extract_timeout_seconds', '30', 'number'),
+			('attachment_max_output_mb', '1', 'number')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, config_type = EXCLUDED.config_type;
+	`); err != nil {
+		t.Fatalf("seed strict file policies: %v", err)
+	}
+
+	limits, err := resolveUploadLimits(t.Context(), configRepo, defaultDeploymentUploadMaxBytes)
+	if err != nil || limits.PolicyDegraded || limits.MaxFileSizeMB != 1 || limits.MaxSessionFiles != 1 || !reflect.DeepEqual(limits.AllowedTypes, []string{"text/plain"}) {
+		t.Fatalf("prime upload policy: limits=%+v err=%v", limits, err)
+	}
+	attachment, err := resolveAttachmentProcessingPolicy(t.Context(), configRepo)
+	if err != nil || attachment.Degraded || attachment.Enabled || attachment.TimeoutSeconds != 30 || attachment.MaxOutputMB != 1 {
+		t.Fatalf("prime attachment policy: policy=%+v err=%v", attachment, err)
+	}
+
+	if _, err := db.Exec(`
+		UPDATE system_config SET value = '"invalid"' WHERE key IN ('file_upload_max_size_mb', 'file_upload_max_session_files', 'attachment_extract_timeout_seconds', 'attachment_max_output_mb');
+		UPDATE system_config SET value = '{}' WHERE key = 'file_upload_allowed_types';
+		UPDATE system_config SET value = '"invalid"' WHERE key = 'attachment_extract_enabled';
+	`); err != nil {
+		t.Fatalf("inject malformed file policies: %v", err)
+	}
+
+	limits, err = resolveUploadLimits(t.Context(), configRepo, defaultDeploymentUploadMaxBytes)
+	if err != nil || !limits.PolicyDegraded || limits.MaxFileSizeMB != 1 || limits.MaxSessionFiles != 1 || !reflect.DeepEqual(limits.AllowedTypes, []string{"text/plain"}) {
+		t.Fatalf("degraded upload policy widened: limits=%+v err=%v", limits, err)
+	}
+	attachment, err = resolveAttachmentProcessingPolicy(t.Context(), configRepo)
+	if err != nil || !attachment.Degraded || attachment.Enabled || attachment.TimeoutSeconds != 30 || attachment.MaxOutputMB != 1 {
+		t.Fatalf("degraded attachment policy widened: policy=%+v err=%v", attachment, err)
+	}
+}
+
+func TestUploadFailsClosedWhenAttachmentPolicyIsMalformed(t *testing.T) {
+	env := setupTestEnv(t)
+	var previous []byte
+	_ = env.db.QueryRow("SELECT value FROM system_config WHERE key = 'attachment_extract_enabled'").Scan(&previous)
+	if _, err := env.db.Exec(`
+		INSERT INTO system_config (key, value, config_type)
+		VALUES ('attachment_extract_enabled', '"invalid"', 'boolean')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`); err != nil {
+		t.Fatalf("seed malformed attachment policy: %v", err)
+	}
+	t.Cleanup(func() {
+		if previous == nil {
+			_, _ = env.db.Exec("DELETE FROM system_config WHERE key = 'attachment_extract_enabled'")
+			return
+		}
+		_, _ = env.db.Exec("UPDATE system_config SET value = $1 WHERE key = 'attachment_extract_enabled'", previous)
+	})
+
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, uploadMultipart(t, env.token, 1, "note.txt", "text/plain", []byte("test content")))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want %d (body: %s)", w.Code, http.StatusServiceUnavailable, w.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "attachment_policy_unavailable" {
+		t.Fatalf("code=%q, want attachment_policy_unavailable", body.Code)
+	}
+}
+
 func TestUpload_DoesNotTreatSelectionSizeAsAnUploadLimit(t *testing.T) {
 	env := setupTestEnv(t)
 	sessionID := createUploadTestSession(t, env)
@@ -194,6 +363,52 @@ func TestUpload_DoesNotTreatSelectionSizeAsAnUploadLimit(t *testing.T) {
 	env.router.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("upload status=%d, want %d (body: %s)", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+}
+
+func TestUploadImageUsesPrivateManagedAttachmentModes(t *testing.T) {
+	env := setupTestEnv(t)
+	sessionID := createUploadTestSession(t, env)
+	// Handler tests bypass the container entrypoint that normalizes the managed
+	// attachment subtree on startup. Establish the same private root precondition
+	// so this test measures upload-created paths instead of leaked package fixtures.
+	if err := os.MkdirAll(filepolicy.AttachmentOriginalsRoot, 0o700); err != nil {
+		t.Fatalf("create private attachment root: %v", err)
+	}
+	if err := os.Chmod(filepolicy.AttachmentOriginalsRoot, 0o700); err != nil {
+		t.Fatalf("normalize private attachment root: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.db.Exec("DELETE FROM files WHERE user_id = $1", env.userID)
+		_ = os.RemoveAll(filepath.Join(filepolicy.AttachmentOriginalsRoot, fmt.Sprintf("%d", env.userID)))
+	})
+
+	recorder := httptest.NewRecorder()
+	env.router.ServeHTTP(recorder, uploadMultipart(t, env.token, sessionID, "private.png", "image/png", uploadTestPNG(t)))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("upload status=%d, want %d (body: %s)", recorder.Code, http.StatusCreated, recorder.Body.String())
+	}
+
+	var filePath string
+	if err := env.db.QueryRow("SELECT file_path FROM files WHERE user_id = $1 ORDER BY id DESC LIMIT 1", env.userID).Scan(&filePath); err != nil {
+		t.Fatalf("query uploaded path: %v", err)
+	}
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("stat uploaded file: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("uploaded file mode=%#o, want 0600", got)
+	}
+	monthDir := filepath.Dir(filePath)
+	for _, dir := range []string{monthDir, filepath.Dir(monthDir), filepath.Dir(filepath.Dir(monthDir))} {
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			t.Fatalf("stat attachment directory %s: %v", dir, statErr)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("attachment directory %s mode=%#o, want 0700", dir, got)
+		}
 	}
 }
 
@@ -248,6 +463,10 @@ func TestUpload_RejectsOversizedMultipartBody(t *testing.T) {
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d, want %d (body: %s)", w.Code, http.StatusRequestEntityTooLarge, w.Body.String())
 	}
+	body := decodeUploadError(t, w)
+	if body.Code != "file_too_large" || body.Retryable {
+		t.Fatalf("oversized response = %+v", body)
+	}
 }
 
 // 上传白名单必须按真实内容嗅探，不能只信 multipart 头：伪装成 text/plain 的二进制应被拒，
@@ -295,11 +514,12 @@ func TestUpload_RejectsDisguisedBinaryAcceptsRealText(t *testing.T) {
 		declaredType string
 		content      []byte
 		wantStatus   int
+		wantCode     string
 	}{
-		{"binary disguised as text rejected", "evil.txt", "text/plain", pngBytes, http.StatusBadRequest},
-		{"binary disguised as json rejected", "evil.json", "application/json", pngBytes, http.StatusBadRequest},
-		{"real text accepted", "note.txt", "text/plain", []byte("hello world\nplain text body"), http.StatusCreated},
-		{"real json accepted", "data.json", "application/json", []byte(`{"k":"v","n":1}`), http.StatusCreated},
+		{"binary disguised as text rejected", "evil.txt", "text/plain", pngBytes, http.StatusBadRequest, "file_type_mismatch"},
+		{"binary disguised as json rejected", "evil.json", "application/json", pngBytes, http.StatusBadRequest, "file_type_mismatch"},
+		{"real text accepted", "note.txt", "text/plain", []byte("hello world\nplain text body"), http.StatusCreated, ""},
+		{"real json accepted", "data.json", "application/json", []byte(`{"k":"v","n":1}`), http.StatusCreated, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -307,6 +527,12 @@ func TestUpload_RejectsDisguisedBinaryAcceptsRealText(t *testing.T) {
 			env.router.ServeHTTP(w, uploadMultipart(t, env.token, sessionID, c.filename, c.declaredType, c.content))
 			if w.Code != c.wantStatus {
 				t.Errorf("status=%d, want %d (body: %s)", w.Code, c.wantStatus, w.Body.String())
+			}
+			if c.wantCode != "" {
+				body := decodeUploadError(t, w)
+				if body.Code != c.wantCode || body.Retryable {
+					t.Errorf("error response = %+v, want code %q", body, c.wantCode)
+				}
 			}
 		})
 	}
@@ -327,10 +553,11 @@ func TestUpload_ValidatesImageContentAgainstDeclaredType(t *testing.T) {
 		declaredType string
 		content      []byte
 		wantStatus   int
+		wantCode     string
 	}{
-		{"valid PNG accepted", "photo.png", "image/png", pngContent, http.StatusCreated},
-		{"PNG declared as JPEG rejected", "photo.jpg", "image/jpeg", pngContent, http.StatusBadRequest},
-		{"non-image declared as PNG rejected", "fake.png", "image/png", []byte("not an image"), http.StatusBadRequest},
+		{"valid PNG accepted", "photo.png", "image/png", pngContent, http.StatusCreated, ""},
+		{"PNG declared as JPEG rejected", "photo.jpg", "image/jpeg", pngContent, http.StatusBadRequest, "file_type_mismatch"},
+		{"non-image declared as PNG rejected", "fake.png", "image/png", []byte("not an image"), http.StatusUnprocessableEntity, "image_invalid"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -339,7 +566,55 @@ func TestUpload_ValidatesImageContentAgainstDeclaredType(t *testing.T) {
 			if w.Code != tc.wantStatus {
 				t.Fatalf("status=%d, want %d (body: %s)", w.Code, tc.wantStatus, w.Body.String())
 			}
+			if tc.wantCode != "" {
+				body := decodeUploadError(t, w)
+				if body.Code != tc.wantCode || body.Retryable {
+					t.Fatalf("error response = %+v, want code %q", body, tc.wantCode)
+				}
+			}
 		})
+	}
+}
+
+func TestCleanupCancelledUploadMovesPersistedFileIntoDeferredCleanup(t *testing.T) {
+	env := setupTestEnv(t)
+	repo := repository.NewFileRepository(env.db)
+	sessionID := createUploadTestSession(t, env)
+	path := filepath.Join(filepolicy.AttachmentOriginalsRoot, fmt.Sprintf("%d", env.userID), "cancelled.png")
+	if err := filepolicy.WriteFile(path, uploadTestPNG(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := &model.File{
+		UserID:        env.userID,
+		SessionID:     &sessionID,
+		FileName:      "cancelled.png",
+		FilePath:      path,
+		FileType:      "image/png",
+		FileSize:      64,
+		ExtractStatus: "ready",
+	}
+	if err := repo.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = env.db.Exec("DELETE FROM files WHERE id = $1", file.ID)
+		_ = os.Remove(path)
+	})
+
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cleanupCancelledUpload(requestCtx, repo, file, env.userID)
+
+	var status string
+	var cleanupAfter time.Time
+	if err := env.db.QueryRow("SELECT status, cleanup_after FROM files WHERE id = $1", file.ID).Scan(&status, &cleanupAfter); err != nil {
+		t.Fatal(err)
+	}
+	if status != repository.FileStatusCleanupClaimed {
+		t.Fatalf("status=%q, want %q", status, repository.FileStatusCleanupClaimed)
+	}
+	if cleanupAfter.After(time.Now().Add(time.Second)) {
+		t.Fatalf("cleanup_after=%s, want immediate cleanup eligibility", cleanupAfter)
 	}
 }
 
@@ -437,7 +712,8 @@ func TestUpload_RejectsWhenSessionFileCountExceeded(t *testing.T) {
 	}
 	second := httptest.NewRecorder()
 	env.router.ServeHTTP(second, uploadMultipart(t, env.token, sessionID, "b.txt", "text/plain", []byte("second text")))
-	if second.Code != http.StatusBadRequest || !strings.Contains(second.Body.String(), "too many active files") {
+	body := decodeUploadError(t, second)
+	if second.Code != http.StatusConflict || body.Code != "session_file_limit_reached" || body.Retryable || !strings.Contains(body.Error, "too many active files") {
 		t.Fatalf("second status/body=%d %s, want session count rejection", second.Code, second.Body.String())
 	}
 }

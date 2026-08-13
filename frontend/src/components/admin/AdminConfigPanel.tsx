@@ -4,6 +4,7 @@ import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Save } from "lucide-react"
+import { useChatStore } from "@/stores/chat"
 
 interface Props {
   configItems: ConfigItem[]
@@ -20,7 +21,7 @@ const hiddenConfigKeys = new Set(["compression_model", "memory_maintenance_model
 const modelConfigKeys = new Set(["default_model_id", "title_generation_model", "extract_summary_model"])
 const utilityConfigHelp: Record<string, string> = {
   title_generation_model: "用户第二轮后生成会话标题，适合便宜、快、短输出稳定的模型。",
-  extract_summary_model: "web_extract 抓取网页后先提炼要点，避免整页正文塞进主上下文。",
+  extract_summary_model: "仅在网页正文超限时，对本地筛选后的候选正文做快速提炼；关闭或失败时仍返回相关原文。",
   title_generation_trigger: "达到第几条用户消息后自动生成标题；0 表示关闭自动标题。",
 }
 const utilityConfigOrder = ["title_generation_model", "extract_summary_model", "title_generation_trigger"]
@@ -72,6 +73,7 @@ export function AdminConfigPanel({
   excludeKeys,
   onDirtyChange,
 }: Props) {
+  const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [cleanupSaving, setCleanupSaving] = useState(false)
@@ -123,6 +125,7 @@ export function AdminConfigPanel({
         nextValues.set(item.key, nextValue)
       }
       await adminApi.updateConfigs(Object.fromEntries(nextValues))
+      if (nextValues.has("default_model_id")) void loadSessionCreateReadiness(true)
       setConfigItems((prev) => prev.map((entry) => (
         nextValues.has(entry.key) ? { ...entry, value: nextValues.get(entry.key) } : entry
       )))

@@ -2,27 +2,37 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/pkg/logger"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
-const runFinalizationTimeout = 5 * time.Second
+const (
+	runFinalizationTimeout         = 5 * time.Second
+	terminalRecoveryInitialBackoff = 25 * time.Millisecond
+	terminalRecoveryMaxBackoff     = time.Second
+)
 
 type RunCancelCause string
 
 const (
-	RunCancelUserStop       RunCancelCause = "user_stop"
-	RunCancelDeadline       RunCancelCause = "deadline"
-	RunCancelServerDrain    RunCancelCause = "server_draining"
-	RunCancelAccountChanged RunCancelCause = "account_changed"
-	RunCancelSessionDeleted RunCancelCause = "session_deleted"
-	RunCancelUpstream       RunCancelCause = "upstream_canceled"
+	RunCancelUserStop           RunCancelCause = "user_stop"
+	RunCancelFirstOutputTimeout RunCancelCause = "first_output_timeout"
+	RunCancelServerDrain        RunCancelCause = "server_draining"
+	RunCancelAccountChanged     RunCancelCause = "account_changed"
+	RunCancelSessionDeleted     RunCancelCause = "session_deleted"
+	RunCancelUpstream           RunCancelCause = "upstream_canceled"
 )
 
 type runCancellationError struct {
@@ -31,6 +41,17 @@ type runCancellationError struct {
 
 func (e runCancellationError) Error() string {
 	return string(e.Cause)
+}
+
+// Unwrap keeps the durable RunHub cause while preserving the standard error
+// family expected by provider adapters, usage accounting, and Tool runtimes.
+// A first-output timeout is a real timeout; every other RunHub cause is a
+// semantic cancellation rather than a provider/model failure.
+func (e runCancellationError) Unwrap() error {
+	if e.Cause == RunCancelFirstOutputTimeout {
+		return modelstream.ErrFirstOutputTimeout
+	}
+	return context.Canceled
 }
 
 type chatRunStore interface {
@@ -145,7 +166,7 @@ func (h *RunHub) PersistAdmission(ctx context.Context, runID string, persist Run
 	}
 	terminalEvent := h.applyStoredRunTerminal(state, record)
 	h.closeSubscribersLocked(state)
-	deadlineCancel := state.deadlineCancel
+	firstOutputStop := state.firstOutputStop
 	cancelCause := state.cancelCause
 	boundCancel := state.boundCancel
 	snapshot := cloneStateSnapshot(state)
@@ -153,8 +174,8 @@ func (h *RunHub) PersistAdmission(ctx context.Context, runID string, persist Run
 	if terminalEvent == nil {
 		return nil, fmt.Errorf("stored terminal run has no replay event")
 	}
-	if deadlineCancel != nil {
-		deadlineCancel()
+	if firstOutputStop != nil {
+		firstOutputStop()
 	}
 	if cancelCause != nil {
 		cancelCause(nil)
@@ -221,16 +242,12 @@ func storedRunMatchesState(record repository.ChatRunRecord, state *runState) boo
 		record.RetryTargetMessageID == state.RetryTargetMessageID
 }
 
-func newRunContext(timeout time.Duration) (context.Context, context.CancelCauseFunc, context.CancelFunc) {
-	parent := context.Background()
-	deadlineCancel := func() {}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		parent, cancel = context.WithTimeoutCause(parent, timeout, runCancellationError{Cause: RunCancelDeadline})
-		deadlineCancel = cancel
-	}
-	ctx, cancelCause := context.WithCancelCause(parent)
-	return ctx, cancelCause, deadlineCancel
+func newRunContext(timeout time.Duration) (context.Context, context.CancelCauseFunc, func()) {
+	return modelstream.WithDeferredFirstOutputTimeout(
+		context.Background(),
+		timeout,
+		runCancellationError{Cause: RunCancelFirstOutputTimeout},
+	)
 }
 
 func RunCancelCauseFromContext(ctx context.Context) RunCancelCause {
@@ -252,6 +269,39 @@ func (h *RunHub) Context(runID string) (context.Context, bool) {
 		return nil, false
 	}
 	return state.runContext, true
+}
+
+// BeginExecution atomically transfers a durable running reservation to its
+// single in-process execution owner and starts the run-level first-output
+// guard. Admission I/O is intentionally outside this budget; every setup step
+// after ownership (session/history/config/Agent construction) is inside it.
+//
+// The caller must launch or enter the worker immediately after this method
+// returns. No network or database work may be inserted between ownership and
+// worker start, otherwise a process panic could strand a durable running row.
+func (h *RunHub) BeginExecution(runID string) (context.Context, error) {
+	h.mu.Lock()
+	state := h.runs[runID]
+	if state == nil || state.Status != RunStatusRunning || state.finishing {
+		h.mu.Unlock()
+		return nil, ErrRunTerminal
+	}
+	if !state.durable {
+		h.mu.Unlock()
+		return nil, ErrRunNotDurable
+	}
+	if state.executionOwned {
+		h.mu.Unlock()
+		return nil, ErrRunExecutionOwned
+	}
+	state.executionOwned = true
+	runContext := state.runContext
+	h.mu.Unlock()
+
+	if context.Cause(runContext) == nil {
+		modelstream.ArmFirstOutputTimeout(runContext)
+	}
+	return runContext, nil
 }
 
 func (h *RunHub) CancelCause(runID string) RunCancelCause {
@@ -350,9 +400,18 @@ func (h *RunHub) TransitionWithCommit(ctx context.Context, runID string, commit 
 	return h.transition(ctx, runID, commit, terminal)
 }
 
+// transition serializes one run with transitionMu, then holds h.mu only for
+// short in-memory reads or publication; durable I/O never runs under h.mu.
+// finishing freezes cancellation/terminal arbitration while the repository or
+// commit callback records the canonical terminal facts. Only a successful
+// durable result is published to RunHub subscribers; on failure clearFinishing
+// leaves the running state retryable by terminal recovery.
 func (h *RunHub) transition(ctx context.Context, runID string, commit RunTerminalCommit, terminal RunTerminal) (*RunSnapshot, bool, *RunEvent, error) {
 	if terminal.Status != RunStatusCompleted && terminal.Status != RunStatusFailed && terminal.Status != RunStatusCanceled {
 		return nil, false, nil, fmt.Errorf("invalid terminal status %q", terminal.Status)
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	h.mu.RLock()
 	state := h.runs[runID]
@@ -429,19 +488,10 @@ func (h *RunHub) transition(ctx context.Context, runID string, commit RunTermina
 			TerminalEvent:      terminalEvent,
 			ExpiresAt:          time.Now().Add(h.ttl),
 		}
-		if commit != nil {
-			record, transitioned, err = commit(ctx, input)
-		} else {
-			record, transitioned, err = store.TransitionChatRun(ctx, input)
-		}
+		record, transitioned, useStore, err = persistFrozenRunTerminal(ctx, store, durable, commit, input)
 		if err != nil {
-			if commit == nil && errors.Is(err, repository.ErrNotFound) && !durable {
-				useStore = false
-				transitioned = true
-			} else {
-				h.clearFinishing(state)
-				return nil, false, nil, err
-			}
+			h.clearFinishing(state)
+			return nil, false, nil, err
 		}
 	}
 
@@ -482,11 +532,106 @@ func (h *RunHub) transition(ctx context.Context, runID string, commit RunTermina
 		state.ExpiresAt = now.Add(h.ttl)
 	}
 	state.finishing = false
-	if state.deadlineCancel != nil {
-		state.deadlineCancel()
+	if state.firstOutputStop != nil {
+		state.firstOutputStop()
+	}
+	if state.cancelCause != nil {
+		state.cancelCause(nil)
 	}
 	h.closeSubscribersLocked(state)
 	return cloneStateSnapshot(state), transitioned, terminalEvent, nil
+}
+
+// persistFrozenRunTerminal is the durable half of a terminal transition.
+//
+// The caller has already set finishing and still owns transitionMu. That freeze
+// is intentional: after the terminal decision is formed, Cancel and Record must
+// not replace it while a retryable database/network failure is being recovered.
+// We keep retrying the original commit (rather than manufacturing a second
+// failure terminal), and publish the canonical stored record only after it is
+// durable. If the process exits during recovery, startup reconciliation turns
+// the remaining durable running row into the existing server_restarted terminal.
+func persistFrozenRunTerminal(ctx context.Context, store chatRunStore, durable bool, commit RunTerminalCommit, input repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, bool, error) {
+	for retry := 0; ; retry++ {
+		attemptCtx := ctx
+		cancel := func() {}
+		if retry > 0 {
+			attemptCtx, cancel = context.WithTimeout(context.Background(), runFinalizationTimeout)
+		}
+
+		var (
+			record       repository.ChatRunRecord
+			transitioned bool
+			err          error
+		)
+		if commit != nil {
+			record, transitioned, err = commit(attemptCtx, input)
+		} else {
+			record, transitioned, err = store.TransitionChatRun(attemptCtx, input)
+		}
+		cancel()
+		if err == nil {
+			if retry > 0 {
+				logger.Info("terminal persistence recovered: run_id=%q attempts=%d", input.RunID, retry+1)
+			}
+			return record, transitioned, true, nil
+		}
+		if commit == nil && errors.Is(err, repository.ErrNotFound) && !durable {
+			return repository.ChatRunRecord{}, true, false, nil
+		}
+		if !isRetryableTerminalPersistenceError(err) {
+			return repository.ChatRunRecord{}, false, true, err
+		}
+		attempt := retry + 1
+		if attempt == 1 || attempt&(attempt-1) == 0 {
+			logger.Error("terminal persistence pending: run_id=%q attempts=%d err=%v", input.RunID, attempt, err)
+		}
+
+		// The initial caller context commonly belongs to a completed worker. Once
+		// the terminal decision is frozen, every retry must get a fresh bounded
+		// context so its cancellation cannot strand the durable running record.
+		time.Sleep(terminalRecoveryBackoff(retry))
+	}
+}
+
+func terminalRecoveryBackoff(retry int) time.Duration {
+	delay := terminalRecoveryInitialBackoff
+	for step := 0; step < retry && delay < terminalRecoveryMaxBackoff; step++ {
+		delay *= 2
+	}
+	if delay > terminalRecoveryMaxBackoff {
+		return terminalRecoveryMaxBackoff
+	}
+	return delay
+}
+
+func isRetryableTerminalPersistenceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, driver.ErrBadConn) || errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return true
+	}
+	var sqlErr interface{ SQLState() string }
+	if !errors.As(err, &sqlErr) {
+		return false
+	}
+	state := sqlErr.SQLState()
+	if len(state) < 2 {
+		return false
+	}
+	switch state[:2] {
+	case "08", "40", "53", "57", "58":
+		return true
+	default:
+		return false
+	}
 }
 
 func preservesIncompleteMessageCompletion(terminal RunTerminal) bool {
@@ -611,6 +756,13 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 				}
 				return terminal
 			}
+			if kind == RunKindMemoryMaintenance {
+				if terminal.Event == "" {
+					terminal.Event = "memory_maintenance_canceled"
+					terminal.Data = map[string]interface{}{"reason": "canceled"}
+				}
+				return terminal
+			}
 			if terminal.Event == "" {
 				terminal.Event = "message_complete"
 				terminal.Data = map[string]interface{}{
@@ -651,9 +803,12 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 			terminal.Data = map[string]interface{}{
 				"message_id": terminal.TerminalMessageID, "finish_reason": "stop",
 			}
-		} else {
+		} else if kind == RunKindCompaction {
 			terminal.Event = "compaction_complete"
 			terminal.Data = map[string]interface{}{"compacted": true}
+		} else {
+			terminal.Event = "memory_maintenance_complete"
+			terminal.Data = map[string]interface{}{"updated": true}
 		}
 	}
 	return terminal
@@ -661,8 +816,8 @@ func normalizeRunTerminal(kind string, terminal RunTerminal) RunTerminal {
 
 func RunCancellationPublicError(cause RunCancelCause) (string, string, bool) {
 	switch cause {
-	case RunCancelDeadline:
-		return "run_deadline_exceeded", "任务超时，请重试", true
+	case RunCancelFirstOutputTimeout:
+		return "first_output_timeout", "等待模型首个输出超时，请重试", true
 	case RunCancelServerDrain:
 		return "server_draining", "服务正在更新，请重试", true
 	case RunCancelAccountChanged:
@@ -729,6 +884,9 @@ func fallbackStoredTerminalEvent(record repository.ChatRunRecord) (string, inter
 	if record.Status == RunStatusCompleted {
 		if record.Operation == RunOperationCompaction || record.Kind == RunKindCompaction {
 			return "compaction_complete", map[string]interface{}{"compacted": true}
+		}
+		if record.Kind == RunKindMemoryMaintenance {
+			return "memory_maintenance_complete", map[string]interface{}{"updated": true}
 		}
 		return "message_complete", map[string]interface{}{"message_id": record.TerminalMessageID, "finish_reason": "stop"}
 	}

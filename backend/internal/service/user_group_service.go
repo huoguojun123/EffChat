@@ -1,10 +1,20 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"unicode/utf8"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+)
+
+var ErrUserGroupInvalid = errors.New("invalid user group")
+
+const (
+	userGroupNameMaxRunes        = 50
+	userGroupDescriptionMaxRunes = 200
 )
 
 type UserGroupService struct {
@@ -52,11 +62,15 @@ func (s *UserGroupService) List() ([]*model.UserGroup, error) {
 }
 
 func (s *UserGroupService) Create(req *CreateGroupRequest) (*model.UserGroup, error) {
-	if req.Name == "" {
-		return nil, fmt.Errorf("name is required")
+	return s.CreateContext(context.Background(), req)
+}
+
+func (s *UserGroupService) CreateContext(ctx context.Context, req *CreateGroupRequest) (*model.UserGroup, error) {
+	if err := validateUserGroupText(req.Name, req.Description); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserGroupInvalid, err)
 	}
 	if req.Level < 0 {
-		return nil, fmt.Errorf("level must be >= 0")
+		return nil, fmt.Errorf("%w: level must be >= 0", ErrUserGroupInvalid)
 	}
 	if err := validateGroupLimits(groupLimitValues{
 		DailyMessages:    req.DailyMessageLimit,
@@ -68,7 +82,7 @@ func (s *UserGroupService) Create(req *CreateGroupRequest) (*model.UserGroup, er
 		DailyOCRFiles:    req.DailyOCRFileLimit,
 		DailyOCRPages:    req.DailyOCRPageLimit,
 	}); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserGroupInvalid, err)
 	}
 	g := &model.UserGroup{
 		Name:                 req.Name,
@@ -84,61 +98,33 @@ func (s *UserGroupService) Create(req *CreateGroupRequest) (*model.UserGroup, er
 		DailyOCRFileLimit:    req.DailyOCRFileLimit,
 		DailyOCRPageLimit:    req.DailyOCRPageLimit,
 	}
-	if err := s.groupRepo.Create(g); err != nil {
+	if err := s.groupRepo.CreateContext(ctx, g); err != nil {
 		return nil, err
 	}
 	return g, nil
 }
 
 func (s *UserGroupService) Update(id int64, req *UpdateGroupRequest) (*model.UserGroup, error) {
-	g, err := s.groupRepo.Get(id)
-	if err != nil {
-		return nil, err
+	return s.UpdateContext(context.Background(), id, req)
+}
+
+func (s *UserGroupService) UpdateContext(ctx context.Context, id int64, req *UpdateGroupRequest) (*model.UserGroup, error) {
+	patch := repository.UserGroupPatch{
+		Name: req.Name, Level: req.Level, Description: req.Description, IsDefault: req.IsDefault,
+		DailyMessageLimit: req.DailyMessageLimit, DailyTokenLimit: req.DailyTokenLimit,
+		ConcurrentRunLimit: req.ConcurrentRunLimit, DailyToolCallLimit: req.DailyToolCallLimit,
+		DailyWebSearchLimit: req.DailyWebSearchLimit, DailyWebExtractLimit: req.DailyWebExtractLimit,
+		DailyOCRFileLimit: req.DailyOCRFileLimit, DailyOCRPageLimit: req.DailyOCRPageLimit,
 	}
-	if g == nil {
-		return nil, fmt.Errorf("user group not found: %d", id)
+	return s.groupRepo.UpdateFieldsContext(ctx, id, patch, validateUserGroup)
+}
+
+func validateUserGroup(g *model.UserGroup) error {
+	if g.Level < 0 {
+		return fmt.Errorf("%w: level must be >= 0", ErrUserGroupInvalid)
 	}
-	if req.Name != nil {
-		if *req.Name == "" {
-			return nil, fmt.Errorf("name cannot be empty")
-		}
-		g.Name = *req.Name
-	}
-	if req.Level != nil {
-		if *req.Level < 0 {
-			return nil, fmt.Errorf("level must be >= 0")
-		}
-		g.Level = *req.Level
-	}
-	if req.Description != nil {
-		g.Description = *req.Description
-	}
-	if req.IsDefault != nil {
-		g.IsDefault = *req.IsDefault
-	}
-	if req.DailyMessageLimit != nil {
-		g.DailyMessageLimit = *req.DailyMessageLimit
-	}
-	if req.DailyTokenLimit != nil {
-		g.DailyTokenLimit = *req.DailyTokenLimit
-	}
-	if req.ConcurrentRunLimit != nil {
-		g.ConcurrentRunLimit = *req.ConcurrentRunLimit
-	}
-	if req.DailyToolCallLimit != nil {
-		g.DailyToolCallLimit = *req.DailyToolCallLimit
-	}
-	if req.DailyWebSearchLimit != nil {
-		g.DailyWebSearchLimit = *req.DailyWebSearchLimit
-	}
-	if req.DailyWebExtractLimit != nil {
-		g.DailyWebExtractLimit = *req.DailyWebExtractLimit
-	}
-	if req.DailyOCRFileLimit != nil {
-		g.DailyOCRFileLimit = *req.DailyOCRFileLimit
-	}
-	if req.DailyOCRPageLimit != nil {
-		g.DailyOCRPageLimit = *req.DailyOCRPageLimit
+	if err := validateUserGroupText(g.Name, g.Description); err != nil {
+		return fmt.Errorf("%w: %v", ErrUserGroupInvalid, err)
 	}
 	if err := validateGroupLimits(groupLimitValues{
 		DailyMessages:    g.DailyMessageLimit,
@@ -150,12 +136,9 @@ func (s *UserGroupService) Update(id int64, req *UpdateGroupRequest) (*model.Use
 		DailyOCRFiles:    g.DailyOCRFileLimit,
 		DailyOCRPages:    g.DailyOCRPageLimit,
 	}); err != nil {
-		return nil, err
+		return fmt.Errorf("%w: %v", ErrUserGroupInvalid, err)
 	}
-	if err := s.groupRepo.Update(g); err != nil {
-		return nil, err
-	}
-	return g, nil
+	return nil
 }
 
 type groupLimitValues struct {
@@ -167,6 +150,19 @@ type groupLimitValues struct {
 	DailyWebExtracts int
 	DailyOCRFiles    int
 	DailyOCRPages    int
+}
+
+func validateUserGroupText(name, description string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if utf8.RuneCountInString(name) > userGroupNameMaxRunes {
+		return fmt.Errorf("name must be at most %d characters", userGroupNameMaxRunes)
+	}
+	if utf8.RuneCountInString(description) > userGroupDescriptionMaxRunes {
+		return fmt.Errorf("description must be at most %d characters", userGroupDescriptionMaxRunes)
+	}
+	return nil
 }
 
 func validateGroupLimits(limits groupLimitValues) error {
@@ -198,5 +194,9 @@ func validateGroupLimits(limits groupLimitValues) error {
 }
 
 func (s *UserGroupService) Delete(id int64) error {
-	return s.groupRepo.Delete(id)
+	return s.DeleteContext(context.Background(), id)
+}
+
+func (s *UserGroupService) DeleteContext(ctx context.Context, id int64) error {
+	return s.groupRepo.DeleteContext(ctx, id)
 }

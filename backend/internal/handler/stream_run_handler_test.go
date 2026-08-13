@@ -16,25 +16,38 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
+type failingHandlerChatRunStore struct {
+	err error
+}
+
+func (s *failingHandlerChatRunStore) BindChatRunUserMessage(context.Context, string, int64) (bool, error) {
+	return false, s.err
+}
+
+func (s *failingHandlerChatRunStore) TransitionChatRun(context.Context, repository.ChatRunTransitionInput) (repository.ChatRunRecord, bool, error) {
+	return repository.ChatRunRecord{}, false, s.err
+}
+
 func TestSlowTCPConsumerDoesNotBlockRunCompletion(t *testing.T) {
-	if os.Getenv("FCHAT_LONG_STREAM_TEST") != "1" {
-		t.Skip("set FCHAT_LONG_STREAM_TEST=1 to run the 60-second TCP acceptance test")
+	if os.Getenv("EFFCHAT_LONG_STREAM_TEST") != "1" {
+		t.Skip("set EFFCHAT_LONG_STREAM_TEST=1 to run the 60-second TCP acceptance test")
 	}
 	pause := 60 * time.Second
-	if raw := os.Getenv("FCHAT_SLOW_CONSUMER_DURATION"); raw != "" {
+	if raw := os.Getenv("EFFCHAT_SLOW_CONSUMER_DURATION"); raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil || parsed <= 0 {
-			t.Fatalf("invalid FCHAT_SLOW_CONSUMER_DURATION %q", raw)
+			t.Fatalf("invalid EFFCHAT_SLOW_CONSUMER_DURATION %q", raw)
 		}
 		pause = parsed
 	}
@@ -332,12 +345,365 @@ func TestAgentErrorPayload_RuntimeError(t *testing.T) {
 	}
 }
 
-func TestEffectiveRunTimeoutUsesConfiguredValueOrExistingDefault(t *testing.T) {
-	if got := effectiveRunTimeout(20*time.Second, defaultChatRunTimeout); got != 20*time.Second {
+func TestEffectiveFirstOutputTimeoutUsesConfiguredValueOrExistingDefault(t *testing.T) {
+	if got := effectiveFirstOutputTimeout(20*time.Second, defaultChatFirstOutputTimeout); got != 20*time.Second {
 		t.Fatalf("configured timeout = %s, want 20s", got)
 	}
-	if got := effectiveRunTimeout(0, defaultCompactionRunTimeout); got != defaultCompactionRunTimeout {
-		t.Fatalf("default timeout = %s, want %s", got, defaultCompactionRunTimeout)
+	if got := effectiveFirstOutputTimeout(0, defaultCompactionFirstOutputTimeout); got != defaultCompactionFirstOutputTimeout {
+		t.Fatalf("default timeout = %s, want %s", got, defaultCompactionFirstOutputTimeout)
+	}
+}
+
+func TestEffectiveRunSetupTimeoutPrecedesFirstOutputGuard(t *testing.T) {
+	tests := []struct {
+		name        string
+		firstOutput time.Duration
+		want        time.Duration
+	}{
+		{name: "non-positive falls back to setup cap", firstOutput: 0, want: maxRunSetupTimeout},
+		{name: "negative falls back to setup cap", firstOutput: -time.Second, want: maxRunSetupTimeout},
+		{name: "one nanosecond becomes immediate", firstOutput: time.Nanosecond, want: 0},
+		{name: "tiny positive is halved", firstOutput: 2 * time.Nanosecond, want: time.Nanosecond},
+		{name: "short configured guard is halved", firstOutput: 20 * time.Second, want: 10 * time.Second},
+		{name: "compaction default uses setup cap", firstOutput: defaultCompactionFirstOutputTimeout, want: maxRunSetupTimeout},
+		{name: "chat default uses setup cap", firstOutput: defaultChatFirstOutputTimeout, want: maxRunSetupTimeout},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := effectiveRunSetupTimeout(test.firstOutput)
+			if got != test.want {
+				t.Fatalf("effectiveRunSetupTimeout(%s) = %s, want %s", test.firstOutput, got, test.want)
+			}
+			if test.firstOutput > 0 && got >= test.firstOutput {
+				t.Fatalf("setup timeout %s must precede first-output guard %s", got, test.firstOutput)
+			}
+		})
+	}
+}
+
+func TestRunSetupDeadlineTransitionsChatAndCompactionAsSetupTimeout(t *testing.T) {
+	for index, kind := range []string{service.RunKindChat, service.RunKindCompaction} {
+		t.Run(kind, func(t *testing.T) {
+			runHub := service.NewRunHub(time.Minute, 1<<20)
+			run, err := runHub.StartWithFirstOutputTimeout(int64(index+1), 9, 0, "setup-timeout-"+kind, kind, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			runContext, err := runHub.BeginExecution(run.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setupContext, setupCancel := newRunSetupContext(runContext, 5*time.Millisecond)
+			defer setupCancel()
+			select {
+			case <-setupContext.Done():
+			case <-time.After(time.Second):
+				t.Fatal("setup context did not reach its deadline")
+			}
+
+			if !transitionRunSetupInterruption(nil, nil, runHub, run.RunID, "setup-request", runContext, setupContext) {
+				t.Fatal("setup deadline was not classified")
+			}
+			snapshot, ok := runHub.Get(run.RunID, int64(index+1), 9)
+			if !ok {
+				t.Fatal("setup-timeout run disappeared")
+			}
+			if snapshot.Status != service.RunStatusFailed || snapshot.ErrorCode != "run_setup_timeout" {
+				t.Fatalf("setup terminal = status:%q code:%q error:%q", snapshot.Status, snapshot.ErrorCode, snapshot.Error)
+			}
+			if snapshot.CancelCause != "" || snapshot.ErrorCode == "first_output_timeout" {
+				t.Fatalf("setup timeout was misclassified as cancellation: %+v", snapshot)
+			}
+			events, _, cleanup, _, err := runHub.EventsAfter(run.RunID, int64(index+1), 9, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cleanup != nil {
+				cleanup()
+			}
+			if len(events) != 1 || events[0].Event != streaming.EventError {
+				t.Fatalf("setup timeout events = %+v", events)
+			}
+			payload, ok := events[0].Data.(gin.H)
+			if !ok || payload["code"] != "run_setup_timeout" || payload["retryable"] != true || payload["request_id"] != "setup-request" {
+				t.Fatalf("setup timeout payload = %#v", events[0].Data)
+			}
+		})
+	}
+}
+
+func TestRunTerminalFallbackResponsesKeepRequestCorrelation(t *testing.T) {
+	tests := []struct {
+		name       string
+		transition func(*gin.Context, *service.RunHub, *service.RunSnapshot, context.Context) bool
+	}{
+		{
+			name: "cancellation",
+			transition: func(c *gin.Context, runHub *service.RunHub, run *service.RunSnapshot, runContext context.Context) bool {
+				runHub.CancelWithCause(run.RunID, run.SessionID, run.UserID, service.RunCancelUserStop)
+				return transitionCanceledRun(c, nil, runHub, run.RunID, runContext)
+			},
+		},
+		{
+			name: "setup timeout",
+			transition: func(c *gin.Context, runHub *service.RunHub, run *service.RunSnapshot, runContext context.Context) bool {
+				setupContext, setupCancel := context.WithCancelCause(runContext)
+				setupCancel(context.DeadlineExceeded)
+				return transitionRunSetupInterruption(c, nil, runHub, run.RunID, "req-terminal", runContext, setupContext)
+			},
+		},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runHub := service.NewRunHub(time.Minute, 1<<20)
+			run, err := runHub.Start(int64(index+1), 9, 0, "terminal-fallback-"+strings.ReplaceAll(test.name, " ", "-"), service.RunKindChat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			runHub.SetStore(&failingHandlerChatRunStore{err: errors.New("postgres://fixture:secret@db.example/effchat /srv/private/terminal")})
+			runContext, err := runHub.BeginExecution(run.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/messages/stream", nil)
+			ctx.Set("request_id", "req-terminal")
+
+			if !test.transition(ctx, runHub, run, runContext) {
+				t.Fatal("terminal failure was not classified")
+			}
+
+			assertRunFallbackError(t, recorder, "run_terminal_failed", "req-terminal")
+		})
+	}
+}
+
+func TestAcceptedRunStreamUnavailableKeepsRecoveryMetadata(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/messages/stream", nil)
+	ctx.Set("request_id", "req-stream")
+
+	writeAcceptedRunStreamUnavailable(ctx, "run-fixture", errors.New("transport secret /srv/private/stream"))
+
+	assertRunFallbackError(t, recorder, "stream_unavailable", "req-stream")
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["run_id"] != "run-fixture" {
+		t.Fatalf("run_id = %#v", body["run_id"])
+	}
+}
+
+func TestRunConflictFallbacksKeepRecoveryMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		code  string
+		runID string
+		write func(*gin.Context)
+	}{
+		{name: "terminal", code: "run_terminal", write: writeRunTerminalConflict},
+		{name: "execution owned", code: "run_execution_owned", runID: "run-owned", write: func(c *gin.Context) { writeRunExecutionOwned(c, "run-owned") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/sessions/1/messages/stream", nil)
+			ctx.Set("request_id", "req-conflict")
+
+			test.write(ctx)
+
+			if recorder.Code != http.StatusConflict {
+				t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var body map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["code"] != test.code || body["retryable"] != false || body["request_id"] != "req-conflict" {
+				t.Fatalf("response = %#v", body)
+			}
+			if test.runID != "" && body["run_id"] != test.runID {
+				t.Fatalf("run_id = %#v, want %q", body["run_id"], test.runID)
+			}
+		})
+	}
+}
+
+func assertRunFallbackError(t *testing.T, recorder *httptest.ResponseRecorder, code, requestID string) {
+	t.Helper()
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["code"] != code || body["retryable"] != true || body["request_id"] != requestID {
+		t.Fatalf("response = %#v", body)
+	}
+	if strings.Contains(recorder.Body.String(), "secret") || strings.Contains(recorder.Body.String(), "/srv/private") {
+		t.Fatalf("response leaked internal cause: %s", recorder.Body.String())
+	}
+}
+
+func TestRunSetupCancelLeavesRunContextAvailableForModelStream(t *testing.T) {
+	const firstOutputTimeout = 40 * time.Millisecond
+	runHub := service.NewRunHub(time.Minute, 1<<20)
+	run, err := runHub.StartWithFirstOutputTimeout(7, 9, 0, "setup-child-cancel", service.RunKindChat, firstOutputTimeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	runContext, err := runHub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupContext, setupCancel := newRunSetupContext(runContext, effectiveRunSetupTimeout(firstOutputTimeout))
+	setupCancel()
+	if !errors.Is(context.Cause(setupContext), context.Canceled) {
+		t.Fatalf("setup cause = %v, want context.Canceled", context.Cause(setupContext))
+	}
+	if cause := context.Cause(runContext); cause != nil {
+		t.Fatalf("canceling setup child canceled durable parent: %v", cause)
+	}
+
+	// Simulate the raw model observer seeing its first meaningful chunk. The
+	// original runContext must still carry and disarm the RunHub output gate.
+	modelstream.MarkOutput(runContext)
+	select {
+	case <-runContext.Done():
+		t.Fatalf("durable parent canceled after setup completed: %v", context.Cause(runContext))
+	case <-time.After(3 * firstOutputTimeout):
+	}
+	runHub.Complete(run.RunID, nil, nil)
+}
+
+func TestFinishRunSetupDoesNotReclassifySuccessfulSetupAsTimeout(t *testing.T) {
+	runHub := service.NewRunHub(time.Minute, 1<<20)
+	run, err := runHub.StartWithFirstOutputTimeout(7, 9, 0, "setup-success-boundary", service.RunKindChat, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	runContext, err := runHub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupContext, setupCancel := newRunSetupContext(runContext, time.Millisecond)
+	select {
+	case <-setupContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("setup context did not reach its deadline")
+	}
+	if !errors.Is(context.Cause(setupContext), context.DeadlineExceeded) {
+		t.Fatalf("setup cause = %v, want context.DeadlineExceeded", context.Cause(setupContext))
+	}
+
+	// The final setup operation is modeled as having returned success. That
+	// success owns the child-deadline race; only the durable parent is checked.
+	if finishRunSetup(nil, nil, runHub, run.RunID, runContext, setupCancel) {
+		t.Fatal("successful setup was reclassified as an interruption")
+	}
+	snapshot, ok := runHub.Get(run.RunID, 7, 9)
+	if !ok || snapshot.Status != service.RunStatusRunning || snapshot.ErrorCode != "" {
+		t.Fatalf("successful setup terminal = %+v", snapshot)
+	}
+	modelstream.MarkOutput(runContext)
+	runHub.Complete(run.RunID, nil, nil)
+}
+
+func TestFinishRunSetupPreservesParentCancellationCause(t *testing.T) {
+	runHub := service.NewRunHub(time.Minute, 1<<20)
+	run, err := runHub.StartWithFirstOutputTimeout(7, 9, 0, "setup-success-parent-cancel", service.RunKindChat, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	runContext, err := runHub.BeginExecution(run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, setupCancel := newRunSetupContext(runContext, 500*time.Millisecond)
+	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelServerDrain) {
+		t.Fatal("failed to cancel durable parent")
+	}
+	if !finishRunSetup(nil, nil, runHub, run.RunID, runContext, setupCancel) {
+		t.Fatal("successful setup boundary ignored durable parent cancellation")
+	}
+	snapshot, ok := runHub.Get(run.RunID, 7, 9)
+	if !ok || snapshot.Status != service.RunStatusCanceled || snapshot.CancelCause != string(service.RunCancelServerDrain) || snapshot.ErrorCode != "server_draining" {
+		t.Fatalf("successful setup parent terminal = %+v", snapshot)
+	}
+}
+
+func TestRunSetupInterruptionPreservesParentCancellationCause(t *testing.T) {
+	tests := []struct {
+		name      string
+		cause     service.RunCancelCause
+		wantCode  string
+		wantEvent string
+	}{
+		{name: "user stop", cause: service.RunCancelUserStop, wantEvent: streaming.EventMessageComplete},
+		{name: "first output", cause: service.RunCancelFirstOutputTimeout, wantCode: "first_output_timeout", wantEvent: streaming.EventError},
+		{name: "server drain", cause: service.RunCancelServerDrain, wantCode: "server_draining", wantEvent: streaming.EventError},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runHub := service.NewRunHub(time.Minute, 1<<20)
+			run, err := runHub.StartWithFirstOutputTimeout(int64(index+1), 9, 0, "setup-parent-"+strings.ReplaceAll(test.name, " ", "-"), service.RunKindChat, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runHub.PersistDurable(t.Context(), run.RunID, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			runContext, err := runHub.BeginExecution(run.RunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			setupContext, setupCancel := newRunSetupContext(runContext, 500*time.Millisecond)
+			defer setupCancel()
+			if !runHub.CancelWithCause(run.RunID, int64(index+1), 9, test.cause) {
+				t.Fatal("failed to cancel parent run")
+			}
+
+			if !transitionRunSetupInterruption(nil, nil, runHub, run.RunID, "", runContext, setupContext) {
+				t.Fatal("parent cancellation was not classified")
+			}
+			snapshot, ok := runHub.Get(run.RunID, int64(index+1), 9)
+			if !ok || snapshot.Status != service.RunStatusCanceled || snapshot.CancelCause != string(test.cause) {
+				t.Fatalf("parent cancellation terminal = %+v", snapshot)
+			}
+			if snapshot.ErrorCode != test.wantCode || snapshot.ErrorCode == "run_setup_timeout" {
+				t.Fatalf("parent cancellation code = %q, want %q", snapshot.ErrorCode, test.wantCode)
+			}
+			events, _, cleanup, _, err := runHub.EventsAfter(run.RunID, int64(index+1), 9, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cleanup != nil {
+				cleanup()
+			}
+			if len(events) != 1 || events[0].Event != test.wantEvent {
+				t.Fatalf("parent cancellation events = %+v, want %q", events, test.wantEvent)
+			}
+		})
 	}
 }
 
@@ -378,7 +744,7 @@ func TestLoadPostRunMemorySessionUsesDetachedContext(t *testing.T) {
 	env := setupTestEnv(t)
 	session := createResumeTestSession(t, env)
 	runHub := service.NewRunHub(time.Minute, 1<<20)
-	run, err := runHub.StartWithTimeout(session.ID, env.userID, 0, "post-run-memory", service.RunKindChat, time.Minute)
+	run, err := runHub.StartWithFirstOutputTimeout(session.ID, env.userID, 0, "post-run-memory", service.RunKindChat, time.Minute)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
@@ -400,22 +766,39 @@ func TestLoadPostRunMemorySessionUsesDetachedContext(t *testing.T) {
 	}
 }
 
-func TestRunCompactionTasksCancelsCompactionAfterMemoryFailure(t *testing.T) {
+func TestRunCompactionTasksKeepsCompactionAfterMemoryFailure(t *testing.T) {
 	compactionCanceled := make(chan struct{}, 1)
-	_, err := runCompactionTasks(context.Background(), func(context.Context) error {
+	checkpoint := &agent.CompressionCheckpoint{SummaryData: []byte("summary")}
+	got, err := runCompactionTasks(context.Background(), func(context.Context) error {
 		return errors.New("memory failed")
 	}, func(ctx context.Context) (*agent.CompressionCheckpoint, error) {
-		<-ctx.Done()
-		compactionCanceled <- struct{}{}
-		return nil, ctx.Err()
+		select {
+		case <-ctx.Done():
+			compactionCanceled <- struct{}{}
+			return nil, ctx.Err()
+		default:
+			return checkpoint, nil
+		}
 	})
-	if err == nil || err.Error() != "memory failed" {
-		t.Fatalf("error = %v, want memory failure", err)
+	if err != nil || got != checkpoint {
+		t.Fatalf("checkpoint=%#v err=%v, want memory failure to be non-fatal", got, err)
 	}
 	select {
 	case <-compactionCanceled:
-	case <-time.After(time.Second):
-		t.Fatal("compaction was not canceled after memory failure")
+		t.Fatal("compaction was canceled after memory failure")
+	default:
+	}
+}
+
+func TestRunCompactionTasksKeepsCompactionAfterMissingMemoryRetryInput(t *testing.T) {
+	checkpoint := &agent.CompressionCheckpoint{SummaryData: []byte("summary")}
+	got, err := runCompactionTasks(context.Background(), func(context.Context) error {
+		return errors.New("no user message available for memory retry")
+	}, func(context.Context) (*agent.CompressionCheckpoint, error) {
+		return checkpoint, nil
+	})
+	if err != nil || got != checkpoint {
+		t.Fatalf("checkpoint=%#v err=%v, want missing memory retry input to remain non-fatal", got, err)
 	}
 }
 
@@ -435,6 +818,50 @@ func TestRunCompactionTasksCancelsMemoryAfterCompactionFailure(t *testing.T) {
 	case <-memoryCanceled:
 	case <-time.After(time.Second):
 		t.Fatal("memory maintenance was not canceled after compaction failure")
+	}
+}
+
+func TestRunCompactionTasksMemoryOutputDoesNotDisarmCompressionGuard(t *testing.T) {
+	timeoutCause := errors.New("compression first output timeout")
+	parent, parentCancel := context.WithTimeout(t.Context(), time.Second)
+	defer parentCancel()
+	runCtx, cancelRun, stopGuard := modelstream.WithDeferredFirstOutputTimeout(parent, 20*time.Millisecond, timeoutCause)
+	defer func() {
+		stopGuard()
+		cancelRun(nil)
+	}()
+	modelstream.ArmFirstOutputTimeout(runCtx)
+
+	_, err := runCompactionTasks(runCtx, func(ctx context.Context) error {
+		modelstream.MarkOutput(ctx)
+		return nil
+	}, func(ctx context.Context) (*agent.CompressionCheckpoint, error) {
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	})
+	if !errors.Is(err, timeoutCause) {
+		t.Fatalf("error = %v, want compression-owned first output timeout", err)
+	}
+}
+
+func TestShouldRetryMemoryMaintenanceBeforeCompaction(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "success", err: nil, want: false},
+		{name: "answer selection changed", err: repository.ErrAnswerSelectionRevisionConflict, want: false},
+		{name: "declared output capacity", err: fmt.Errorf("wrapped: %w", agent.ErrMemoryMaintenanceOutputBudgetInsufficient), want: false},
+		{name: "provider output limit", err: fmt.Errorf("wrapped: %w", agent.ErrMemoryMaintenanceOutputLimit), want: true},
+		{name: "transient model failure", err: errors.New("temporary model failure"), want: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := shouldRetryMemoryMaintenanceBeforeCompaction(testCase.err); got != testCase.want {
+				t.Fatalf("shouldRetryMemoryMaintenanceBeforeCompaction(%v) = %t, want %t", testCase.err, got, testCase.want)
+			}
+		})
 	}
 }
 
@@ -641,7 +1068,7 @@ func TestRunAgentStreamContinuesAfterRequestDisconnect(t *testing.T) {
 	if err := runHub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelDeadline) {
+	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelFirstOutputTimeout) {
 		t.Fatal("failed to cancel admitted run")
 	}
 
@@ -651,7 +1078,7 @@ func TestRunAgentStreamContinuesAfterRequestDisconnect(t *testing.T) {
 	cancelRequest()
 	c.Request = httptest.NewRequest(http.MethodPost, "/stream", nil).WithContext(requestCtx)
 
-	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
+	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, time.Second, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -705,6 +1132,7 @@ func TestReplayExistingRunWritesErrorForWrongScope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest("GET", "/stream", nil)
+	c.Set("request_id", "req-replay")
 	writer, err := streaming.NewSSEWriter(c)
 	if err != nil {
 		t.Fatalf("new sse writer: %v", err)
@@ -720,8 +1148,26 @@ func TestReplayExistingRunWritesErrorForWrongScope(t *testing.T) {
 	replayExistingRun(c, writer, runHub, 0, 99, 20, run.RunID, 0)
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, "run_not_found") || strings.Contains(body, "run not found") {
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "run_not_found") || !strings.Contains(body, `"retryable":false`) || !strings.Contains(body, `"request_id":"req-replay"`) || !strings.Contains(body, `"run_id":"`+run.RunID+`"`) || strings.Contains(body, "run not found") {
 		t.Fatalf("wrong-scope replay should write error event: %q", body)
+	}
+}
+
+func TestRunSubscriptionFailureKeepsRecoveryMetadata(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/stream", nil)
+	ctx.Set("request_id", "req-subscribe")
+	writer, err := streaming.NewSSEWriter(ctx)
+	if err != nil {
+		t.Fatalf("new sse writer: %v", err)
+	}
+
+	writeRunSubscriptionFailed(ctx, writer, "run-subscribe", errors.New("internal subscription failure"))
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "stream_subscription_failed") || !strings.Contains(body, `"retryable":true`) || !strings.Contains(body, `"request_id":"req-subscribe"`) || !strings.Contains(body, `"run_id":"run-subscribe"`) || strings.Contains(body, "internal subscription failure") {
+		t.Fatalf("subscription failure payload = %q", body)
 	}
 }
 

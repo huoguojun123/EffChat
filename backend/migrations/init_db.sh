@@ -4,9 +4,8 @@
 # 数据库初始化/升级脚本
 # 用法: ./init_db.sh [reset]
 #
-# 发布前迁移体系只有两类入口：
-# - init.sql：全新库 schema 快照。
-# - production/*.sql：唯一增量迁移链，本脚本按文件名顺序执行并写入 schema_migrations。
+# 唯一运行入口是 production/*.sql。init.sql 仅作为不可变的 001 历史
+# 基线被 production/001_schema.sql 引用，不可单独执行。
 # ============================================
 
 set -uo pipefail
@@ -54,9 +53,9 @@ load_env_file "$PROJECT_DIR/.env"
 
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
-DB_USER="${DB_USER:-postgres}"
-DB_PASSWORD="${DB_PASSWORD:-123456}"
-DB_NAME="${DB_NAME:-fchat}"
+DB_USER="${DB_USER:-effchat}"
+DB_PASSWORD="${DB_PASSWORD:-}"
+DB_NAME="${DB_NAME:-effchat}"
 DB_SSLMODE="${DB_SSLMODE:-disable}"
 
 RED='\033[0;31m'
@@ -152,63 +151,12 @@ database_exists() {
 }
 
 apply_migrations() {
-    local migration_script output migration version checksum legacy_checksum sql_file
+    local migration_script output status
     migration_script="$(mktemp)"
-
-    {
-        cat <<'SQL'
-SELECT pg_advisory_lock(823764219);
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version TEXT PRIMARY KEY,
-  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  checksum TEXT NOT NULL DEFAULT ''
-);
-ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT NOT NULL DEFAULT '';
-SQL
-
-        for migration in "${migrations[@]}"; do
-            version="$(basename "$migration")"
-            if [ "$version" = "001_schema.sql" ]; then
-                checksum="legacy-baseline-v1"
-                checksum_reconcile="TRUE"
-            else
-                checksum="$(shasum -a 256 "$migration" | awk '{print $1}')"
-                checksum_reconcile="checksum = ''"
-            fi
-            sql_file="$migration"
-            if [ "$version" = "001_schema.sql" ]; then
-                sql_file="$SCRIPT_DIR/init.sql"
-            fi
-
-            cat <<SQL
-UPDATE schema_migrations
-SET checksum = '$checksum'
-WHERE version = '$version' AND ($checksum_reconcile);
-SELECT NOT EXISTS (
-  SELECT 1 FROM schema_migrations
-  WHERE version = '$version' AND checksum <> '$checksum'
-) AS migration_checksum_matches \gset
-\if :migration_checksum_matches
-\else
-\echo migration checksum mismatch: $version
-SELECT 1 / 0;
-\endif
-SELECT NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = '$version') AS apply_migration \gset
-\if :apply_migration
-\echo apply migration $version
-SQL
-            cat "$sql_file"
-            cat <<SQL
-INSERT INTO schema_migrations (version, checksum) VALUES ('$version', '$checksum');
-\else
-\echo skip migration $version
-\endif
-SQL
-        done
-        cat <<'SQL'
-SELECT pg_advisory_unlock(823764219);
-SQL
-    } > "$migration_script"
+    if ! "$SCRIPT_DIR/build_migration_script.sh" > "$migration_script"; then
+        rm -f "$migration_script"
+        fail "无法生成迁移执行脚本"
+    fi
 
     output="$(run_psql -d "$DB_NAME" < "$migration_script" 2>&1)"
     status=$?
@@ -241,8 +189,8 @@ fi
 echo ""
 
 if [ "${1:-}" = "reset" ]; then
-    if [ "${CONFIRM_RESET:-}" != "DELETE_FCHAT_DB" ]; then
-        fail "reset 会删除整个数据库 $DB_NAME" "如确认用于本地开发重建，请执行：CONFIRM_RESET=DELETE_FCHAT_DB ./init_db.sh reset"
+    if [ "${CONFIRM_RESET:-}" != "DELETE_EFFCHAT_DB" ]; then
+        fail "reset 会删除整个数据库 $DB_NAME" "如确认用于本地开发重建，请执行：CONFIRM_RESET=DELETE_EFFCHAT_DB ./init_db.sh reset"
     fi
     print_step "2/5" "删除已有数据库..."
     db_ident="$(quote_ident "$DB_NAME")"
@@ -268,10 +216,6 @@ fi
 echo ""
 
 print_step "3/4" "执行 production 增量迁移链..."
-shopt -s nullglob
-migrations=("$SCRIPT_DIR"/production/*.sql)
-shopt -u nullglob
-[ ${#migrations[@]} -gt 0 ] || fail "未找到 production 迁移文件" "$SCRIPT_DIR/production/*.sql"
 apply_migrations
 echo ""
 

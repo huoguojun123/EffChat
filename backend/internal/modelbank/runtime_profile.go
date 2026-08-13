@@ -3,11 +3,12 @@ package modelbank
 import (
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 const (
 	WireProtocolOpenAICompatible = "openai-compatible"
+	WireProtocolOpenAIResponses  = "openai-responses"
 	WireProtocolAnthropicNative  = "anthropic-native"
 	WireProtocolGoogleNative     = "google-native"
 )
@@ -36,6 +37,9 @@ func RuntimeProfileForModelWithAdapter(m *model.Model, adapter string) model.Mod
 		SupportsVision:        m.Vision,
 		SupportsTools:         m.ToolUse,
 		SearchImpl:            m.SearchImpl,
+		TemperaturePolicy:     model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
+		TemperatureValue:      cloneFloat64Pointer(m.TemperatureValue),
+		OpenAIRequestProfile:  model.CloneOpenAIRequestProfile(m.OpenAIRequestProfile),
 	}
 	if len(options) > 0 {
 		profile.DefaultThinkingEffort = string(ResolveThinkingEffortForModel(format, m.ID, ""))
@@ -67,6 +71,8 @@ func inferWireProtocolWithAdapter(provider, adapter string) string {
 		return WireProtocolGoogleNative
 	case "openai_compatible":
 		return WireProtocolOpenAICompatible
+	case "openai_responses":
+		return WireProtocolOpenAIResponses
 	}
 	p := normalizeProvider(provider)
 	switch {

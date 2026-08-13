@@ -1,4 +1,4 @@
-import { ApiError, api, fetchWithTimeout, handleAuthExpired, readApiErrorMessage } from "./client"
+import { ApiError, api, downloadFilename, handleAuthExpired } from "./client"
 
 interface FileRecord {
   id: number
@@ -63,12 +63,20 @@ export interface FilePreview {
   hasMore: boolean
   isImage?: boolean
   error?: string
+  code?: string
+  retryable?: boolean
 }
 
 export interface UploadLimits {
   maxFileSizeMb: number
   maxSessionFiles: number
   allowedTypes: string[]
+}
+
+export interface FileUploadOptions {
+  signal?: AbortSignal
+  onProgress?: (loaded: number, total: number) => void
+  onProcessing?: () => void
 }
 
 function normalizeFile(file: FileRecord): FileInfo {
@@ -123,11 +131,11 @@ export const filesApi = {
     }
   },
 
-  async upload(file: File, sessionId: number): Promise<FileInfo> {
+  async upload(file: File, sessionId: number, options: FileUploadOptions = {}): Promise<FileInfo> {
     const form = new FormData()
     form.append("file", file)
     form.append("session_id", String(sessionId))
-    const uploaded = await api.upload<FileRecord>("/files", form)
+    const uploaded = await uploadFileRequest<FileRecord>(form, options)
     return normalizeFile(uploaded)
   },
 
@@ -151,7 +159,7 @@ export const filesApi = {
   async preview(id: number, maxChars = 16000, cursor = ""): Promise<FilePreview> {
     const params = new URLSearchParams({ max_chars: String(maxChars) })
     if (cursor) params.set("cursor", cursor)
-    const res = await api.get<{ file: FileRecord; content?: string; truncated?: boolean; next_cursor?: string; has_more?: boolean; is_image?: boolean; error?: string }>(`/files/${id}/preview?${params.toString()}`)
+    const res = await api.get<{ file: FileRecord; content?: string; truncated?: boolean; next_cursor?: string; has_more?: boolean; is_image?: boolean; error?: string; code?: string; retryable?: boolean }>(`/files/${id}/preview?${params.toString()}`)
     return {
       file: normalizeFile(res.file),
       content: res.content || "",
@@ -160,6 +168,8 @@ export const filesApi = {
       hasMore: Boolean(res.has_more),
       isImage: Boolean(res.is_image),
       error: res.error,
+      code: res.code,
+      retryable: res.retryable,
     }
   },
 
@@ -181,29 +191,88 @@ export const filesApi = {
 
   // 文件路由在鉴权组下，<a href> / <img src> 带不上 Authorization header，
   // 因此用带 token 的 fetch 拿 blob，再触发临时 <a download>。
-  async downloadBlob(id: number, filename: string): Promise<void> {
-    const blob = await fetchFileBlob(id)
+  async downloadBlob(id: number, fallbackFilename: string, signal?: AbortSignal): Promise<void> {
+    const { blob, filename } = await fetchFileDownload(id, signal)
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
     a.href = url
-    a.download = filename
+    // The handler is authoritative: documents are served as extracted text,
+    // while images retain their original binary filename. The fallback only
+    // protects an older or intermediary response that dropped the header.
+    a.download = filename || fallbackFilename
     document.body.appendChild(a)
     a.click()
     a.remove()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   },
 }
 
-// fetchFileBlob 用 localStorage 里的 token 鉴权拉取文件二进制，供下载与图片缩略图复用。
-export async function fetchFileBlob(id: number): Promise<Blob> {
-  const token = localStorage.getItem("token")
-  const res = await fetchWithTimeout(`/api/v1/files/${id}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  }, 60000)
-  if (!res.ok) {
-    const message = await readApiErrorMessage(res)
-    if (res.status === 401 && token) handleAuthExpired(token)
-    throw new ApiError(res.status, message || `下载失败 (HTTP ${res.status})`)
+function uploadFileRequest<T>(form: FormData, options: FileUploadOptions): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const token = localStorage.getItem("token")
+    const xhr = new XMLHttpRequest()
+    let settled = false
+
+    const finish = (callback: () => void) => {
+      if (settled) return
+      settled = true
+      options.signal?.removeEventListener("abort", abort)
+      callback()
+    }
+    const abort = () => xhr.abort()
+
+    xhr.open("POST", "/api/v1/files")
+    xhr.timeout = 180000
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`)
+    xhr.upload.addEventListener("progress", (event) => {
+      const total = event.lengthComputable ? event.total : 0
+      options.onProgress?.(event.loaded, total)
+    })
+    xhr.upload.addEventListener("load", () => options.onProcessing?.())
+    xhr.addEventListener("load", () => {
+      const body = parseXHRBody(xhr.responseText)
+      if (xhr.status < 200 || xhr.status >= 300) {
+        if (xhr.status === 401 && token) handleAuthExpired(token)
+        finish(() => reject(new ApiError(xhr.status, body.error || `上传失败 (HTTP ${xhr.status})`, {
+          code: body.code,
+          retryable: body.retryable,
+          requestId: body.request_id,
+        })))
+        return
+      }
+      finish(() => resolve(body as T))
+    })
+    xhr.addEventListener("error", () => finish(() => reject(new ApiError(0, "网络连接失败，请检查后端服务或网络"))))
+    xhr.addEventListener("timeout", () => finish(() => reject(new ApiError(0, "请求超时，请稍后重试"))))
+    xhr.addEventListener("abort", () => finish(() => reject(new ApiError(0, "上传已取消", { code: "request_cancelled", retryable: true }))))
+
+    if (options.signal?.aborted) {
+      finish(() => reject(new ApiError(0, "上传已取消", { code: "request_cancelled", retryable: true })))
+      return
+    }
+    options.signal?.addEventListener("abort", abort, { once: true })
+    xhr.send(form)
+  })
+}
+
+function parseXHRBody(raw: string): { error?: string; code?: string; retryable?: boolean; request_id?: string } & Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
   }
-  return res.blob()
+}
+
+// fetchFileBlob 用 localStorage 里的 token 鉴权拉取文件二进制，供下载与图片缩略图复用。
+export async function fetchFileBlob(id: number, signal?: AbortSignal): Promise<Blob> {
+  return (await fetchFileDownload(id, signal)).blob
+}
+
+async function fetchFileDownload(id: number, signal?: AbortSignal): Promise<{ blob: Blob; filename: string }> {
+  const res = await api.download(`/files/${id}`, { timeoutMs: 60000, signal })
+  return {
+    blob: await res.blob(),
+    filename: downloadFilename(res.headers.get("Content-Disposition")),
+  }
 }

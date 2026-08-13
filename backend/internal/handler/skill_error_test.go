@@ -63,8 +63,18 @@ func TestWriteSkillErrorContract(t *testing.T) {
 func TestSkillHandlersClassifyRepositoryFailures(t *testing.T) {
 	t.Run("missing Skill", func(t *testing.T) {
 		db := setupHandlerTestDB(t)
+		const adminUserID = int64(91008)
+		if _, err := db.Exec(
+			`INSERT INTO users (id, username, password_hash, role, is_active, permissions, preferences)
+			 VALUES ($1, $2, 'fixture-hash', 'admin', true, '{}', '{}')`,
+			adminUserID,
+			fmt.Sprintf("skill_contract_%d", adminUserID),
+		); err != nil {
+			t.Fatalf("seed Skill admin actor: %v", err)
+		}
+		t.Cleanup(func() { _, _ = db.Exec("DELETE FROM users WHERE id = $1", adminUserID) })
 		svc := service.NewSkillService(repository.NewSkillRepository(db), repository.NewUserRepository(db), repository.NewSessionRepository(db))
-		recorder := serveSkillHandler(http.MethodPatch, "/admin/skills/:id", "/admin/skills/missing", []byte(`{"name":"fixture"}`), 0, UpdateSkillHandler(svc))
+		recorder := serveSkillHandler(http.MethodPatch, "/admin/skills/:id", "/admin/skills/missing", []byte(`{"name":"fixture"}`), adminUserID, UpdateSkillHandler(svc))
 		assertSkillHandlerError(t, recorder, http.StatusNotFound, "skill_not_found", false, false)
 	})
 

@@ -28,5 +28,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Added release-mode JWT secret validation, bounded authentication attempts,
   restricted backend port exposure, proxy trust controls, and security headers.
+- Refreshed compatible frontend dependency patches for Mermaid rendering,
+  sanitization, identifier generation, and build-time URI/glob processing.
 
 [Unreleased]: https://github.com/huoguojun123/EffChat/commits/main

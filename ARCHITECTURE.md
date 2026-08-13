@@ -1,6 +1,6 @@
 # EffChat 架构文档
 
-适用版本：pre-release 0.3.4
+适用版本：0.3.4-beta.1 release candidate
 
 EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主线是 Web-first：React 前端、Go API、PostgreSQL、Python extractor sidecar，以及基于 Eino 的统一 Agent。
 

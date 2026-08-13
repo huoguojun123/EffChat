@@ -7,7 +7,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-> Target candidate: `pre-release 0.3.4`. No `v0.3.4` release or tag exists yet.
+## [0.3.4-beta.1] - 2026-08-13
+
+> Release branch prepared. The `v0.3.4-beta.1` tag will only be created after
+> pull-request and `main` GitHub Actions complete successfully.
 
 ### Added
 
@@ -31,4 +34,5 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/commits/main
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.3.4-beta.1...HEAD
+[0.3.4-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.1

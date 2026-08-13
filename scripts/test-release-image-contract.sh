@@ -21,6 +21,21 @@ require_count() {
 require_count 2 '          username: ${{ secrets.DOCKERHUB_USERNAME }}'
 require_count 2 '          password: ${{ secrets.DOCKERHUB_TOKEN }}'
 
+# verify-release-ref.sh reads completed check runs through the GitHub API, so
+# the verify job must explicitly retain read access when job permissions narrow
+# the workflow-level token.
+verify_permissions="$({
+  awk '
+    /^  verify:$/ { in_verify = 1 }
+    in_verify && /^    steps:$/ { exit }
+    in_verify { print }
+  ' "$WORKFLOW"
+})"
+if ! grep -Fxq '      checks: read' <<<"$verify_permissions"; then
+  echo "release verify job must grant checks: read" >&2
+  exit 1
+fi
+
 # One Buildx invocation publishes the same staging manifest to both
 # registries. Promotion happens only after all three component builds finish.
 require_count 1 '            ghcr.io/huoguojun123/${{ matrix.component.image }}'

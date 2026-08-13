@@ -1,6 +1,10 @@
 package service
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 const (
@@ -25,6 +29,7 @@ type SkillService struct {
 	skillRepo         *repository.SkillRepository
 	userRepo          *repository.UserRepository
 	sessionRepo       *repository.SessionRepository
+	governanceRepo    *repository.GovernanceRepository
 	packageMu         sync.Mutex
 	cleanupMu         sync.Mutex
 	cleanupTimer      *time.Timer
@@ -33,6 +38,10 @@ type SkillService struct {
 
 func NewSkillService(skillRepo *repository.SkillRepository, userRepo *repository.UserRepository, sessionRepo *repository.SessionRepository) *SkillService {
 	return &SkillService{skillRepo: skillRepo, userRepo: userRepo, sessionRepo: sessionRepo}
+}
+
+func (s *SkillService) SetGovernanceRepository(repo *repository.GovernanceRepository) {
+	s.governanceRepo = repo
 }
 
 type SkillResponse struct {
@@ -108,10 +117,11 @@ type SkillFileInput struct {
 }
 
 type SkillGitImportRequest struct {
-	URL           string              `json:"url" binding:"required"`
-	Ref           string              `json:"ref"`
-	SelectedPaths []string            `json:"selected_paths"`
-	SelectedFiles map[string][]string `json:"selected_files"`
+	URL            string              `json:"url" binding:"required"`
+	Ref            string              `json:"ref"`
+	SelectedPaths  []string            `json:"selected_paths"`
+	SelectedFiles  map[string][]string `json:"selected_files"`
+	TargetSkillIDs map[string]string   `json:"target_skill_ids"`
 }
 
 type SkillGitPreviewRequest struct {
@@ -147,8 +157,19 @@ type SkillZipPreviewResult struct {
 }
 
 type SkillImportResult struct {
-	Skills []*SkillResponse         `json:"skills"`
-	Report skillparser.ImportReport `json:"report"`
+	Skills    []*SkillResponse         `json:"skills"`
+	Created   []string                 `json:"created"`
+	Updated   []string                 `json:"updated"`
+	Unchanged []string                 `json:"unchanged"`
+	Report    skillparser.ImportReport `json:"report"`
+}
+
+type preparedSkillPackage struct {
+	skill       *model.Skill
+	parsedFiles []skillparser.ParsedSkillFile
+	record      *model.SkillImportRecord
+	patch       repository.SkillMetadataPatch
+	mutation    repository.SkillGovernanceMutation
 }
 
 type SkillUpdateGitPreviewRequest struct {
@@ -236,20 +257,24 @@ func (s *SkillService) ListForUser(userID int64) ([]*SkillResponse, error) {
 }
 
 func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillResponse, error) {
+	return s.CreateManualContext(context.Background(), userID, req)
+}
+
+func (s *SkillService) CreateManualContext(ctx context.Context, userID int64, req *SkillInput) (*SkillResponse, error) {
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
 	parsed, err := parseManualSkill(req)
 	if err != nil {
-		return nil, err
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill package", err)
 	}
 	id := normalizeSkillID(req.ID)
 	if id == "" {
 		id = normalizeSkillID(req.Name)
 	}
 	if id == "" {
-		return nil, fmt.Errorf("invalid skill id")
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill id", nil)
 	}
 	parsed.ID = id
 	parsed.Name = strings.TrimSpace(req.Name)
@@ -273,74 +298,126 @@ func (s *SkillService) CreateManual(userID int64, req *SkillInput) (*SkillRespon
 	action := "create"
 	if _, err := s.skillRepo.Get(skill.ID, true); err == nil {
 		action = "update"
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
 	}
 	record := s.buildImportRecord(action, skill, parsed, parsed.Files, skillparser.ImportReport{}, &userID)
-	if err := s.persistSkillPackage(skill, parsed.Files, record); err != nil {
+	mutation := repository.SkillGovernanceMutation{
+		Action: action, ActorType: "admin", ActorUserID: userID,
+		Reason: normalizeGovernanceReason("", "admin saved manual Skill package"),
+	}
+	if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, repository.FullSkillMetadataPatch(skill), mutation); err != nil {
 		return nil, err
 	}
 	return toSkillResponse(skill, true), nil
 }
 
-func (s *SkillService) Update(id string, req *SkillUpdateInput) (*SkillResponse, error) {
-	skill, err := s.skillRepo.Get(id, true)
+func (s *SkillService) Update(userID int64, id string, req *SkillUpdateInput) (*SkillResponse, error) {
+	return s.UpdateContext(context.Background(), userID, id, req)
+}
+
+func (s *SkillService) UpdateContext(ctx context.Context, userID int64, id string, req *SkillUpdateInput) (*SkillResponse, error) {
+	if userID <= 0 {
+		return nil, newSkillError(SkillErrorInvalid, "admin actor is required", nil)
+	}
+	patch, err := skillMetadataPatchFromUpdate(req)
 	if err != nil {
 		return nil, err
 	}
-	if req.Name != nil {
-		skill.Name = strings.TrimSpace(*req.Name)
-	}
-	if req.Description != nil {
-		skill.Description = strings.TrimSpace(*req.Description)
-	}
-	if req.Enabled != nil {
-		skill.Enabled = *req.Enabled
-	}
-	if req.MinGroupLevel != nil {
-		if *req.MinGroupLevel < 0 {
-			return nil, fmt.Errorf("min_group_level must be >= 0")
-		}
-		skill.MinGroupLevel = *req.MinGroupLevel
-	}
-	if strings.TrimSpace(skill.Name) == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-	if req.EntryContent != nil {
-		parsed, err := parseManualSkill(&SkillInput{
-			ID:            skill.ID,
-			Name:          skill.Name,
-			Description:   skill.Description,
-			EntryContent:  *req.EntryContent,
-			Files:         req.Files,
-			Enabled:       &skill.Enabled,
-			MinGroupLevel: skill.MinGroupLevel,
+	if req.EntryContent == nil {
+		skill, _, err := s.skillRepo.UpdateMetadataGoverned(ctx, id, patch, repository.SkillGovernanceMutation{
+			Action: "update", ActorType: "admin", ActorUserID: userID,
+			Reason: "admin updated Skill metadata",
 		})
+		if err != nil {
+			if errors.Is(err, repository.ErrNotFound) {
+				return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+			}
+			return nil, err
+		}
+		files, err := s.skillRepo.ListFiles(skill.ID)
 		if err != nil {
 			return nil, err
 		}
-		skill.Checksum = parsed.Checksum
-		skill.PackageChecksum = parsed.PackageChecksum
-		skill.SourcePath = &parsed.SourcePath
-		skill.EntryPath = "SKILL.md"
-		record := s.buildImportRecord("update", skill, parsed, parsed.Files, skillparser.ImportReport{}, skill.CreatedBy)
-		if err := s.persistSkillPackage(skill, parsed.Files, record); err != nil {
-			return nil, err
-		}
+		skill.Files = files
 		return toSkillResponse(skill, true), nil
 	}
-	if err := s.skillRepo.UpdateMetadata(skill); err != nil {
+
+	skill, err := s.skillRepo.Get(id, true)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
-	files, _ := s.skillRepo.ListFiles(skill.ID)
-	skill.Files = files
+	patch.Apply(skill)
+	if strings.TrimSpace(skill.Name) == "" {
+		return nil, newSkillError(SkillErrorInvalid, "name is required", nil)
+	}
+	parsed, err := parseManualSkill(&SkillInput{
+		ID:            skill.ID,
+		Name:          skill.Name,
+		Description:   skill.Description,
+		EntryContent:  *req.EntryContent,
+		Files:         req.Files,
+		Enabled:       &skill.Enabled,
+		MinGroupLevel: skill.MinGroupLevel,
+	})
+	if err != nil {
+		return nil, newSkillError(SkillErrorInvalid, "invalid Skill package", err)
+	}
+	skill.Checksum = parsed.Checksum
+	skill.PackageChecksum = parsed.PackageChecksum
+	skill.SourcePath = &parsed.SourcePath
+	skill.EntryPath = "SKILL.md"
+	record := s.buildImportRecord("update", skill, parsed, parsed.Files, skillparser.ImportReport{}, &userID)
+	mutation := repository.SkillGovernanceMutation{
+		Action: "update", ActorType: "admin", ActorUserID: userID,
+		Reason: "admin updated manual Skill package",
+	}
+	if err := s.persistSkillPackage(ctx, skill, parsed.Files, record, patch, mutation); err != nil {
+		return nil, err
+	}
 	return toSkillResponse(skill, true), nil
 }
 
-func (s *SkillService) Delete(id string) error {
+func skillMetadataPatchFromUpdate(req *SkillUpdateInput) (repository.SkillMetadataPatch, error) {
+	patch := repository.SkillMetadataPatch{Enabled: req.Enabled, MinGroupLevel: req.MinGroupLevel}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return repository.SkillMetadataPatch{}, newSkillError(SkillErrorInvalid, "name is required", nil)
+		}
+		patch.Name = &name
+	}
+	if req.Description != nil {
+		description := strings.TrimSpace(*req.Description)
+		patch.Description = &description
+	}
+	if req.MinGroupLevel != nil && *req.MinGroupLevel < 0 {
+		return repository.SkillMetadataPatch{}, newSkillError(SkillErrorInvalid, "min_group_level must be >= 0", nil)
+	}
+	return patch, nil
+}
+
+func (s *SkillService) Delete(userID int64, id string) error {
+	if userID <= 0 {
+		return newSkillError(SkillErrorInvalid, "admin actor is required", nil)
+	}
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
 
-	paths, _ := s.skillRepo.FilePathsForSkill(id)
-	if err := s.skillRepo.Delete(id); err != nil {
+	paths, err := s.skillRepo.FilePathsForSkill(id)
+	if err != nil {
+		return err
+	}
+	if _, err := s.skillRepo.DeleteGoverned(context.Background(), id, repository.SkillGovernanceMutation{
+		Action: "delete", ActorType: "admin", ActorUserID: userID,
+		Reason: "admin deleted Skill",
+	}); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return err
 	}
 	markSkillPackageRootsForDelayedCleanup(paths, "")
@@ -348,8 +425,56 @@ func (s *SkillService) Delete(id string) error {
 	return nil
 }
 
+func (s *SkillService) ListHistory(id string) ([]*model.GovernanceEvent, error) {
+	if s == nil || s.governanceRepo == nil {
+		return nil, fmt.Errorf("skill governance repository is not available")
+	}
+	return s.governanceRepo.List(context.Background(), "skill", normalizeSkillID(id), 50)
+}
+
+func (s *SkillService) Rollback(userID, eventID int64, reason string) (*SkillResponse, *model.GovernanceEvent, error) {
+	if userID <= 0 || eventID <= 0 {
+		return nil, nil, newSkillError(SkillErrorInvalid, "actor and governance event are required", nil)
+	}
+	s.packageMu.Lock()
+	defer s.packageMu.Unlock()
+
+	skillID, files, err := s.skillRepo.RollbackFiles(eventID)
+	if err != nil {
+		return nil, nil, classifySkillGovernanceError(err)
+	}
+	if err := validateRetainedSkillFiles(files); err != nil {
+		return nil, nil, newSkillError(SkillErrorConflict, "retained Skill package is unavailable", err)
+	}
+	var oldPaths []string
+	oldPaths, err = s.skillRepo.FilePathsForSkill(skillID)
+	if err != nil {
+		return nil, nil, err
+	}
+	restored, event, err := s.skillRepo.RollbackGoverned(context.Background(), eventID, repository.SkillGovernanceMutation{
+		Action: "rollback", ActorType: "admin", ActorUserID: userID,
+		Reason: normalizeGovernanceReason(reason, "admin rolled back Skill change"),
+	})
+	if err != nil {
+		return nil, nil, classifySkillGovernanceError(err)
+	}
+	keepRoot := ""
+	if len(files) > 0 {
+		keepRoot = skillPackageRootFromPath(files[0].StoragePath)
+	}
+	markSkillPackageRootsForDelayedCleanup(oldPaths, keepRoot)
+	s.scheduleSkillPackageCleanup()
+	if restored == nil {
+		return nil, event, nil
+	}
+	return toSkillResponse(restored, true), event, nil
+}
+
 func (s *SkillService) ListFilesAdmin(id string) ([]SkillFileResponse, error) {
 	if _, err := s.skillRepo.Get(id, true); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	files, err := s.skillRepo.ListFiles(id)
@@ -361,6 +486,9 @@ func (s *SkillService) ListFilesAdmin(id string) ([]SkillFileResponse, error) {
 
 func (s *SkillService) ReadFileAdmin(id, path string) (string, *SkillFileResponse, error) {
 	if _, err := s.skillRepo.Get(id, true); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return "", nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return "", nil, err
 	}
 	return s.readSkillFile(id, path)
@@ -391,6 +519,9 @@ func (s *SkillService) visibleSkillForUser(userID int64, id string) (*model.Skil
 	}
 	skill, err := s.skillRepo.Get(id, false)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, newSkillError(SkillErrorNotFound, "Skill not found", err)
+		}
 		return nil, err
 	}
 	groupLevel, err := s.groupLevelForUser(user)
@@ -398,7 +529,7 @@ func (s *SkillService) visibleSkillForUser(userID int64, id string) (*model.Skil
 		return nil, err
 	}
 	if !skillAllowedForUser(user, groupLevel, skill) {
-		return nil, fmt.Errorf("skill not found")
+		return nil, newSkillError(SkillErrorNotFound, "Skill not found", nil)
 	}
 	return skill, nil
 }
@@ -406,10 +537,13 @@ func (s *SkillService) visibleSkillForUser(userID int64, id string) (*model.Skil
 func (s *SkillService) readSkillFile(id, path string) (string, *SkillFileResponse, error) {
 	path = normalizeSkillFilePath(path)
 	if path == "" {
-		return "", nil, fmt.Errorf("invalid skill file path")
+		return "", nil, newSkillError(SkillErrorInvalid, "invalid Skill file path", nil)
 	}
 	file, err := s.skillRepo.GetFile(id, path)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return "", nil, newSkillError(SkillErrorNotFound, "Skill file not found", err)
+		}
 		return "", nil, err
 	}
 	content, err := readStoredSkillFile(file.StoragePath)
@@ -523,11 +657,18 @@ var skillUploadDir = filepolicy.SkillRoot
 
 var skillPackageGracePeriod = 16 * time.Minute
 
-func (s *SkillService) persistSkillPackage(skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord) error {
+// persistSkillPackage writes a content-addressed immutable root before the
+// governed database update. The database becomes the package owner only after
+// that update commits; failed roots remain unreferenced, while superseded roots
+// enter delayed cleanup so in-flight readers can finish on the old version.
+func (s *SkillService) persistSkillPackage(ctx context.Context, skill *model.Skill, parsedFiles []skillparser.ParsedSkillFile, record *model.SkillImportRecord, patch repository.SkillMetadataPatch, mutation repository.SkillGovernanceMutation) error {
 	s.packageMu.Lock()
 	defer s.packageMu.Unlock()
 
-	oldPaths, _ := s.skillRepo.FilePathsForSkill(skill.ID)
+	oldPaths, err := s.skillRepo.FilePathsForSkill(skill.ID)
+	if err != nil {
+		return err
+	}
 	files, packageRoot, err := writeSkillPackage(skill.ID, skill.PackageChecksum, parsedFiles)
 	if err != nil {
 		s.scheduleSkillPackageCleanup()
@@ -537,13 +678,89 @@ func (s *SkillService) persistSkillPackage(skill *model.Skill, parsedFiles []ski
 		record.SelectedFiles = marshalSelectedSkillFiles(parsedFiles)
 		record.FileManifest = marshalSkillFileManifest(files)
 	}
-	if err := s.skillRepo.UpsertPackageWithRecord(skill, files, record); err != nil {
+	if _, err := s.skillRepo.UpsertPackageGoverned(ctx, skill, files, record, patch, mutation); err != nil {
 		s.scheduleSkillPackageCleanup()
 		return err
 	}
 	markSkillPackageRootsForDelayedCleanup(oldPaths, packageRoot)
 	s.scheduleSkillPackageCleanup()
 	return nil
+}
+
+// persistSkillPackages prepares immutable package roots before opening the
+// database transaction. The batch becomes active only after every package,
+// import record, and governance event commits together; failed roots remain
+// unreferenced and are reclaimed by the existing delayed cleanup.
+func (s *SkillService) persistSkillPackages(packages []preparedSkillPackage) error {
+	if len(packages) == 0 {
+		return nil
+	}
+	s.packageMu.Lock()
+	defer s.packageMu.Unlock()
+
+	type preparedWrite struct {
+		oldPaths    []string
+		packageRoot string
+		upsert      repository.GovernedSkillPackage
+	}
+	writes := make([]preparedWrite, 0, len(packages))
+	for _, item := range packages {
+		oldPaths, err := s.skillRepo.FilePathsForSkill(item.skill.ID)
+		if err != nil {
+			return err
+		}
+		files, packageRoot, err := writeSkillPackage(item.skill.ID, item.skill.PackageChecksum, item.parsedFiles)
+		if err != nil {
+			s.scheduleSkillPackageCleanup()
+			return err
+		}
+		item.record.SelectedFiles = marshalSelectedSkillFiles(item.parsedFiles)
+		item.record.FileManifest = marshalSkillFileManifest(files)
+		writes = append(writes, preparedWrite{
+			oldPaths: oldPaths, packageRoot: packageRoot,
+			upsert: repository.GovernedSkillPackage{
+				Skill: item.skill, Files: files, Record: item.record, Patch: item.patch, Mutation: item.mutation,
+			},
+		})
+	}
+	upserts := make([]repository.GovernedSkillPackage, 0, len(writes))
+	for _, write := range writes {
+		upserts = append(upserts, write.upsert)
+	}
+	if err := s.skillRepo.UpsertPackagesGoverned(context.Background(), upserts); err != nil {
+		s.scheduleSkillPackageCleanup()
+		return err
+	}
+	for _, write := range writes {
+		markSkillPackageRootsForDelayedCleanup(write.oldPaths, write.packageRoot)
+	}
+	s.scheduleSkillPackageCleanup()
+	return nil
+}
+
+func validateRetainedSkillFiles(files []model.SkillImportRecordFile) error {
+	for _, file := range files {
+		content, err := readStoredSkillFile(file.StoragePath)
+		if err != nil {
+			return fmt.Errorf("read retained Skill file %s: %w", file.RelativePath, err)
+		}
+		data := []byte(content)
+		sum := sha256.Sum256(data)
+		if int64(len(data)) != file.Size || hex.EncodeToString(sum[:]) != file.Checksum {
+			return fmt.Errorf("retained Skill file %s no longer matches its manifest", file.RelativePath)
+		}
+	}
+	return nil
+}
+
+func classifySkillGovernanceError(err error) error {
+	if errors.Is(err, repository.ErrNotFound) {
+		return newSkillError(SkillErrorNotFound, "governance event or Skill not found", err)
+	}
+	if errors.Is(err, repository.ErrGovernanceConflict) {
+		return newSkillError(SkillErrorConflict, "Skill changed after this event or the event was already rolled back", err)
+	}
+	return err
 }
 
 func writeSkillPackage(skillID, packageChecksum string, parsedFiles []skillparser.ParsedSkillFile) ([]model.SkillFile, string, error) {
@@ -682,12 +899,12 @@ func (s *SkillService) cleanupExpiredSkillPackages() {
 		return
 	}
 
-	activePaths, err := s.skillRepo.ActiveFilePaths()
+	retainedPaths, err := s.skillRepo.RetainedFilePaths()
 	if err != nil {
 		return
 	}
 	activeRoots := map[string]struct{}{}
-	for _, path := range activePaths {
+	for _, path := range retainedPaths {
 		if root := skillPackageRootFromPath(path); root != "" {
 			activeRoots[root] = struct{}{}
 		}
@@ -695,6 +912,9 @@ func (s *SkillService) cleanupExpiredSkillPackages() {
 	cleanupExpiredSkillPackageRoots(skillUploadDir, activeRoots, time.Now())
 }
 
+// scheduleSkillPackageCleanup gives every package mutation a new generation.
+// A stale timer cannot sweep roots after a newer mutation has changed the
+// database owner; the eventual sweep re-reads active roots before deletion.
 func (s *SkillService) scheduleSkillPackageCleanup() {
 	s.cleanupMu.Lock()
 	defer s.cleanupMu.Unlock()

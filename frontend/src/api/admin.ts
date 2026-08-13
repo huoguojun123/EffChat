@@ -1,6 +1,7 @@
 import { api } from "./client"
 import type { FontAsset, Model, Prompt, SkillDefinition, SkillFileSummary, UserGroup } from "@/types"
 import type { PromptInput, PromptUpdate } from "./prompts"
+import { collectOffsetPages, type OffsetPage } from "./pagination"
 
 export interface AdminUser {
   id: number
@@ -8,7 +9,13 @@ export interface AdminUser {
   email?: string
   nickname?: string
   role: "admin" | "user"
-  group_id?: number
+  group_id: number | null
+  effective_group: {
+    id: number
+    name: string
+    level: number
+    inherited: boolean
+  }
   permissions?: Record<string, unknown>
   is_active: boolean
   created_at: string
@@ -60,6 +67,9 @@ export interface SkillInput {
 
 export interface SkillImportResult {
   skills: SkillDefinition[]
+  created?: string[]
+  updated?: string[]
+  unchanged?: string[]
   report: {
     imported: number
     skipped?: string[]
@@ -297,6 +307,9 @@ export interface AdminSystemStatus {
 export interface ModelTestInput {
   id: string
   provider: string
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface ModelTestResponse {
@@ -307,9 +320,11 @@ export interface ModelTestResponse {
 	duration_ms?: number
   output?: string
   error?: string
+  code?: string
+  retryable?: boolean
 }
 
-export type AIChannelAdapter = "openai_compatible" | "anthropic" | "google"
+export type AIChannelAdapter = "openai_compatible" | "openai_responses" | "anthropic" | "google"
 
 export interface AIChannel {
   id: number
@@ -384,6 +399,22 @@ export interface ToolConfigInput {
   enabled: boolean
   timeout_seconds: number
   sort_order: number
+  reason?: string
+}
+
+export interface GovernanceEvent {
+  id: number
+  resource_type: "tool" | "skill"
+  resource_key: string
+  action: "create" | "update" | "delete" | "import" | "rollback"
+  actor_type: "admin" | "import" | "system"
+  actor_user_id?: number
+  reason: string
+  before_state?: Record<string, unknown>
+  after_state?: Record<string, unknown>
+  skill_import_record_id?: number
+  rollback_of_event_id?: number
+  created_at: string
 }
 
 export interface CleanupOrphanFilesResponse {
@@ -411,6 +442,12 @@ export interface CreateModelInput {
   enabled: boolean
   min_group_level: number
   sort_order: number
+  catalog_source?: Model["catalog_source"]
+  catalog_checked_at?: string | null
+  lifecycle_status?: Model["lifecycle_status"]
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface UpdateModelInput {
@@ -426,6 +463,12 @@ export interface UpdateModelInput {
   enabled?: boolean
   min_group_level?: number
   sort_order?: number
+  catalog_source?: Model["catalog_source"]
+  catalog_checked_at?: string | null
+  lifecycle_status?: Model["lifecycle_status"]
+  temperature_policy?: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile?: Model["openai_request_profile"]
 }
 
 export interface CreateGroupInput {
@@ -460,7 +503,14 @@ export interface UpdateGroupInput {
 
 export const adminApi = {
   listUsers(limit = 100, offset = 0) {
-    return api.get<{ users: AdminUser[]; total: number }>(`/admin/users?limit=${limit}&offset=${offset}`)
+    return api.get<{ users: AdminUser[]; total: number; has_more: boolean; next_offset: number }>(`/admin/users?limit=${limit}&offset=${offset}`)
+  },
+
+  listAllUsers() {
+    return collectOffsetPages<AdminUser>(async (limit, offset): Promise<OffsetPage<AdminUser>> => {
+      const page = await adminApi.listUsers(limit, offset)
+      return { items: page.users || [], total: page.total, has_more: page.has_more, next_offset: page.next_offset }
+    })
   },
 
   updateUser(id: number, data: UpdateAdminUserInput) {
@@ -567,7 +617,15 @@ export const adminApi = {
   },
 
   saveToolConfig(data: ToolConfigInput) {
-    return api.post<ToolConfig>("/admin/tools", data)
+    return api.post<{ tool: ToolConfig; event: GovernanceEvent }>("/admin/tools", data)
+  },
+
+  listToolConfigHistory(key: string) {
+    return api.get<{ events: GovernanceEvent[] }>(`/admin/tools/${encodeURIComponent(key)}/history`)
+  },
+
+  rollbackToolConfigEvent(eventId: number, reason?: string) {
+    return api.post<{ tool: ToolConfig | null; event: GovernanceEvent }>(`/admin/tools/events/${eventId}/rollback`, { reason })
   },
 
   cleanupOrphanFiles(params?: { older_than_hours?: number; limit?: number }) {
@@ -605,7 +663,14 @@ export const adminApi = {
   },
 
   listPrompts(limit = 100, offset = 0) {
-    return api.get<{ prompts: Prompt[]; total: number }>(`/admin/prompts?limit=${limit}&offset=${offset}`)
+    return api.get<{ prompts: Prompt[]; total: number; has_more: boolean; next_offset: number }>(`/admin/prompts?limit=${limit}&offset=${offset}`)
+  },
+
+  listAllPrompts() {
+    return collectOffsetPages<Prompt>(async (limit, offset): Promise<OffsetPage<Prompt>> => {
+      const page = await adminApi.listPrompts(limit, offset)
+      return { items: page.prompts || [], total: page.total, has_more: page.has_more, next_offset: page.next_offset }
+    })
   },
 
   createPrompt(data: PromptInput) {
@@ -650,6 +715,14 @@ export const adminApi = {
     return api.get<{ records: SkillImportRecord[] }>(`/admin/skills/${encodeURIComponent(id)}/import-records`)
   },
 
+  listSkillHistory(id: string) {
+    return api.get<{ events: GovernanceEvent[] }>(`/admin/skills/${encodeURIComponent(id)}/history`)
+  },
+
+  rollbackSkillEvent(eventId: number, reason?: string) {
+    return api.post<{ skill: SkillDefinition | null; event: GovernanceEvent }>(`/admin/skills/events/${eventId}/rollback`, { reason })
+  },
+
   previewSkillGitUpdate(id: string, ref?: string) {
     return api.post<SkillUpdatePreviewResult>(`/admin/skills/${encodeURIComponent(id)}/update/git/preview`, { ref })
   },
@@ -677,8 +750,14 @@ export const adminApi = {
     return api.upload<SkillImportResult>(`/admin/skills/${encodeURIComponent(id)}/update/zip`, form)
   },
 
-  importSkillsFromGit(url: string, ref?: string, selectedPaths?: string[], selectedFiles?: Record<string, string[]>) {
-    return api.post<SkillImportResult>("/admin/skills/import/git", { url, ref, selected_paths: selectedPaths, selected_files: selectedFiles })
+  importSkillsFromGit(url: string, ref?: string, selectedPaths?: string[], selectedFiles?: Record<string, string[]>, targetSkillIds?: Record<string, string>) {
+    return api.post<SkillImportResult>("/admin/skills/import/git", {
+      url,
+      ref,
+      selected_paths: selectedPaths,
+      selected_files: selectedFiles,
+      target_skill_ids: targetSkillIds,
+    })
   },
 
   previewSkillsFromGit(url: string, ref?: string) {
@@ -691,11 +770,12 @@ export const adminApi = {
     return api.upload<SkillZipPreviewResult>("/admin/skills/import/zip/preview", form)
   },
 
-  importSkillsFromZip(file: File, selectedPaths?: string[], selectedFiles?: Record<string, string[]>) {
+  importSkillsFromZip(file: File, selectedPaths?: string[], selectedFiles?: Record<string, string[]>, targetSkillIds?: Record<string, string>) {
     const form = new FormData()
     form.append("file", file)
     if (selectedPaths) form.append("selected_paths", JSON.stringify(selectedPaths))
     if (selectedFiles) form.append("selected_files", JSON.stringify(selectedFiles))
+    if (targetSkillIds) form.append("target_skill_ids", JSON.stringify(targetSkillIds))
     return api.upload<SkillImportResult>("/admin/skills/import/zip", form)
   },
 
@@ -715,7 +795,7 @@ export const adminApi = {
   },
 
   updateFont(id: number, data: FontInput) {
-    return api.patch<FontAsset>(`/admin/fonts/${id}`, data)
+    return api.patch<{ font: FontAsset; selected_font_ids: ChatFontSelection }>(`/admin/fonts/${id}`, data)
   },
 
   selectFont(id: number | null, slot?: keyof ChatFontSelection) {
@@ -723,6 +803,6 @@ export const adminApi = {
   },
 
   deleteFont(id: number) {
-    return api.delete<{ message: string }>(`/admin/fonts/${id}`)
+    return api.delete<{ message: string; selected_font_ids: ChatFontSelection }>(`/admin/fonts/${id}`)
   },
 }

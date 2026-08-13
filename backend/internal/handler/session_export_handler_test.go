@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 func TestExportSessionMarkdownHandlerUsesCompleteSelectedHistory(t *testing.T) {

@@ -17,11 +17,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func init() {
@@ -71,6 +72,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	sessionFolderRepo := repository.NewSessionFolderRepository(db)
 	messageRepo := repository.NewMessageRepository(db)
 	configRepo := repository.NewConfigRepository(db)
+	memoryRepo := repository.NewSessionMemoryRepository(db)
 	fileRepo := repository.NewFileRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 	modelRepo := repository.NewModelRepository(db)
@@ -83,10 +85,29 @@ func setupTestEnv(t *testing.T) *testEnv {
 	if err := modelRepo.Upsert(&model.Model{ID: "gpt-4o-mini", DisplayName: "Handler test model", Provider: channelKey, ContextWindow: 4096, MaxOutput: 1024, Enabled: true, ThinkingFormat: "auto"}); err != nil {
 		t.Fatalf("seed test model: %v", err)
 	}
+	previousModel := modelbank.Get("gpt-4o-mini")
+	modelbank.Register(&modelbank.ModelInfo{
+		ID:             "gpt-4o-mini",
+		DisplayName:    "Handler test model",
+		Provider:       channelKey,
+		Enabled:        true,
+		ThinkingFormat: "auto",
+		Capabilities: modelbank.ModelCapabilities{
+			ContextWindow: 4096,
+			MaxOutput:     1024,
+		},
+	})
+	if previousModel != nil {
+		t.Cleanup(func() { modelbank.Register(previousModel) })
+	}
+	if err := configRepo.Update("default_model_id", json.RawMessage(`"gpt-4o-mini"`)); err != nil {
+		t.Fatalf("seed test default model: %v", err)
+	}
 
 	authService := service.NewAuthService(userRepo, "test-handler-secret")
 	sessionService := service.NewSessionService(sessionRepo, messageRepo, configRepo, sessionFolderRepo)
 	sessionService.SetRuntimeModelDependencies(modelRepo, channelService, userRepo)
+	modelService := service.NewModelService(modelRepo, channelService)
 	messageService := service.NewMessageService(messageRepo, sessionRepo, fileRepo, repository.NewAnswerAttemptRepository(db))
 	sessionFolderService := service.NewSessionFolderService(sessionFolderRepo)
 
@@ -100,12 +121,14 @@ func setupTestEnv(t *testing.T) *testEnv {
 	auth := r.Group("/api/v1")
 	auth.Use(middleware.AuthMiddleware(authService))
 	{
+		auth.GET("/sessions/readiness", SessionCreateReadinessHandler(sessionService))
 		auth.POST("/sessions", CreateSessionHandler(sessionService))
 		auth.GET("/sessions", ListSessionsHandler(sessionService))
 		auth.GET("/sessions/:id", GetSessionHandler(sessionService))
 		auth.PATCH("/sessions/:id", UpdateSessionHandler(sessionService))
 		auth.DELETE("/sessions/:id", DeleteSessionHandler(sessionService))
 		auth.GET("/sessions/:id/export.md", ExportSessionMarkdownHandler(messageService))
+		auth.PUT("/sessions/:id/memory", SaveSessionMemoryHandler(sessionService, memoryRepo, nil, configRepo))
 		auth.GET("/sessions/:id/messages", ListMessagesHandler(messageService))
 		auth.POST("/sessions/:id/answer-attempts/:attempt_id/select", SelectAnswerAttemptHandler(messageService, sessionService, authService, nil))
 		auth.GET("/session-folders", ListSessionFoldersHandler(sessionFolderService))
@@ -115,8 +138,12 @@ func setupTestEnv(t *testing.T) *testEnv {
 		auth.POST("/files", UploadFileHandler(fileRepo, configRepo))
 		auth.GET("/files", ListFilesHandler(fileRepo))
 		auth.DELETE("/files/:id", DeleteFileHandler(fileRepo))
-		auth.GET("/files/upload-limits", UploadLimitsHandler(configRepo))
+		auth.GET("/files/upload-limits", UploadLimitsHandler(configRepo, defaultDeploymentUploadMaxBytes))
 		auth.POST("/files/:id/ocr-refresh", RefreshOCRFileHandler(fileRepo, nil, nil))
+
+		admin := auth.Group("/admin")
+		admin.Use(middleware.AdminMiddleware())
+		admin.PATCH("/config", UpdateConfigBatchHandler(configRepo, modelService))
 	}
 
 	// Register a test user and get token
@@ -157,6 +184,9 @@ func setupTestEnv(t *testing.T) *testEnv {
 		regResp.Approved = true
 		regResp.Token = loginResp.Token
 		regResp.User = loginResp.User
+	}
+	if regResp.User.Role != "admin" {
+		t.Fatalf("isolated handler fixture role=%q, want admin", regResp.User.Role)
 	}
 
 	t.Cleanup(func() {
@@ -382,7 +412,7 @@ func TestSelectAnswerAttemptHandlerSwitchesVisibleAnswerAndNavigation(t *testing
 	rejectedPayload := struct {
 		Code string `json:"code"`
 	}{}
-	if err := json.Unmarshal(rejected.Body.Bytes(), &rejectedPayload); err != nil || rejectedPayload.Code != "answer_attempt_not_latest" {
+	if err := json.Unmarshal(rejected.Body.Bytes(), &rejectedPayload); err != nil || rejectedPayload.Code != "answer_attempt_not_selectable" {
 		t.Fatalf("compressed selection payload=%+v err=%v", rejectedPayload, err)
 	}
 }
@@ -450,7 +480,7 @@ func TestFilesHandler_ListsAndDeletesReferencedAttachment(t *testing.T) {
 	}
 
 	filePath := fmt.Sprintf("./storage/attachments/extracted/%d/referenced_%d.txt", env.userID, time.Now().UnixNano())
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filePath, []byte("attachment"), 0o600); err != nil {
@@ -520,8 +550,8 @@ func TestRegister_DuplicateUsername(t *testing.T) {
 
 	// Second register with same username
 	w = env.doRequest(http.MethodPost, "/api/v1/auth/register", body)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("duplicate register: want 400, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Errorf("duplicate register: want 409, got %d", w.Code)
 	}
 }
 
@@ -649,11 +679,25 @@ func TestSessionCRUD(t *testing.T) {
 	if !session.MemoryEnabled {
 		t.Error("memory_enabled: want true by default")
 	}
+	var createPayload map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &createPayload); err != nil {
+		t.Fatalf("decode create session payload: %v", err)
+	}
+	if _, ok := createPayload["metadata"].(map[string]interface{}); !ok {
+		t.Fatalf("create metadata must be an object: %#v", createPayload["metadata"])
+	}
 
 	// Get
 	w = env.doRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d", session.ID), nil)
 	if w.Code != http.StatusOK {
 		t.Errorf("get session: want 200, got %d", w.Code)
+	}
+	var getPayload map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &getPayload); err != nil {
+		t.Fatalf("decode get session payload: %v", err)
+	}
+	if _, ok := getPayload["metadata"].(map[string]interface{}); !ok {
+		t.Fatalf("get metadata must be an object: %#v", getPayload["metadata"])
 	}
 
 	// List
@@ -668,6 +712,13 @@ func TestSessionCRUD(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &listResp)
 	if len(listResp.Sessions) < 1 {
 		t.Errorf("list: want at least 1 session, got %d", len(listResp.Sessions))
+	}
+	listed, ok := listResp.Sessions[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("list session shape = %#v", listResp.Sessions[0])
+	}
+	if _, ok := listed["metadata"].(map[string]interface{}); !ok {
+		t.Fatalf("list metadata must be an object: %#v", listed["metadata"])
 	}
 
 	// Update
@@ -725,6 +776,61 @@ func TestCreateSession_RejectsMissingModelWhenDefaultUnset(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("missing model_id without configured default: want 400, got %d body=%s", w.Code, w.Body.String())
 	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode missing default response: %v", err)
+	}
+	if body["code"] != "default_model_not_configured" {
+		t.Fatalf("missing default response = %#v", body)
+	}
+
+	w = env.doRequest(http.MethodGet, "/api/v1/sessions/readiness", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("readiness without default: want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode readiness response: %v", err)
+	}
+	if body["ready"] != false || body["code"] != "default_model_not_configured" {
+		t.Fatalf("readiness without default = %#v", body)
+	}
+}
+
+func TestSessionCreateReadinessUsesConfiguredDefault(t *testing.T) {
+	env := setupTestEnv(t)
+	w := env.doRequest(http.MethodGet, "/api/v1/sessions/readiness", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("configured readiness: want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode configured readiness: %v", err)
+	}
+	if body["ready"] != true {
+		t.Fatalf("configured readiness = %#v", body)
+	}
+}
+
+func TestAdminCannotClearRunnableDefaultModel(t *testing.T) {
+	env := setupTestEnv(t)
+	var before []byte
+	if err := env.db.QueryRow("SELECT value FROM system_config WHERE key = 'default_model_id'").Scan(&before); err != nil {
+		t.Fatalf("load default before update: %v", err)
+	}
+
+	w := env.doRequest(http.MethodPatch, "/api/v1/admin/config", map[string]interface{}{
+		"updates": map[string]interface{}{"default_model_id": ""},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("clear runnable default: want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	var after []byte
+	if err := env.db.QueryRow("SELECT value FROM system_config WHERE key = 'default_model_id'").Scan(&after); err != nil {
+		t.Fatalf("load default after update: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("default changed after rejected clear: before=%s after=%s", before, after)
+	}
 }
 
 func TestGetSession_NotFound(t *testing.T) {
@@ -742,6 +848,33 @@ func TestGetSession_InvalidID(t *testing.T) {
 	w := env.doRequest(http.MethodGet, "/api/v1/sessions/abc", nil)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("invalid id: want 400, got %d", w.Code)
+	}
+}
+
+func TestSessionMutationErrorContract(t *testing.T) {
+	env := setupTestEnv(t)
+
+	for _, method := range []string{http.MethodPatch, http.MethodDelete} {
+		w := env.doRequest(method, "/api/v1/sessions/abc", map[string]interface{}{})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s invalid id: want 400, got %d body=%s", method, w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s decode invalid id response: %v", method, err)
+		}
+		if body["code"] != "session_id_invalid" || body["retryable"] != false {
+			t.Fatalf("%s invalid id response = %#v", method, body)
+		}
+	}
+
+	w := env.doRequest(http.MethodPatch, "/api/v1/sessions/999999999", map[string]interface{}{"title": "Updated"})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing update: want 404, got %d body=%s", w.Code, w.Body.String())
+	}
+	w = env.doRequest(http.MethodDelete, "/api/v1/sessions/999999999", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing delete: want 404, got %d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -802,6 +935,25 @@ func TestSessionFolders_CRUDAndFiltering(t *testing.T) {
 		t.Fatalf("unmarshal folder: %v", err)
 	}
 
+	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{
+		"name":   "项目资料",
+		"pinned": true,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("composite folder patch: got %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &folder); err != nil {
+		t.Fatalf("unmarshal composite folder patch: %v", err)
+	}
+	if folder.Name != "项目资料" || folder.PinnedAt == nil {
+		t.Fatalf("composite folder patch = %+v, want renamed and pinned", folder)
+	}
+
+	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("empty folder patch: got %d %s", w.Code, w.Body.String())
+	}
+
 	w = env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
 		"model_id":  "gpt-4o-mini",
 		"provider":  env.channelKey,
@@ -856,6 +1008,10 @@ func TestSessionFolders_CRUDAndFiltering(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("pin session: got %d %s", w.Code, w.Body.String())
 	}
+	var pinnedSession model.Session
+	if err := json.Unmarshal(w.Body.Bytes(), &pinnedSession); err != nil || pinnedSession.ID != foldered.ID || pinnedSession.PinnedAt == nil {
+		t.Fatalf("session pin response = %s, err = %v", w.Body.String(), err)
+	}
 	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/sessions/%d", foldered.ID), map[string]interface{}{
 		"folder_id": nil,
 	})
@@ -887,13 +1043,14 @@ func TestSessionFolders_CRUDAndFiltering(t *testing.T) {
 	}
 
 	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{
-		"pinned": true,
+		"pinned": false,
 	})
 	if w.Code != http.StatusOK {
-		t.Fatalf("pin folder: got %d %s", w.Code, w.Body.String())
+		t.Fatalf("unpin folder: got %d %s", w.Code, w.Body.String())
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &folder); err != nil || folder.PinnedAt == nil {
-		t.Fatalf("folder pin response = %s, err = %v", w.Body.String(), err)
+	var unpinnedFolder model.SessionFolder
+	if err := json.Unmarshal(w.Body.Bytes(), &unpinnedFolder); err != nil || unpinnedFolder.PinnedAt != nil {
+		t.Fatalf("folder unpin response = %s, err = %v", w.Body.String(), err)
 	}
 	w = env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", folder.ID), map[string]interface{}{
 		"name": "项目",
@@ -931,7 +1088,23 @@ func TestSessionFolders_CrossUserIsolation(t *testing.T) {
 		t.Fatalf("insert other folder: %v", err)
 	}
 
-	w := env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
+	w := env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", otherFolderID), map[string]interface{}{
+		"name":   "Not mine",
+		"pinned": true,
+	})
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-user folder patch should fail: got %d %s", w.Code, w.Body.String())
+	}
+	var otherName string
+	var otherPinnedAt *time.Time
+	if err := env.db.QueryRow(`SELECT name, pinned_at FROM session_folders WHERE id = $1`, otherFolderID).Scan(&otherName, &otherPinnedAt); err != nil {
+		t.Fatalf("read cross-user folder: %v", err)
+	}
+	if otherName != "Other" || otherPinnedAt != nil {
+		t.Fatalf("cross-user folder changed to name=%q pinned_at=%v", otherName, otherPinnedAt)
+	}
+
+	w = env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
 		"model_id": "gpt-4o-mini",
 		"provider": env.channelKey,
 		"title":    "Mine",
@@ -949,6 +1122,42 @@ func TestSessionFolders_CrossUserIsolation(t *testing.T) {
 	})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("cross-user folder move should fail: got %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSessionFolderCompositePatchFailureIsAtomic(t *testing.T) {
+	env := setupTestEnv(t)
+
+	createFolder := func(name string) model.SessionFolder {
+		t.Helper()
+		w := env.doRequest(http.MethodPost, "/api/v1/session-folders", map[string]interface{}{"name": name})
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create folder %q: got %d %s", name, w.Code, w.Body.String())
+		}
+		var folder model.SessionFolder
+		if err := json.Unmarshal(w.Body.Bytes(), &folder); err != nil {
+			t.Fatalf("unmarshal folder %q: %v", name, err)
+		}
+		return folder
+	}
+
+	first := createFolder("First")
+	second := createFolder("Second")
+	w := env.doRequest(http.MethodPatch, fmt.Sprintf("/api/v1/session-folders/%d", first.ID), map[string]interface{}{
+		"name":   second.Name,
+		"pinned": true,
+	})
+	if w.Code == http.StatusOK {
+		t.Fatalf("conflicting composite patch unexpectedly succeeded: %s", w.Body.String())
+	}
+
+	var name string
+	var pinnedAt *time.Time
+	if err := env.db.QueryRow(`SELECT name, pinned_at FROM session_folders WHERE id = $1`, first.ID).Scan(&name, &pinnedAt); err != nil {
+		t.Fatalf("read failed composite patch: %v", err)
+	}
+	if name != first.Name || pinnedAt != nil {
+		t.Fatalf("failed composite patch left name=%q pinned_at=%v, want %q and nil", name, pinnedAt, first.Name)
 	}
 }
 

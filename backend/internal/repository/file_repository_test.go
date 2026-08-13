@@ -3,12 +3,13 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestFileRepository_GetReadableFileForAgentRequiresSessionBoundFile(t *testing.T) {
@@ -464,8 +465,12 @@ func TestFileRepository_RestartAndExpireOCRSource(t *testing.T) {
 	if restarted.ExtractStatus != "ocr_pending" || restarted.OCRTaskID != nil || restarted.OCRAttempts != 0 {
 		t.Fatalf("restart state = %+v", restarted)
 	}
+	claim := claimRepositoryOCRFile(t, db, file.ID)
 	if _, err := db.Exec("UPDATE files SET created_at = NOW() - INTERVAL '25 hours' WHERE id = $1", file.ID); err != nil {
 		t.Fatalf("age OCR file: %v", err)
+	}
+	if _, err := db.Exec("UPDATE files SET ocr_lease_until = NOW() - INTERVAL '1 minute' WHERE id = $1", file.ID); err != nil {
+		t.Fatalf("expire OCR lease: %v", err)
 	}
 	expired, err := repo.ExpireStaleOCROriginals(time.Now().Add(-24*time.Hour), time.Now(), 10)
 	if err != nil {
@@ -491,12 +496,13 @@ func TestFileRepository_RestartAndExpireOCRSource(t *testing.T) {
 	if got.OCRSourcePath != nil {
 		t.Fatalf("cleared OCR source path = %v, want nil", got.OCRSourcePath)
 	}
-	completed, err := repo.CompleteOCR(file.ID, user.ID, file.FilePath, 12)
-	if err != nil {
-		t.Fatalf("complete expired OCR: %v", err)
-	}
-	if completed {
-		t.Fatal("late OCR result must not revive an expired file")
+	promoted := false
+	err = repo.CompleteOCRClaim(context.Background(), file.ID, user.ID, claim.OCRLeaseGeneration, file.FilePath, 12, func() error {
+		promoted = true
+		return nil
+	})
+	if !errors.Is(err, ErrOCRLeaseLost) || promoted {
+		t.Fatalf("complete expired OCR err=%v promoted=%v, want fenced before promotion", err, promoted)
 	}
 	got, err = repo.GetByID(file.ID, user.ID)
 	if err != nil {
@@ -504,6 +510,59 @@ func TestFileRepository_RestartAndExpireOCRSource(t *testing.T) {
 	}
 	if got.ExtractStatus != "failed" || got.OCRSourcePath != nil {
 		t.Fatalf("late OCR result changed expired state = %+v", got)
+	}
+}
+
+func TestFileRepository_ExpireStaleOCROriginalsHonorsContextCancellation(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	user := &model.User{Username: fmt.Sprintf("ocr_context_%d", time.Now().UnixNano()), PasswordHash: "x", Role: "user", IsActive: true, Permissions: []byte(`{}`), Preferences: []byte(`{}`)}
+	if err := NewUserRepository(db).Create(user); err != nil {
+		t.Fatal(err)
+	}
+	session := &model.Session{UserID: user.ID, Title: "OCR context", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM files WHERE user_id = $1", user.ID)
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", user.ID)
+	})
+	provider, source := "mineru", fmt.Sprintf("./storage/attachments/ocr-staging/%d/context.pdf", user.ID)
+	sessionID := session.ID
+	file := &model.File{UserID: user.ID, SessionID: &sessionID, FileName: "context.pdf", FilePath: source + ".txt", FileType: "application/pdf", FileSize: 10, ExtractStatus: "ready", OCRProvider: &provider, OCRSourcePath: &source}
+	repo := NewFileRepository(db)
+	if err := repo.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := db.Exec("UPDATE files SET created_at = $2 WHERE id = $1", file.ID, now.Add(-25*time.Hour)); err != nil {
+		t.Fatalf("age OCR file: %v", err)
+	}
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer func() { _ = blocker.Rollback() }()
+	if _, err := blocker.ExecContext(context.Background(), `LOCK TABLE files IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatalf("lock files table: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = repo.ExpireStaleOCROriginalsContext(ctx, now.Add(-24*time.Hour), now, 10)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expire OCR error = %v, want context deadline", err)
+	}
+	if err := blocker.Rollback(); err != nil {
+		t.Fatalf("release files table lock: %v", err)
+	}
+	var storedSource *string
+	if err := db.QueryRow("SELECT ocr_source_path FROM files WHERE id = $1", file.ID).Scan(&storedSource); err != nil {
+		t.Fatalf("read canceled OCR file: %v", err)
+	}
+	if storedSource == nil || *storedSource != source {
+		t.Fatal("canceled OCR expiry committed source mutation")
 	}
 }
 
@@ -569,12 +628,9 @@ func TestFileRepository_OCRSubmissionReceiptPreventsAutomaticResubmit(t *testing
 	if err := repo.Create(file); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("UPDATE files SET ocr_lease_until = NOW() + INTERVAL '1 minute' WHERE id = $1", file.ID); err != nil {
-		t.Fatal(err)
-	}
-	marked, err := repo.MarkOCRSubmissionStarted(file.ID, user.ID)
-	if err != nil || !marked {
-		t.Fatalf("mark submission started = %v, %v", marked, err)
+	claim := claimRepositoryOCRFileWithProvider(t, db, file.ID, "mineru")
+	if err := repo.MarkOCRSubmissionStarted(file.ID, user.ID, claim.OCRLeaseGeneration); err != nil {
+		t.Fatalf("mark submission started: %v", err)
 	}
 	claimed, err := repo.ClaimRecoverableOCRTasks("mineru", time.Now(), time.Minute, 1)
 	if err != nil {
@@ -596,5 +652,127 @@ func TestFileRepository_OCRSubmissionReceiptPreventsAutomaticResubmit(t *testing
 	}
 	if got.ExtractStatus != "failed" || got.OCRErrorType == nil || *got.OCRErrorType != "ocr_submission_unknown" {
 		t.Fatalf("submission state = %+v", got)
+	}
+}
+
+func TestFileRepository_OCRLeaseGenerationFencesStaleWorkerMutations(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "ocr_fencing")
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM files WHERE user_id = $1", userID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+	provider := "mineru"
+	source := fmt.Sprintf("./storage/attachments/ocr-staging/%d/fencing.pdf", userID)
+	file := &model.File{
+		UserID: userID, FileName: "fencing.pdf", FilePath: source + ".txt",
+		FileType: "application/pdf", FileSize: 10, ExtractStatus: "ocr_pending",
+		OCRProvider: &provider, OCRSourcePath: &source,
+	}
+	repo := NewFileRepository(db)
+	if err := repo.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	ownerA := claimRepositoryOCRFile(t, db, file.ID)
+	if _, err := db.Exec("UPDATE files SET ocr_lease_until = NOW() - INTERVAL '1 second' WHERE id = $1", file.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownerB := claimRepositoryOCRFile(t, db, file.ID)
+	if ownerB.OCRLeaseGeneration <= ownerA.OCRLeaseGeneration {
+		t.Fatalf("claim generations A=%d B=%d, want monotonic increase", ownerA.OCRLeaseGeneration, ownerB.OCRLeaseGeneration)
+	}
+	if err := repo.StartOCRTask(file.ID, userID, ownerB.OCRLeaseGeneration, "task-b", 4); err != nil {
+		t.Fatalf("start owner B task: %v", err)
+	}
+	if err := repo.UpdateOCRRunning(file.ID, userID, ownerB.OCRLeaseGeneration, 2); err != nil {
+		t.Fatalf("update owner B progress: %v", err)
+	}
+
+	assertLost := func(name string, err error) {
+		t.Helper()
+		if !errors.Is(err, ErrOCRLeaseLost) {
+			t.Fatalf("%s err=%v, want ErrOCRLeaseLost", name, err)
+		}
+	}
+	_, err := repo.RecordOCRAttempt(file.ID, userID, ownerA.OCRLeaseGeneration)
+	assertLost("attempt", err)
+	assertLost("submission receipt", repo.MarkOCRSubmissionStarted(file.ID, userID, ownerA.OCRLeaseGeneration))
+	assertLost("task start", repo.StartOCRTask(file.ID, userID, ownerA.OCRLeaseGeneration, "task-a", 99))
+	assertLost("progress", repo.UpdateOCRRunning(file.ID, userID, ownerA.OCRLeaseGeneration, 99))
+	assertLost("release", repo.ReleaseOCRLease(file.ID, userID, ownerA.OCRLeaseGeneration, time.Now()))
+	assertLost("failure", repo.FailOCRClaim(file.ID, userID, ownerA.OCRLeaseGeneration, "stale", "stale"))
+	promotedA := false
+	assertLost("completion", repo.CompleteOCRClaim(context.Background(), file.ID, userID, ownerA.OCRLeaseGeneration, file.FilePath, 99, func() error {
+		promotedA = true
+		return nil
+	}))
+	if promotedA {
+		t.Fatal("stale owner A reached sidecar promotion")
+	}
+
+	var status, taskID string
+	var progress int
+	var leaseUntil *time.Time
+	if err := db.QueryRow(`
+		SELECT extract_status, ocr_task_id, ocr_progress_pages, ocr_lease_until
+		FROM files WHERE id = $1
+	`, file.ID).Scan(&status, &taskID, &progress, &leaseUntil); err != nil {
+		t.Fatal(err)
+	}
+	if status != "ocr_running" || taskID != "task-b" || progress != 2 || leaseUntil == nil {
+		t.Fatalf("owner B state changed by stale A: status=%s task=%s progress=%d lease=%v", status, taskID, progress, leaseUntil)
+	}
+
+	promotionFailure := errors.New("injected promotion failure")
+	if err := repo.CompleteOCRClaim(context.Background(), file.ID, userID, ownerB.OCRLeaseGeneration, file.FilePath, 4, func() error {
+		return promotionFailure
+	}); !errors.Is(err, promotionFailure) {
+		t.Fatalf("promotion failure err=%v, want injected cause", err)
+	}
+	if err := db.QueryRow("SELECT extract_status, ocr_task_id FROM files WHERE id = $1", file.ID).Scan(&status, &taskID); err != nil {
+		t.Fatal(err)
+	}
+	if status != "ocr_running" || taskID != "task-b" {
+		t.Fatalf("promotion rollback changed owner B state: status=%s task=%s", status, taskID)
+	}
+
+	promotedB := false
+	if err := repo.CompleteOCRClaim(context.Background(), file.ID, userID, ownerB.OCRLeaseGeneration, file.FilePath, 4, func() error {
+		promotedB = true
+		return nil
+	}); err != nil || !promotedB {
+		t.Fatalf("complete owner B promoted=%v err=%v", promotedB, err)
+	}
+	assertLost("source cleanup", repo.ClearOCRSourcePathClaim(file.ID, userID, ownerA.OCRLeaseGeneration, source))
+	got, err := repo.GetByID(file.ID, userID)
+	if err != nil || got.ExtractStatus != "ready" || got.OCRSourcePath == nil || *got.OCRSourcePath != source {
+		t.Fatalf("stale source cleanup changed winner state: file=%+v err=%v", got, err)
+	}
+}
+
+func TestFileRepository_RestartOCRFencesPreviousWorker(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "ocr_restart_fencing")
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM files WHERE user_id = $1", userID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+	provider, source := "mineru", fmt.Sprintf("./storage/attachments/ocr-staging/%d/restart.pdf", userID)
+	file := &model.File{UserID: userID, FileName: "restart.pdf", FilePath: source + ".txt", FileType: "application/pdf", FileSize: 10, ExtractStatus: "ocr_pending", OCRProvider: &provider, OCRSourcePath: &source}
+	repo := NewFileRepository(db)
+	if err := repo.Create(file); err != nil {
+		t.Fatal(err)
+	}
+	oldOwner := claimRepositoryOCRFile(t, db, file.ID)
+	if err := repo.FailOCR(file.ID, userID, "manual_retry", "retry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RestartOCR(file.ID, userID, time.Now(), time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateOCRRunning(file.ID, userID, oldOwner.OCRLeaseGeneration, 7); !errors.Is(err, ErrOCRLeaseLost) {
+		t.Fatalf("old worker after restart err=%v, want ErrOCRLeaseLost", err)
 	}
 }

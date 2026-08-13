@@ -18,6 +18,9 @@ import (
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
+	openaisdk "github.com/openai/openai-go/v3"
 	"google.golang.org/genai"
 )
 
@@ -77,6 +80,34 @@ func transientModelRetryConfig(observer func(ModelRetryTrace)) *adk.ModelRetryCo
 	}
 }
 
+func transientAgenticModelRetryConfig(observer func(ModelRetryTrace)) *adk.TypedModelRetryConfig[*schema.AgenticMessage] {
+	return &adk.TypedModelRetryConfig[*schema.AgenticMessage]{
+		MaxRetries: maxModelRetries,
+		ShouldRetry: func(ctx context.Context, retryCtx *adk.TypedRetryContext[*schema.AgenticMessage]) *adk.TypedRetryDecision[*schema.AgenticMessage] {
+			if ctx.Err() != nil || retryCtx == nil || retryCtx.Err == nil || modelstream.HasMeaningfulAgenticOutput(retryCtx.OutputMessage) {
+				return &adk.TypedRetryDecision[*schema.AgenticMessage]{}
+			}
+			classification := classifyModelRuntimeError(retryCtx.Err)
+			if !shouldAutomaticallyRetryModelError(classification) || retryCtx.RetryAttempt > maxModelRetries {
+				return &adk.TypedRetryDecision[*schema.AgenticMessage]{}
+			}
+			delay := modelRetryDelay(classification, retryCtx.RetryAttempt)
+			trace := ModelRetryTrace{
+				Attempt: retryCtx.RetryAttempt, MaxAttempts: maxModelRetries + 1,
+				Delay: delay, Category: classification.Category,
+			}
+			if observer != nil {
+				observer(trace)
+			}
+			log.Printf("[model_retry] retrying zero-output agentic model failure attempt=%d category=%s delay=%s",
+				trace.Attempt, trace.Category, trace.Delay)
+			return &adk.TypedRetryDecision[*schema.AgenticMessage]{
+				Retry: true, Backoff: delay, RejectReason: classification.Category,
+			}
+		},
+	}
+}
+
 func shouldAutomaticallyRetryModelError(classification modelErrorClassification) bool {
 	return classification.Retryable &&
 		(classification.Category == RuntimeErrorTransient || classification.Category == RuntimeErrorConnection)
@@ -121,6 +152,16 @@ func classifyModelRuntimeError(err error) modelErrorClassification {
 
 	status, headers, detail := structuredModelHTTPError(err)
 	if status > 0 {
+		if providerhttp.IsAnthropicTransportError(headers) {
+			return modelErrorClassification{
+				Code:       "model_connection_failed",
+				Message:    "连接模型服务失败，请稍后重试",
+				Diagnostic: modelUpstreamDiagnostic(status, "上游连接失败", ""),
+				Category:   RuntimeErrorConnection,
+				Retryable:  true,
+				HTTPStatus: status,
+			}
+		}
 		if status == http.StatusRequestEntityTooLarge || isModelContextErrorText(detail) {
 			return modelErrorClassification{
 				Code:       "model_context_exceeded",
@@ -246,6 +287,17 @@ func structuredModelHTTPError(err error) (int, http.Header, string) {
 	var openAIErr *einoopenai.APIError
 	if errors.As(err, &openAIErr) {
 		return openAIErr.HTTPStatusCode, nil, openAIErr.Message
+	}
+	// The typed Responses component uses openai-go/v3 directly rather than
+	// Eino's legacy Chat Completions APIError. Preserve status and Retry-After
+	// so both OpenAI wire protocols remain under the same EffChat retry owner.
+	var responsesErr *openaisdk.Error
+	if errors.As(err, &responsesErr) {
+		var headers http.Header
+		if responsesErr.Response != nil {
+			headers = responsesErr.Response.Header
+		}
+		return responsesErr.StatusCode, headers, responsesErr.Message
 	}
 	var anthropicErr *anthropic.Error
 	if errors.As(err, &anthropicErr) {
@@ -401,8 +453,5 @@ func modelUpstreamDiagnostic(status int, reason, detail string) string {
 }
 
 func hasModelOutput(message *schema.Message) bool {
-	if message == nil {
-		return false
-	}
-	return strings.TrimSpace(message.Content) != "" || strings.TrimSpace(message.ReasoningContent) != "" || len(message.ToolCalls) > 0
+	return modelstream.HasMeaningfulOutput(message)
 }

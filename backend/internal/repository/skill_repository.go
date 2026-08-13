@@ -3,10 +3,9 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/lib/pq"
 )
 
@@ -18,126 +17,32 @@ func NewSkillRepository(db *sql.DB) *SkillRepository {
 	return &SkillRepository{db: db}
 }
 
-func (r *SkillRepository) UpsertPackage(skill *model.Skill, files []model.SkillFile) error {
-	return r.UpsertPackageWithRecord(skill, files, nil)
+func (r *SkillRepository) UpsertPackageWithRecord(skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {
+	return r.UpsertPackageWithRecordContext(context.Background(), skill, files, record)
 }
 
-func (r *SkillRepository) UpsertPackageWithRecord(skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {
-	tx, err := r.db.Begin()
+func (r *SkillRepository) UpsertPackageWithRecordContext(ctx context.Context, skill *model.Skill, files []model.SkillFile, record *model.SkillImportRecord) error {
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to begin skill tx: %w", err)
+		return fmt.Errorf("failed to begin skill tx: %w", skillContextError(ctx, err))
 	}
 	defer tx.Rollback()
-
-	if skill.EntryPath == "" {
-		skill.EntryPath = "SKILL.md"
-	}
-	query := `
-		INSERT INTO skills (
-			id, name, description, content, source_type, source_url, source_ref,
-			source_path, checksum, package_checksum, entry_path, min_group_level,
-			enabled, is_builtin, created_by
-		)
-		VALUES ($1, $2, $3, '', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			description = EXCLUDED.description,
-			content = '',
-			source_type = EXCLUDED.source_type,
-			source_url = EXCLUDED.source_url,
-			source_ref = EXCLUDED.source_ref,
-			source_path = EXCLUDED.source_path,
-			checksum = EXCLUDED.checksum,
-			package_checksum = EXCLUDED.package_checksum,
-			entry_path = EXCLUDED.entry_path,
-			min_group_level = EXCLUDED.min_group_level,
-			enabled = EXCLUDED.enabled,
-			is_builtin = EXCLUDED.is_builtin,
-			created_by = COALESCE(skills.created_by, EXCLUDED.created_by),
-			deleted_at = NULL,
-			updated_at = NOW()
-		RETURNING created_at, updated_at
-	`
-	if err := tx.QueryRow(
-		query,
-		skill.ID,
-		skill.Name,
-		skill.Description,
-		skill.SourceType,
-		skill.SourceURL,
-		skill.SourceRef,
-		skill.SourcePath,
-		skill.Checksum,
-		skill.PackageChecksum,
-		skill.EntryPath,
-		skill.MinGroupLevel,
-		skill.Enabled,
-		skill.IsBuiltin,
-		skill.CreatedBy,
-	).Scan(&skill.CreatedAt, &skill.UpdatedAt); err != nil {
-		return fmt.Errorf("failed to upsert skill: %w", err)
-	}
-
-	if _, err := tx.Exec(`DELETE FROM skill_files WHERE skill_id = $1`, skill.ID); err != nil {
-		return fmt.Errorf("failed to clear skill files: %w", err)
-	}
-	for _, file := range files {
-		if _, err := tx.Exec(`
-			INSERT INTO skill_files (skill_id, relative_path, storage_path, kind, size, checksum)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, skill.ID, file.RelativePath, file.StoragePath, file.Kind, file.Size, file.Checksum); err != nil {
-			return fmt.Errorf("failed to insert skill file %s: %w", file.RelativePath, err)
-		}
-	}
-	if record != nil {
-		record.SkillID = skill.ID
-		if record.PackageChecksum == "" {
-			record.PackageChecksum = skill.PackageChecksum
-		}
-		if record.SourceType == "" {
-			record.SourceType = skill.SourceType
-		}
-		if len(record.SelectedFiles) == 0 {
-			record.SelectedFiles = json.RawMessage("[]")
-		}
-		if len(record.FileManifest) == 0 {
-			record.FileManifest = json.RawMessage("[]")
-		}
-		if len(record.ImportReport) == 0 {
-			record.ImportReport = json.RawMessage("{}")
-		}
-		if err := tx.QueryRow(`
-			INSERT INTO skill_import_records (
-				skill_id, action, source_type, source_url, source_ref, source_path,
-				upstream_skill_id, upstream_name, package_checksum,
-				selected_files, file_manifest, import_report, created_by
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13)
-			RETURNING id, created_at
-		`,
-			record.SkillID,
-			record.Action,
-			record.SourceType,
-			record.SourceURL,
-			record.SourceRef,
-			record.SourcePath,
-			record.UpstreamSkillID,
-			record.UpstreamName,
-			record.PackageChecksum,
-			string(record.SelectedFiles),
-			string(record.FileManifest),
-			string(record.ImportReport),
-			record.CreatedBy,
-		).Scan(&record.ID, &record.CreatedAt); err != nil {
-			return fmt.Errorf("failed to insert skill import record: %w", err)
-		}
+	if err := upsertSkillPackageTx(ctx, tx, skill, files, record); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit skill tx: %w", err)
+		return fmt.Errorf("failed to commit skill tx: %w", skillContextError(ctx, err))
 	}
 	skill.Files = files
 	return nil
+}
+
+func skillContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func (r *SkillRepository) ListImportRecords(skillID string, limit int) ([]model.SkillImportRecord, error) {
@@ -261,34 +166,6 @@ func (r *SkillRepository) Get(id string, includeDisabled bool) (*model.Skill, er
 	return skill, nil
 }
 
-func (r *SkillRepository) UpdateMetadata(skill *model.Skill) error {
-	result, err := r.db.Exec(`
-		UPDATE skills
-		SET name = $1, description = $2, enabled = $3, min_group_level = $4, updated_at = NOW()
-		WHERE id = $5 AND deleted_at IS NULL
-	`, skill.Name, skill.Description, skill.Enabled, skill.MinGroupLevel, skill.ID)
-	if err != nil {
-		return fmt.Errorf("failed to update skill: %w", err)
-	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("skill not found: %w", ErrNotFound)
-	}
-	return nil
-}
-
-func (r *SkillRepository) Delete(id string) error {
-	result, err := r.db.Exec(`UPDATE skills SET deleted_at = NOW(), enabled = false, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`, id)
-	if err != nil {
-		return fmt.Errorf("failed to delete skill: %w", err)
-	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("skill not found: %w", ErrNotFound)
-	}
-	return nil
-}
-
 func (r *SkillRepository) ListFiles(skillID string) ([]model.SkillFile, error) {
 	rows, err := r.db.Query(`
 		SELECT id, skill_id, relative_path, storage_path, kind, size, checksum, created_at
@@ -338,12 +215,18 @@ func (r *SkillRepository) FilePathsForSkill(id string) ([]string, error) {
 	return paths, rows.Err()
 }
 
-func (r *SkillRepository) ActiveFilePaths() ([]string, error) {
+// RetainedFilePaths returns both the active package files and immutable files
+// referenced by import history. Cleanup must preserve both sets: an inactive
+// package may still be the only locally available source for a native rollback.
+func (r *SkillRepository) RetainedFilePaths() ([]string, error) {
 	rows, err := r.db.Query(`
 		SELECT f.storage_path
 		FROM skill_files f
 		JOIN skills s ON s.id = f.skill_id
 		WHERE s.deleted_at IS NULL
+		UNION
+		SELECT storage_path
+		FROM skill_import_record_files
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list active skill paths: %w", err)
@@ -358,6 +241,31 @@ func (r *SkillRepository) ActiveFilePaths() ([]string, error) {
 		paths = append(paths, path)
 	}
 	return paths, rows.Err()
+}
+
+func (r *SkillRepository) ListImportRecordFiles(recordID int64) ([]model.SkillImportRecordFile, error) {
+	rows, err := r.db.Query(`
+		SELECT import_record_id, relative_path, storage_path, kind, size, checksum
+		FROM skill_import_record_files
+		WHERE import_record_id = $1
+		ORDER BY CASE WHEN kind = 'entry' THEN 0 ELSE 1 END, relative_path ASC
+	`, recordID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list retained skill import files: %w", err)
+	}
+	defer rows.Close()
+	var files []model.SkillImportRecordFile
+	for rows.Next() {
+		var file model.SkillImportRecordFile
+		if err := rows.Scan(&file.ImportRecordID, &file.RelativePath, &file.StoragePath, &file.Kind, &file.Size, &file.Checksum); err != nil {
+			return nil, fmt.Errorf("failed to scan retained skill import file: %w", err)
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate retained skill import files: %w", err)
+	}
+	return files, nil
 }
 
 type skillScanner interface {

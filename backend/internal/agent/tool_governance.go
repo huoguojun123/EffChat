@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -14,8 +13,8 @@ import (
 
 	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
 
 var sensitiveToolDiagnosticPattern = regexp.MustCompile(`(?i)(api[_-]?key|authorization|bearer|access[_-]?token|password|secret)(\s*[:=]?\s*)[^\s,;]+`)
@@ -64,8 +63,11 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 		Invokable: func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
 			return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
 				started := time.Now()
+				if cause := semanticToolParentCause(ctx); cause != nil {
+					return nil, cause
+				}
 				timeout := runtime.Timeout(input.Name)
-				callCtx, cancel := context.WithTimeout(ctx, timeout)
+				callCtx, cancel := toolCallContext(ctx, input.Name, timeout)
 				defer cancel()
 				meta := modelusage.MetaFromContext(ctx)
 
@@ -75,6 +77,9 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 				if budget != nil {
 					arguments, grant, blocked = budget.prepareToolCall(input.Name, input.Arguments)
 					if blocked != "" {
+						if cause := semanticToolParentCause(ctx); cause != nil {
+							return nil, cause
+						}
 						return &compose.ToolOutput{Result: budget.accountUnreservedResult(input.Name, blocked)}, nil
 					}
 				}
@@ -83,6 +88,14 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 				reservation, err := reserveToolCall(ctx, quotaService, meta, input)
 				if err != nil {
 					duration := time.Since(started)
+					if cause := semanticToolParentCause(ctx); cause != nil {
+						if budget != nil {
+							budget.cancelToolGrant(grant, true)
+						}
+						log.Printf("[tool_governance] call_canceled user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s stage=quota",
+							meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), toolUsageErrorType(cause, ctx))
+						return nil, cause
+					}
 					errText, code := quotaErrorText(err)
 					result := marshalToolQuotaError(input.Name, code, errText)
 					if budget != nil {
@@ -93,19 +106,28 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), code)
 					return &compose.ToolOutput{Result: result}, nil
 				}
+				if cause := semanticToolParentCause(ctx); cause != nil {
+					return nil, finishCanceledToolCall(usageService, budget, grant, reservation, meta, input, started, cause, ctx, true)
+				}
 				output, err := next(callCtx, &preparedInput)
 				duration := time.Since(started)
+				if cause := semanticToolParentCause(ctx); cause != nil {
+					return nil, finishCanceledToolCall(usageService, budget, grant, reservation, meta, input, started, cause, ctx, false)
+				}
 				if err != nil {
 					errText := err.Error()
+					code := "tool_execution_failed"
+					publicMessage := "Tool call failed. Continue with the best available information."
 					retryable := false
 					if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-						errText = fmt.Sprintf("tool %s timed out after %s", input.Name, timeout)
+						code = "tool_timeout"
+						publicMessage = "Tool call timed out. Continue with the best available information."
 						retryable = true
 					}
 					errorType := toolUsageErrorType(err, callCtx)
 					log.Printf("[tool_governance] call_failed user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s retryable=%t",
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), errorType, retryable)
-					result := marshalToolError(input.Name, errText, retryable)
+					result := marshalToolError(input.Name, code, publicMessage, retryable)
 					if budget != nil {
 						result = budget.finishToolResult(input.Name, result, grant)
 					}
@@ -113,13 +135,17 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 					finishToolUsage(usageService, reservation, meta, input, false, outcome.ContextTokens, outcome.Truncated, duration, errorType, errText)
 					return &compose.ToolOutput{Result: result}, nil
 				}
+				internalDiagnostic := ""
+				if output != nil {
+					output.Result, internalDiagnostic = sanitizeStructuredToolFailure(input.Name, output.Result)
+				}
 				if output != nil && budget != nil {
 					output.Result = budget.finishToolResult(input.Name, output.Result, grant)
 				} else if budget != nil {
 					budget.cancelToolGrant(grant, false)
 				}
 				if output == nil || strings.TrimSpace(output.Result) == "" {
-					result := marshalToolError(input.Name, "tool returned an empty result", false)
+					result := marshalToolError(input.Name, "tool_empty_result", "Tool returned no result. Continue with the best available information.", false)
 					if budget != nil {
 						result = budget.accountUnreservedResult(input.Name, result)
 					}
@@ -137,11 +163,107 @@ func toolGovernanceMiddleware(runtime service.ToolRuntimeConfigSet, quotaService
 					log.Printf("[tool_governance] call_business_failure user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d result_chars=%d context_tokens=%d truncated=%t error_type=%s",
 						meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), resultLen, outcome.ContextTokens, outcome.Truncated, outcome.ErrorType)
 				}
-				finishToolUsage(usageService, reservation, meta, input, outcome.Success, outcome.ContextTokens, outcome.Truncated, duration, outcome.ErrorType, outcome.ErrorMessage)
+				diagnostic := outcome.ErrorMessage
+				if internalDiagnostic != "" {
+					diagnostic = internalDiagnostic
+				}
+				finishToolUsage(usageService, reservation, meta, input, outcome.Success, outcome.ContextTokens, outcome.Truncated, duration, outcome.ErrorType, diagnostic)
 				return output, nil
 			}
 		},
 	}
+}
+
+// sanitizeStructuredToolFailure is the final trust boundary for Tool results
+// that report failure inside a successful JSON envelope. Tool implementations
+// may retain a private cause in the error field for usage diagnostics, but only
+// their explicit public message may enter model context, RunHub events, or the
+// frontend tool tree. Typed web failures already carry an error_code and are
+// produced by the web tool's separate public classifier, so they remain intact.
+func sanitizeStructuredToolFailure(toolName, result string) (string, string) {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil || len(payload) == 0 {
+		return result, ""
+	}
+	errorText, _ := payload["error"].(string)
+	errorText = strings.TrimSpace(errorText)
+	if errorText == "" {
+		return result, ""
+	}
+	if errorCode, _ := payload["error_code"].(string); strings.TrimSpace(errorCode) != "" {
+		return result, ""
+	}
+	publicMessage, _ := payload["message"].(string)
+	publicMessage = strings.TrimSpace(publicMessage)
+	if publicMessage == "" {
+		return result, ""
+	}
+	payload["error"] = publicMessage
+	payload["ok"] = false
+	if code, _ := payload["code"].(string); strings.TrimSpace(code) == "" {
+		payload["code"] = "tool_business_failure"
+	}
+	if _, ok := payload["retryable"].(bool); !ok {
+		payload["retryable"] = false
+	}
+	if source, _ := payload["source"].(string); strings.TrimSpace(source) == "" {
+		payload["source"] = "tool"
+	}
+	if toolKey, _ := payload["tool"].(string); strings.TrimSpace(toolKey) == "" && strings.TrimSpace(toolName) != "" {
+		payload["tool"] = toolName
+	}
+	sanitized, err := json.Marshal(payload)
+	if err != nil {
+		return result, ""
+	}
+	return string(sanitized), errorText
+}
+
+func semanticToolParentCause(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return context.Cause(ctx)
+}
+
+// finishCanceledToolCall closes every durable side effect before returning the
+// semantic parent cause to Eino. Cancellation must not become Tool JSON because
+// that would let the ReAct loop continue after user stop, RunHub drain, or run
+// invalidation. The reserved usage row is still finalized through its own
+// bounded background context, and any undelivered context grant is released.
+func finishCanceledToolCall(
+	usageService *modelusage.Service,
+	budget *toolBudgetMiddleware,
+	grant toolContextGrant,
+	reservation service.ToolCallQuotaReservation,
+	meta modelusage.Meta,
+	input *compose.ToolInput,
+	started time.Time,
+	cause error,
+	parent context.Context,
+	releaseCall bool,
+) error {
+	if budget != nil {
+		budget.cancelToolGrant(grant, releaseCall)
+	}
+	duration := time.Since(started)
+	errorType := toolUsageErrorType(cause, parent)
+	log.Printf("[tool_governance] call_canceled user=%d session=%d run=%s tool=%s call_id=%s duration_ms=%d error_type=%s",
+		meta.UserID, meta.SessionID, meta.RunID, input.Name, input.CallID, duration.Milliseconds(), errorType)
+	finishToolUsage(usageService, reservation, meta, input, false, 0, false, duration, errorType, cause.Error())
+	return cause
+}
+
+// toolCallContext keeps ordinary Tools under an absolute execution timeout.
+// web_extract is different because it owns two independently bounded phases:
+// crawler fallback first, then a streaming model refinement whose timeout only
+// waits for first output. Wrapping both phases in another absolute deadline
+// would make refinement inherit only the crawler's leftover time.
+func toolCallContext(parent context.Context, toolName string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if toolName == "web_extract" {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 func inspectToolTerminalOutcome(result string) toolTerminalOutcome {
@@ -263,12 +385,13 @@ func normalizeToolOutcomeCode(value string) string {
 	return b.String()
 }
 
-func marshalToolError(toolName, errText string, retryable bool) string {
+func marshalToolError(toolName, code, message string, retryable bool) string {
 	out := toolErrorOutput{
 		OK:        false,
 		Tool:      toolName,
-		Error:     errText,
-		Message:   "Tool call failed. Explain the failure briefly and continue with the best available information.",
+		Code:      code,
+		Error:     message,
+		Message:   message,
 		Retryable: retryable,
 		Source:    "tool_governance",
 	}
@@ -341,6 +464,9 @@ func quotaErrorText(err error) (string, string) {
 }
 
 func toolUsageErrorType(err error, ctx context.Context) string {
+	if modelusage.ErrorType(err) == "first_output_timeout" {
+		return "first_output_timeout"
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "timeout"
 	}

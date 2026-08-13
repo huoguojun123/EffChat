@@ -62,7 +62,7 @@ export function AdminModelChannelSidebar({
       <div className="border-t border-border/70 p-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input type="search" name="fchat-model-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => onQueryChange(e.target.value)} className="h-8 pl-8 text-sm" placeholder="搜索模型" aria-label="搜索模型" />
+          <Input type="search" name="effchat-model-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => onQueryChange(e.target.value)} className="h-8 pl-8 text-sm" placeholder="搜索模型" aria-label="搜索模型" />
         </div>
       </div>
     </aside>

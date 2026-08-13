@@ -1,28 +1,40 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { LucideIcon } from "lucide-react"
 import { AlertTriangle, BadgeCheck, Check, ChevronDown, ChevronUp, Clock3, ListChecks, Loader2, MapPinned, Plus, RotateCcw, Save, ShieldOff, SlidersHorizontal, Trash2, UserRound } from "lucide-react"
 import {
-  compactSessionMemory,
   getSessionMemory,
-  retrySessionMemory,
+  memoryMaintenanceUrl,
   saveSessionMemory,
+  updateSession,
   undoSessionMemoryChange,
   type ModelTaskRun,
   type SessionMemoryChange,
   type SessionMemoryResponse,
   type SessionMemorySection,
 } from "@/api/sessions"
+import { getActiveRun } from "@/api/runs"
+import { handleAuthExpired } from "@/api/client"
 import { Button } from "@/components/ui/button"
 import { DialogFooter } from "@/components/ui/dialog"
 import { WorkspaceWindow } from "@/components/ui/workspace-window"
-import { cn } from "@/lib/utils"
+import { cn, safeUUID } from "@/lib/utils"
+import { consumeMemoryMaintenanceSSE, createStreamHTTPError } from "@/lib/sseProtocol"
 
 interface Props {
   open: boolean
   sessionId: number | null
   onOpenChange: (open: boolean) => void
-  onEnabledChange: (enabled: boolean) => void
-  onSeenChange: (changeId: number | null) => void
+  onEnabledChange: (sessionId: number, enabled: boolean) => void
+  onSeenChange: (sessionId: number, changeId: number | null) => void
+}
+
+interface DialogOwner {
+  sessionId: number
+  generation: number
+}
+
+interface OperationOwner extends DialogOwner {
+  operationId: number
 }
 
 const emptyItem = ""
@@ -36,6 +48,15 @@ const sectionTones: Record<string, {
   current_progress: { icon: ListChecks },
   decisions: { icon: BadgeCheck },
   do_not_remember: { icon: ShieldOff },
+}
+
+const sectionLabels: Record<string, string> = {
+  user_background: "用户背景",
+  user_preferences: "用户偏好",
+  project_context: "项目背景",
+  current_progress: "当前进度",
+  decisions: "决策",
+  do_not_remember: "不要记住",
 }
 
 const fallbackTone = {
@@ -57,35 +78,96 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
   const [success, setSuccess] = useState<string | null>(null)
   const [pending, setPending] = useState<PendingConfirmation | null>(null)
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({})
+  const ownerRef = useRef<{ sessionId: number | null; generation: number; operationId: number }>({
+    sessionId: null,
+    generation: 0,
+    operationId: 0,
+  })
 
   const changed = useMemo(() => JSON.stringify(sections) !== JSON.stringify(data?.sections || []), [sections, data])
 
+  const ownsDialog = useCallback((owner: DialogOwner) => {
+    const current = ownerRef.current
+    return current.sessionId === owner.sessionId && current.generation === owner.generation
+  }, [])
+
+  function beginOperation(requestSessionId: number): OperationOwner | null {
+    const current = ownerRef.current
+    if (current.sessionId !== requestSessionId) return null
+    const owner = { sessionId: requestSessionId, generation: current.generation, operationId: current.operationId + 1 }
+    ownerRef.current = owner
+    return owner
+  }
+
+  const ownsOperation = useCallback((owner: OperationOwner) => {
+    const current = ownerRef.current
+    return ownsDialog(owner) && current.operationId === owner.operationId
+  }, [ownsDialog])
+
+  function invalidateDialog() {
+    const current = ownerRef.current
+    ownerRef.current = { sessionId: null, generation: current.generation + 1, operationId: 0 }
+  }
+
   useEffect(() => {
     if (!open || !sessionId) return
-    let canceled = false
+    const requestSessionId = sessionId
+    const owner: OperationOwner = { sessionId: requestSessionId, generation: ownerRef.current.generation + 1, operationId: 0 }
+    ownerRef.current = { ...owner, operationId: 0 }
     async function loadMemory() {
       setLoading(true)
+      setData(null)
+      setSections([])
       setError(null)
       setSuccess(null)
       try {
-        const res = await getSessionMemory(sessionId!)
-        if (canceled) return
+        const res = await getSessionMemory(requestSessionId)
+        if (!ownsOperation(owner)) return
         setData(res)
         setSections(res.sections)
         setPending(null)
         setExpandedItems({})
-        onSeenChange(latestAutoChangeId(res))
+        onSeenChange(requestSessionId, latestAutoChangeId(res))
       } catch (err) {
-        if (!canceled) setError(err instanceof Error ? err.message : "记忆加载失败")
+        if (ownsOperation(owner)) setError(err instanceof Error ? err.message : "记忆加载失败")
       } finally {
-        if (!canceled) setLoading(false)
+        if (ownsOperation(owner)) setLoading(false)
+      }
+
+      // Load the durable memory snapshot before attaching to an active run.
+      // Running these requests in parallel lets a slower initial response
+      // overwrite the post-run refresh with stale sections.
+      try {
+        const { run } = await getActiveRun(requestSessionId)
+        if (!ownsOperation(owner) || run?.kind !== "memory_maintenance" || run.status !== "running") return
+        setSaving(true)
+        setError(null)
+        const token = localStorage.getItem("token")
+        const res = await fetch(`/api/v1/sessions/${requestSessionId}/runs/${encodeURIComponent(run.run_id)}/resume?cursor=${run.cursor}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) throw await createStreamHTTPError(res, token)
+        if (!res.body) throw new Error("流式响应为空")
+        await consumeMemoryMaintenanceSSE(res)
+        if (!ownsOperation(owner)) return
+        const refreshed = await getSessionMemory(requestSessionId)
+        if (!ownsOperation(owner)) return
+        setData(refreshed)
+        setSections(refreshed.sections)
+        onEnabledChange(requestSessionId, refreshed.enabled)
+        onSeenChange(requestSessionId, latestAutoChangeId(refreshed))
+        setSuccess("记忆维护已完成")
+      } catch (err) {
+        if (ownsOperation(owner)) setError(err instanceof Error ? err.message : "记忆维护恢复失败")
+      } finally {
+        if (ownsOperation(owner)) setSaving(false)
       }
     }
     void loadMemory()
     return () => {
-      canceled = true
+      if (ownsDialog(owner)) invalidateDialog()
     }
-  }, [open, sessionId, onSeenChange])
+  }, [open, sessionId, onEnabledChange, onSeenChange, ownsDialog, ownsOperation])
 
   function updateSection(index: number, next: SessionMemorySection) {
     setSections((prev) => prev.map((section, i) => (i === index ? next : section)))
@@ -113,18 +195,20 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
     setExpandedItems((prev) => ({ ...prev, [`${section.key}-0`]: true }))
   }
 
-  async function reloadFromResponse(res: SessionMemoryResponse) {
+  function reloadFromResponse(res: SessionMemoryResponse, owner: DialogOwner) {
+    if (!ownsDialog(owner)) return false
     setData(res)
     setSections(res.sections)
-    onEnabledChange(res.enabled)
-    onSeenChange(latestAutoChangeId(res))
+    onEnabledChange(owner.sessionId, res.enabled)
+    onSeenChange(owner.sessionId, latestAutoChangeId(res))
     setPending(null)
+    return true
   }
 
-  async function reloadMemoryQuietly() {
-    if (!sessionId) return
+  async function reloadMemoryQuietly(owner: OperationOwner) {
     try {
-      await reloadFromResponse(await getSessionMemory(sessionId))
+      const res = await getSessionMemory(owner.sessionId)
+      if (ownsOperation(owner)) reloadFromResponse(res, owner)
     } catch {
       // Keep the original action error visible.
     }
@@ -132,6 +216,8 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
 
   async function save(enabled = data?.enabled ?? true, nextSections = sections) {
     if (!sessionId) return
+    const owner = beginOperation(sessionId)
+    if (!owner) return
     setSaving(true)
     setError(null)
     try {
@@ -139,47 +225,75 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
         ...section,
         items: section.items.map((item) => item.trim()).filter(Boolean),
       }))
-      const res = await saveSessionMemory(sessionId, { enabled, sections: cleaned, expected_updated_at: data?.updated_at })
-      await reloadFromResponse(res)
+      const res = await saveSessionMemory(owner.sessionId, { enabled, sections: cleaned, expected_updated_at: data?.updated_at })
+      if (!ownsOperation(owner) || !reloadFromResponse(res, owner)) return
       setSuccess("会话记忆已保存")
       setExpandedItems({})
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败")
+      if (ownsOperation(owner)) setError(err instanceof Error ? err.message : "保存失败")
     } finally {
-      setSaving(false)
+      if (ownsOperation(owner)) setSaving(false)
+    }
+  }
+
+  async function toggleEnabled(enabled: boolean) {
+    if (!sessionId || !data || enabled === data.enabled) return
+    const owner = beginOperation(sessionId)
+    if (!owner) return
+    setSaving(true)
+    setError(null)
+    try {
+      // Enabling memory is a session-setting mutation, not a memory-document
+      // commit. Preserve both the editor draft and its server baseline so a
+      // concurrent background memory update still trips the existing CAS when
+      await updateSession(owner.sessionId, { memory_enabled: enabled })
+      if (!ownsOperation(owner)) return
+      setData((current) => current ? { ...current, enabled } : current)
+      onEnabledChange(owner.sessionId, enabled)
+      setSuccess(enabled ? "会话记忆已启用" : "会话记忆已停用")
+    } catch (err) {
+      if (ownsOperation(owner)) setError(err instanceof Error ? err.message : "记忆启停失败")
+    } finally {
+      if (ownsOperation(owner)) setSaving(false)
+    }
+  }
+
+  async function runMaintenance(operation: "compact" | "retry") {
+    if (!sessionId || (operation === "retry" && changed)) return
+    const owner = beginOperation(sessionId)
+    if (!owner) return
+    setSaving(true)
+    setError(null)
+    try {
+      const token = localStorage.getItem("token")
+      const runId = safeUUID()
+      const response = await fetch(memoryMaintenanceUrl(owner.sessionId, operation, runId), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.status === 401) handleAuthExpired(token)
+      if (!response.ok) throw await createStreamHTTPError(response, token)
+      if (!response.body) throw new Error("流式响应为空")
+      await consumeMemoryMaintenanceSSE(response)
+      if (!ownsOperation(owner)) return
+      const refreshed = await getSessionMemory(owner.sessionId)
+      if (!ownsOperation(owner) || !reloadFromResponse(refreshed, owner)) return
+      setSuccess(operation === "compact" ? "会话记忆已整理" : "记忆维护已重试")
+    } catch (err) {
+      if (!ownsOperation(owner)) return
+      setError(err instanceof Error ? err.message : operation === "compact" ? "整理失败" : "重试失败")
+      await reloadMemoryQuietly(owner)
+    } finally {
+      if (ownsOperation(owner)) setSaving(false)
     }
   }
 
   async function compact() {
-    if (!sessionId) return
-    setSaving(true)
-    setError(null)
-    try {
-      const res = await compactSessionMemory(sessionId)
-      await reloadFromResponse(res)
-      setSuccess("会话记忆已整理")
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "整理失败")
-      await reloadMemoryQuietly()
-    } finally {
-      setSaving(false)
-    }
+    await runMaintenance("compact")
   }
 
   async function retryMaintenance() {
-    if (!sessionId || changed) return
-    setSaving(true)
-    setError(null)
-    try {
-      const res = await retrySessionMemory(sessionId)
-      await reloadFromResponse(res)
-      setSuccess("记忆维护已重试")
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "重试失败")
-      await reloadMemoryQuietly()
-    } finally {
-      setSaving(false)
-    }
+    await runMaintenance("retry")
   }
 
   function clearMemory() {
@@ -225,6 +339,7 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
       })
       return
     }
+    if (!nextOpen) invalidateDialog()
     onOpenChange(nextOpen)
   }
 
@@ -247,23 +362,27 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
     }
     if (pending.type === "undo") {
       if (!sessionId) return
+      const owner = beginOperation(sessionId)
+      if (!owner) return
       setSaving(true)
       setError(null)
       try {
-        const res = await undoSessionMemoryChange(sessionId, pending.changeId)
-        await reloadFromResponse(res)
+        const res = await undoSessionMemoryChange(owner.sessionId, pending.changeId)
+        if (!ownsOperation(owner) || !reloadFromResponse(res, owner)) return
         setSuccess("记忆更新已撤销")
       } catch (err) {
+        if (!ownsOperation(owner)) return
         setError(err instanceof Error ? err.message : "撤销失败")
         setPending(null)
-        await reloadMemoryQuietly()
+        await reloadMemoryQuietly(owner)
       } finally {
-        setSaving(false)
+        if (ownsOperation(owner)) setSaving(false)
       }
       return
     }
     if (pending.type === "close") {
       setPending(null)
+      invalidateDialog()
       onOpenChange(false)
       return
     }
@@ -293,7 +412,7 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
                   type="checkbox"
                   checked={enabled}
                   disabled={!data || saving}
-                  onChange={(event) => void save(event.currentTarget.checked)}
+                  onChange={(event) => void toggleEnabled(event.currentTarget.checked)}
                   className="h-4 w-4 rounded border-input"
                 />
                 启用
@@ -303,7 +422,7 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
               </div>
               {data?.last_auto_updated_at ? (
                 <div className="min-w-0 truncate text-xs text-muted-foreground">
-                  自动更新 {new Date(data.last_auto_updated_at).toLocaleString()}
+                  自动更新 {formatDateTime(data.last_auto_updated_at)}
                 </div>
               ) : null}
             </div>
@@ -455,8 +574,8 @@ function MemorySection({
             <Icon className="h-3.5 w-3.5" />
           </span>
           <div className="flex min-w-0 items-baseline gap-2">
-            <h3 className="truncate text-sm font-semibold tracking-tight">{section.title}</h3>
-            <div className="shrink-0 text-xs text-muted-foreground">{filledCount > 0 ? `${filledCount} 条` : "空 section"}</div>
+            <h3 className="truncate text-sm font-semibold tracking-tight">{sectionLabels[section.key] || section.title}</h3>
+            <div className="shrink-0 text-xs text-muted-foreground">{filledCount > 0 ? `${filledCount} 条` : "暂无条目"}</div>
           </div>
         </div>
         <Button type="button" variant="ghost" size="sm" onClick={onAdd} disabled={saving} className="h-7 shrink-0 px-2">
@@ -785,7 +904,7 @@ function displayChangeSummary(change: SessionMemoryChange) {
 function formatDateTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return "-"
-  return date.toLocaleString()
+  return date.toLocaleString("zh-CN", { hour12: false })
 }
 
 function formatChangeStamp(value: string) {
@@ -794,14 +913,14 @@ function formatChangeStamp(value: string) {
     return { date: "-", time: "-", full: "-" }
   }
   return {
-    date: date.toLocaleDateString([], { month: "numeric", day: "numeric" }),
-    time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    full: date.toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+    date: date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" }),
+    time: date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
+    full: date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }),
   }
 }
 
 function formatTime(date: Date) {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false })
 }
 
 function formatDuration(ms: number) {

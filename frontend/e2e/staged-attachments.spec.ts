@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page } from "@playwright/test"
 
 const session = {
   id: 1,
@@ -127,6 +127,21 @@ async function expectNoHorizontalOverflow(page: Page) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 }
 
+async function expectPointerActionable(locator: Locator) {
+  await expect.poll(async () => locator.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    return hit === element || (hit != null && element.contains(hit))
+  })).toBe(true)
+}
+
+async function expectMinimumTouchTarget(locator: Locator, minimum = 44) {
+  const box = await locator.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.width).toBeGreaterThanOrEqual(minimum)
+  expect(box!.height).toBeGreaterThanOrEqual(minimum)
+}
+
 test("staged attachments batch, persist selection, and move only sent files", async ({ page }) => {
   await mockAttachmentChat(page, 0)
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -138,7 +153,7 @@ test("staged attachments batch, persist selection, and move only sent files", as
 
   const staging = page.getByTestId("composer-toolbar").getByRole("button", { name: "暂存附件", exact: true })
   await staging.click()
-  await expect(page.getByRole("region", { name: "暂存附件" })).toBeVisible()
+  await expect(page.getByRole("dialog", { name: "暂存附件" })).toBeVisible()
   await expect(page.getByText("本次已选 4/10 个附件 · 4/4 张图片")).toBeVisible()
   await expect(page.getByRole("button", { name: "取消选择附件：screen-1.png" })).toBeVisible()
   await expect(page.getByRole("button", { name: "选择附件：screen-5.png" })).toBeVisible()
@@ -151,19 +166,19 @@ test("staged attachments batch, persist selection, and move only sent files", as
   await page.getByRole("button", { name: "选择附件：screen-5.png" }).click()
   await expect(page.getByText("本次已选 4/4 张图片")).toBeVisible()
 
-  await page.getByRole("region", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
+  await page.getByRole("dialog", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
   await page.reload()
   await staging.click()
   await expect(page.getByRole("button", { name: "取消选择附件：screen-3.png" })).toBeVisible()
   await expect(page.getByRole("button", { name: "选择附件：screen-5.png" })).toBeVisible()
-  await page.getByRole("region", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
+  await page.getByRole("dialog", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
 
   await page.getByTestId("chat-input").fill("force failure")
   await page.getByTestId("send-button").click()
   await expect(page.getByText("mock send failure")).toBeVisible()
   await staging.click()
   await expect(page.getByRole("button", { name: "取消选择附件：screen-3.png" })).toBeVisible()
-  await page.getByRole("region", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
+  await page.getByRole("dialog", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
 
   await page.getByTestId("chat-input").fill("请看这些截图")
   await page.getByTestId("send-button").click()
@@ -174,7 +189,7 @@ test("staged attachments batch, persist selection, and move only sent files", as
   await staging.click()
   await expect(page.getByRole("button", { name: "取消选择附件：screen-5.png" })).toBeVisible()
   await expect(page.getByText("本次已选 4/10 个附件 · 4/4 张图片")).toBeVisible()
-  await page.getByRole("region", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
+  await page.getByRole("dialog", { name: "暂存附件" }).getByRole("button", { name: "关闭暂存附件" }).click()
 
   await page.getByRole("button", { name: "文件", exact: true }).click()
   await expect(page.getByRole("region", { name: "会话文件" })).toBeVisible()
@@ -190,16 +205,57 @@ test("staged attachments batch, persist selection, and move only sent files", as
   await expectNoHorizontalOverflow(page)
 })
 
-for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }]) {
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 430, height: 932 }]) {
   test(`staged attachments drawer stays usable at ${viewport.width}px`, async ({ page }) => {
     await mockAttachmentChat(page)
     await page.setViewportSize(viewport)
     await page.goto("/chat/1")
-    await page.getByRole("button", { name: "暂存附件" }).click()
-    const drawer = page.getByRole("region", { name: "暂存附件" })
+    const trigger = page.getByRole("button", { name: "暂存附件" })
+    await trigger.click()
+    const drawer = page.getByRole("dialog", { name: "暂存附件" })
     await expect(drawer).toBeVisible()
     await expect.poll(async () => (await drawer.boundingBox())?.height || 0).toBeGreaterThanOrEqual(viewport.height - 1)
     await expect(page.getByRole("button", { name: "预览附件：screen-1.png" })).toBeVisible()
+
+    const upload = drawer.getByRole("button", { name: "上传", exact: true })
+    const refresh = drawer.getByRole("button", { name: "刷新暂存附件" })
+    const close = drawer.getByRole("button", { name: "关闭暂存附件" })
+    await expectPointerActionable(upload)
+    await expectPointerActionable(refresh)
+    await expectPointerActionable(close)
+    if (viewport.width <= 430) {
+      await expectMinimumTouchTarget(upload)
+      await expectMinimumTouchTarget(refresh)
+      await expectMinimumTouchTarget(close)
+      await expectMinimumTouchTarget(drawer.getByRole("button", { name: "删除暂存附件：screen-1.png" }))
+    }
+
+    await expect(upload).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(refresh).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(close).toBeFocused()
+    await page.keyboard.press("Tab")
+    await expect(drawer.getByRole("button", { name: "选择附件：screen-1.png" })).toBeFocused()
+
+    const chooserPromise = page.waitForEvent("filechooser")
+    await upload.click()
+    const chooser = await chooserPromise
+    await chooser.setFiles({ name: "mobile-upload.png", mimeType: "image/png", buffer: tinyPNG })
+    await expect(drawer.getByText("screen-25.png")).toBeVisible()
+
+    const refreshed = page.waitForResponse((response) => response.request().method() === "GET" && new URL(response.url()).pathname === "/api/v1/files")
+    await refresh.click()
+    await refreshed
+
+    await close.click()
+    await expect(drawer).toBeHidden()
+    await expect(trigger).toBeFocused()
+
+    await trigger.click()
+    await page.keyboard.press("Escape")
+    await expect(drawer).toBeHidden()
+    await expect(trigger).toBeFocused()
     await expectNoHorizontalOverflow(page)
   })
 }

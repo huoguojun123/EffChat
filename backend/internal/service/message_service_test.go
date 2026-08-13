@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func setupMessageTestDB(t *testing.T) *sql.DB {
@@ -1086,7 +1086,7 @@ func TestMessageServiceUndoRejectsAutomaticCompaction(t *testing.T) {
 		t.Fatalf("persist automatic checkpoint: %v", err)
 	}
 
-	if _, err := svc.UndoLastCompaction(session.ID, user.ID); err == nil || !strings.Contains(err.Error(), "latest manual compaction") {
+	if _, err := svc.UndoLastCompaction(session.ID, user.ID); !errors.Is(err, ErrCompactionUndoDenied) {
 		t.Fatalf("undo automatic compaction error = %v", err)
 	}
 	messages, err := messageRepo.ListAllBySession(session.ID)

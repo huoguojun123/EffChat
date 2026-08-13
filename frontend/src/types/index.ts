@@ -128,7 +128,7 @@ export interface ActiveRunSnapshot {
   run_id: string
   session_id: number
   user_message_id: number
-  kind?: "chat" | "compaction"
+  kind?: "chat" | "compaction" | "memory_maintenance"
   status: "running" | "completed" | "failed" | "canceled"
   cursor: number
   content: string
@@ -145,7 +145,7 @@ export interface ActiveRunSnapshot {
 export interface DurableRunStatus {
   run_id: string
   session_id: number
-  kind: "chat" | "compaction"
+  kind: "chat" | "compaction" | "memory_maintenance"
   status: "running" | "completed" | "failed" | "canceled"
   user_message_id?: number
   terminal_message_id?: number
@@ -207,6 +207,14 @@ export interface Model {
   enabled: boolean
   min_group_level: number
   sort_order: number
+  // Catalog metadata is persisted separately from runtime/channel status so
+  // administrators can see where capability values came from.
+  catalog_source: "manual" | "channel" | "models_dev" | "builtin" | "unknown"
+  catalog_checked_at?: string | null
+  lifecycle_status: "active" | "preview" | "deprecated" | "retired" | "unknown"
+  temperature_policy: "configurable" | "omit" | "fixed"
+  temperature_value?: number | null
+  openai_request_profile: OpenAIRequestProfile
   resolved_thinking_format?: string
   default_thinking_effort?: string
   thinking_effort_options?: ThinkingEffortOption[]
@@ -215,6 +223,13 @@ export interface Model {
   channel_adapter?: string
   channel_enabled?: boolean
   channel_configured?: boolean
+}
+
+export interface OpenAIRequestProfile {
+  top_p?: number | null
+  n?: number | null
+  presence_penalty?: number | null
+  frequency_penalty?: number | null
 }
 
 export interface ThinkingEffortOption {
@@ -232,6 +247,9 @@ export interface ModelRuntimeProfile {
   supports_vision: boolean
   supports_tools: boolean
   search_impl: string
+  temperature_policy: Model["temperature_policy"]
+  temperature_value?: number | null
+  openai_request_profile: OpenAIRequestProfile
 }
 
 // UserGroup 用户分级组，level 越大权限越高
@@ -263,7 +281,6 @@ export interface Prompt {
   group_id?: number | null
   group_name: string
   is_public: boolean
-  use_count: number
   created_at: string
   updated_at: string
 }

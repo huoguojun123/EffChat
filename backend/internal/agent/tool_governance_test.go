@@ -6,16 +6,52 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	einoTool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/cloudwego/eino/schema"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	internaltool "github.com/huoguojun123/EffChat/internal/tool"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 )
+
+type governanceInfoTool struct {
+	name string
+}
+
+func (t governanceInfoTool) Info(context.Context) (*schema.ToolInfo, error) {
+	return &schema.ToolInfo{Name: t.name}, nil
+}
+
+func TestValidateMountedToolGovernanceRejectsUnknownTool(t *testing.T) {
+	runtime := service.NewToolConfigService(nil).RuntimeConfigSet()
+	if _, err := validateMountedToolGovernance(t.Context(), runtime, []einoTool.BaseTool{
+		governanceInfoTool{name: "unregistered_tool"},
+	}); err == nil || !strings.Contains(err.Error(), "not registered in runtime governance") {
+		t.Fatalf("validation error = %v, want unregistered governance error", err)
+	}
+}
+
+func TestValidateMountedToolGovernanceAcceptsCatalogTool(t *testing.T) {
+	runtime := service.NewToolConfigService(nil).RuntimeConfigSet()
+	mounted, err := validateMountedToolGovernance(t.Context(), runtime, []einoTool.BaseTool{
+		governanceInfoTool{name: "memory"},
+	})
+	if err != nil {
+		t.Fatalf("validate known tool: %v", err)
+	}
+	if !mounted["memory"] {
+		t.Fatalf("mounted = %#v, want memory", mounted)
+	}
+}
 
 func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	runtime := service.ToolRuntimeConfigSet{
@@ -24,7 +60,7 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	budget := &toolBudgetMiddleware{maxCalls: 8, maxResultTokens: 1000, maxContextTokens: 2000, maxSkillTokens: 1000}
 	middleware := toolGovernanceMiddleware(runtime, nil, nil, budget).Invokable
 	endpoint := middleware(func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-		return nil, errors.New("upstream unavailable")
+		return nil, errors.New("postgres://secret@internal/private/path")
 	})
 
 	out, err := endpoint(context.Background(), &compose.ToolInput{Name: "web_search", CallID: "call-1", Arguments: `{"query":"x"}`})
@@ -41,8 +77,295 @@ func TestToolGovernanceMiddleware_ReturnsStructuredError(t *testing.T) {
 	if payload["ok"] != false || payload["tool"] != "web_search" || payload["source"] != "tool_governance" {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
+	if payload["code"] != "tool_execution_failed" || payload["retryable"] != false {
+		t.Fatalf("unexpected public classification: %#v", payload)
+	}
+	if strings.Contains(out.Result, "secret") || strings.Contains(out.Result, "/private/path") || strings.Contains(out.Result, "postgres") {
+		t.Fatalf("tool output leaked internal error: %s", out.Result)
+	}
 	if budget.contextUsed == 0 || budget.contextReserved != 0 {
 		t.Fatalf("structured Go error was not accounted: used=%d reserved=%d", budget.contextUsed, budget.contextReserved)
+	}
+}
+
+func TestToolGovernanceSanitizesStructuredFailureCause(t *testing.T) {
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 92})
+	middleware := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"file_list": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, usageService, nil).Invokable
+	endpoint := middleware(func(context.Context, *compose.ToolInput) (*compose.ToolOutput, error) {
+		return &compose.ToolOutput{Result: `{"error":"postgres://fixture:secret@db.example/effchat /srv/private/files","message":"Failed to list conversation files."}`}, nil
+	})
+
+	out, err := endpoint(modelusage.WithMeta(context.Background(), modelusage.Meta{UserID: 7, SessionID: 9, RunID: "run-1"}), &compose.ToolInput{Name: "file_list", CallID: "call-1"})
+	if err != nil {
+		t.Fatalf("structured Tool failure should remain a result: %v", err)
+	}
+	if out == nil || strings.Contains(out.Result, "secret") || strings.Contains(out.Result, "/srv/private") || strings.Contains(out.Result, "postgres") {
+		t.Fatalf("structured Tool result leaked private cause: %#v", out)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(out.Result), &payload); err != nil {
+		t.Fatalf("decode Tool result: %v", err)
+	}
+	if payload["error"] != "Failed to list conversation files." || payload["message"] != "Failed to list conversation files." ||
+		payload["ok"] != false || payload["code"] != "tool_business_failure" || payload["retryable"] != false || payload["tool"] != "file_list" || payload["source"] != "tool" {
+		t.Fatalf("public Tool failure = %#v", payload)
+	}
+	if usageStore.updated.Success || usageStore.updated.ErrorType != "tool_business_failure" {
+		t.Fatalf("usage outcome = %#v", usageStore.updated)
+	}
+	if strings.Contains(usageStore.updated.ErrorMessage, "fixture:secret@") {
+		t.Fatalf("usage diagnostic leaked private cause: %q", usageStore.updated.ErrorMessage)
+	}
+}
+
+func TestToolGovernanceKeepsTypedWebFailure(t *testing.T) {
+	result := `{"ok":false,"error_code":"url_blocked","error":"该地址被安全策略拦截","retryable":false}`
+	sanitized, diagnostic := sanitizeStructuredToolFailure("web_extract", result)
+	if sanitized != result || diagnostic != "" {
+		t.Fatalf("typed web failure changed: result=%s diagnostic=%q", sanitized, diagnostic)
+	}
+}
+
+func TestToolCallContextLeavesWebExtractToItsStagedBudgets(t *testing.T) {
+	ctx, cancel := toolCallContext(t.Context(), "web_extract", 20*time.Millisecond)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("web_extract must not inherit an outer absolute tool deadline")
+	}
+
+	parent, parentCancel := context.WithCancel(t.Context())
+	ctx, cancel = toolCallContext(parent, "web_extract", time.Second)
+	parentCancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("web_extract context did not preserve semantic parent cancellation")
+	}
+	cancel()
+}
+
+func TestToolCallContextKeepsAbsoluteTimeoutForOrdinaryTools(t *testing.T) {
+	ctx, cancel := toolCallContext(t.Context(), "web_search", 20*time.Millisecond)
+	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("ordinary tool context must retain its absolute timeout")
+	}
+}
+
+func TestToolUsageErrorTypePreservesFirstOutputTimeout(t *testing.T) {
+	if got := toolUsageErrorType(modelstream.ErrFirstOutputTimeout, t.Context()); got != "first_output_timeout" {
+		t.Fatalf("toolUsageErrorType() = %q, want first_output_timeout", got)
+	}
+}
+
+func TestToolGovernanceMiddlewarePropagatesParentCancellationAfterUsageClosure(t *testing.T) {
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 77})
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	budget := &toolBudgetMiddleware{maxCalls: 8, maxResultTokens: 1000, maxContextTokens: 2000, maxSkillTokens: 1000}
+	started := make(chan struct{})
+	endpoint := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"web_extract": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, usageService, budget).Invokable(func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	})
+
+	stopCause := &testToolCancellation{message: "server draining"}
+	baseCtx, cancel := context.WithCancelCause(modelusage.WithMeta(t.Context(), modelusage.Meta{
+		UserID: 7, SessionID: 9, RunID: "run-cancel",
+	}))
+	result := make(chan struct {
+		output *compose.ToolOutput
+		err    error
+	}, 1)
+	go func() {
+		output, err := endpoint(baseCtx, &compose.ToolInput{Name: "web_extract", CallID: "call-1", Arguments: `{}`})
+		result <- struct {
+			output *compose.ToolOutput
+			err    error
+		}{output: output, err: err}
+	}()
+
+	<-started
+	cancel(stopCause)
+	select {
+	case got := <-result:
+		if got.err != stopCause || got.output != nil {
+			t.Fatalf("endpoint = (%#v, %v), want nil and exact parent cause %v", got.output, got.err, stopCause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled Tool call did not return")
+	}
+	if usageStore.updated.ID != 77 || usageStore.updated.Success || usageStore.updated.ErrorType != "canceled" || usageStore.updated.ContextTokens != 0 {
+		t.Fatalf("canceled usage terminal = %#v", usageStore.updated)
+	}
+	if budget.contextReserved != 0 || budget.actualCalls.Load() != 1 {
+		t.Fatalf("canceled Tool budget = reserved:%d calls:%d", budget.contextReserved, budget.actualCalls.Load())
+	}
+}
+
+func TestToolGovernanceMiddlewarePropagatesCancellationOverSuccessfulToolOutput(t *testing.T) {
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 78})
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	budget := &toolBudgetMiddleware{maxCalls: 8, maxResultTokens: 1000, maxContextTokens: 2000, maxSkillTokens: 1000}
+	stopCause := &testToolCancellation{message: "user stop"}
+	baseCtx, cancel := context.WithCancelCause(modelusage.WithMeta(t.Context(), modelusage.Meta{
+		UserID: 7, SessionID: 9, RunID: "run-cancel-success",
+	}))
+	endpoint := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"web_extract": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, usageService, budget).Invokable(func(context.Context, *compose.ToolInput) (*compose.ToolOutput, error) {
+		cancel(stopCause)
+		return &compose.ToolOutput{Result: `{"ok":true,"content":"must not reach the model"}`}, nil
+	})
+
+	output, err := endpoint(baseCtx, &compose.ToolInput{Name: "web_extract", CallID: "call-1", Arguments: `{}`})
+	if err != stopCause || output != nil {
+		t.Fatalf("endpoint = (%#v, %v), want nil and exact parent cause %v", output, err, stopCause)
+	}
+	if usageStore.updated.ID != 78 || usageStore.updated.Success || usageStore.updated.ErrorType != "canceled" || usageStore.updated.ContextTokens != 0 {
+		t.Fatalf("canceled successful output usage = %#v", usageStore.updated)
+	}
+	if budget.contextReserved != 0 {
+		t.Fatalf("canceled successful output kept context reservation: %d", budget.contextReserved)
+	}
+}
+
+func TestToolGovernanceMiddlewarePropagatesWebExtractRefinementCancellationEndToEnd(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("Title: cancellation\nMarkdown Content:\nsource evidence"))
+	}))
+	defer server.Close()
+	summarizer := &governanceBlockingSummarizer{started: make(chan struct{})}
+	webExtract := internaltool.NewWebExtractTool(internaltool.WebExtractConfig{
+		CrawlerProviders: []string{"jina"},
+		JinaBaseURL:      server.URL,
+		Summarizer:       summarizer,
+		SummaryEnabled:   true,
+		Timeout:          time.Second,
+	})
+
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 80})
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	endpoint := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"web_extract": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, usageService, nil).Invokable(func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+		result, err := webExtract.InvokableRun(ctx, input.Arguments)
+		if err != nil {
+			return nil, err
+		}
+		return &compose.ToolOutput{Result: result}, nil
+	})
+
+	stopCause := &testToolCancellation{message: "server draining"}
+	ctx, cancel := context.WithCancelCause(modelusage.WithMeta(t.Context(), modelusage.Meta{
+		UserID: 7, SessionID: 9, RunID: "run-web-extract-cancel",
+	}))
+	result := make(chan struct {
+		output *compose.ToolOutput
+		err    error
+	}, 1)
+	go func() {
+		output, err := endpoint(ctx, &compose.ToolInput{
+			Name:      "web_extract",
+			CallID:    "call-1",
+			Arguments: `{"url":"https://example.com/article","goal":"verify cancellation"}`,
+		})
+		result <- struct {
+			output *compose.ToolOutput
+			err    error
+		}{output: output, err: err}
+	}()
+
+	<-summarizer.started
+	cancel(stopCause)
+	select {
+	case got := <-result:
+		if got.err != stopCause || got.output != nil {
+			t.Fatalf("end-to-end endpoint = (%#v, %v), want nil and exact parent cause %v", got.output, got.err, stopCause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("end-to-end web_extract cancellation did not return")
+	}
+	if usageStore.updated.ID != 80 || usageStore.updated.Success || usageStore.updated.ErrorType != "canceled" || usageStore.updated.ContextTokens != 0 {
+		t.Fatalf("end-to-end canceled usage = %#v", usageStore.updated)
+	}
+}
+
+func TestToolGovernanceMiddlewarePropagatesCancellationDuringQuotaReservation(t *testing.T) {
+	started := make(chan struct{})
+	quota := service.NewQuotaService(blockingToolQuotaStore{
+		fakeToolQuotaStore: fakeToolQuotaStore{},
+		started:            started,
+	})
+	budget := &toolBudgetMiddleware{maxCalls: 8, maxResultTokens: 1000, maxContextTokens: 2000, maxSkillTokens: 1000}
+	called := false
+	endpoint := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"web_extract": {Enabled: true, TimeoutSeconds: 20},
+	}, quota, nil, budget).Invokable(func(context.Context, *compose.ToolInput) (*compose.ToolOutput, error) {
+		called = true
+		return &compose.ToolOutput{Result: `{"ok":true}`}, nil
+	})
+
+	stopCause := &testToolCancellation{message: "server draining"}
+	ctx, cancel := context.WithCancelCause(modelusage.WithMeta(t.Context(), modelusage.Meta{UserID: 7, SessionID: 9, RunID: "run-quota-cancel"}))
+	result := make(chan error, 1)
+	go func() {
+		output, err := endpoint(ctx, &compose.ToolInput{Name: "web_extract", CallID: "call-1", Arguments: `{}`})
+		if output != nil {
+			result <- errors.New("quota cancellation returned Tool JSON")
+			return
+		}
+		result <- err
+	}()
+
+	<-started
+	cancel(stopCause)
+	select {
+	case err := <-result:
+		if err != stopCause {
+			t.Fatalf("endpoint error = %v, want exact parent cause %v", err, stopCause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("quota reservation did not observe parent cancellation")
+	}
+	if called {
+		t.Fatal("Tool endpoint ran after quota reservation cancellation")
+	}
+	if budget.contextReserved != 0 || budget.actualCalls.Load() != 0 {
+		t.Fatalf("quota cancellation leaked Tool budget: reserved=%d calls=%d", budget.contextReserved, budget.actualCalls.Load())
+	}
+}
+
+func TestToolGovernanceMiddlewareKeepsOwnedToolTimeoutStructured(t *testing.T) {
+	quota := service.NewQuotaService(fakeToolQuotaStore{reservationID: 79})
+	usageStore := &fakeToolUsageStore{}
+	usageService := modelusage.NewService(usageStore)
+	endpoint := toolGovernanceMiddleware(service.ToolRuntimeConfigSet{
+		"web_search": {Enabled: true, TimeoutSeconds: 1},
+	}, quota, usageService, nil).Invokable(func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	})
+
+	ctx := modelusage.WithMeta(t.Context(), modelusage.Meta{UserID: 7, SessionID: 9, RunID: "run-tool-timeout"})
+	output, err := endpoint(ctx, &compose.ToolInput{Name: "web_search", CallID: "call-1", Arguments: `{}`})
+	if err != nil {
+		t.Fatalf("owned Tool timeout must remain structured JSON: %v", err)
+	}
+	if output == nil || !strings.Contains(output.Result, `"retryable":true`) || !strings.Contains(output.Result, `"ok":false`) {
+		t.Fatalf("owned Tool timeout output = %#v", output)
+	}
+	if usageStore.updated.ID != 79 || usageStore.updated.Success || usageStore.updated.ErrorType != "timeout" {
+		t.Fatalf("owned Tool timeout usage = %#v", usageStore.updated)
 	}
 }
 
@@ -210,7 +533,7 @@ func TestToolOutcomeCodeAndDiagnosticsMatchStorageLimits(t *testing.T) {
 	}
 }
 
-func TestToolGovernanceRecordsTruncatedGoErrorWithoutLoggingSecret(t *testing.T) {
+func TestToolGovernanceCapsGoErrorDiagnosticWithoutLoggingSecret(t *testing.T) {
 	var logs bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logs)
@@ -235,8 +558,13 @@ func TestToolGovernanceRecordsTruncatedGoErrorWithoutLoggingSecret(t *testing.T)
 	if _, err := endpoint(ctx, &compose.ToolInput{Name: "web_search", CallID: "call-1"}); err != nil {
 		t.Fatalf("Go error should be converted to a structured result: %v", err)
 	}
-	if !usageStore.updated.Truncated || usageStore.updated.Success || usageStore.updated.ErrorType != "tool_error" {
+	// Truncated describes the model-visible Tool result, not the separately capped
+	// internal diagnostic. The stable public error fits within the result budget.
+	if usageStore.updated.Truncated || usageStore.updated.Success || usageStore.updated.ErrorType != "tool_error" {
 		t.Fatalf("Go error usage mismatch: %#v", usageStore.updated)
+	}
+	if len([]rune(usageStore.updated.ErrorMessage)) != 500 {
+		t.Fatalf("usage diagnostic length = %d, want storage cap", len([]rune(usageStore.updated.ErrorMessage)))
 	}
 	if strings.Contains(usageStore.updated.ErrorMessage, "private-value") || strings.Contains(usageStore.updated.ErrorMessage, "\n") {
 		t.Fatalf("usage diagnostic exposed secret/control characters: %q", usageStore.updated.ErrorMessage)
@@ -306,6 +634,39 @@ type fakeToolQuotaStore struct {
 	reserveCalls   *int
 }
 
+type blockingToolQuotaStore struct {
+	fakeToolQuotaStore
+	started chan struct{}
+}
+
+func (f blockingToolQuotaStore) ReserveToolCall(ctx context.Context, input repository.ToolCallReservationInput) (repository.ToolCallReservation, error) {
+	close(f.started)
+	<-ctx.Done()
+	return repository.ToolCallReservation{}, context.Cause(ctx)
+}
+
+type governanceBlockingSummarizer struct {
+	started chan struct{}
+}
+
+func (s *governanceBlockingSummarizer) Summarize(ctx context.Context, _, _, _, _ string) (string, error) {
+	close(s.started)
+	<-ctx.Done()
+	return "", context.Cause(ctx)
+}
+
+type testToolCancellation struct {
+	message string
+}
+
+func (e *testToolCancellation) Error() string {
+	return e.message
+}
+
+func (e *testToolCancellation) Unwrap() error {
+	return context.Canceled
+}
+
 func (f fakeToolQuotaStore) LimitsForUser(ctx context.Context, userID int64) (repository.UserQuotaLimits, error) {
 	return f.limits, nil
 }
@@ -348,7 +709,7 @@ func (f fakeToolQuotaStore) GetChatRun(context.Context, string) (repository.Chat
 	return repository.ChatRunRecord{}, repository.ErrNotFound
 }
 
-func (f fakeToolQuotaStore) ReserveOCRSubmission(context.Context, int64, int64, int) (bool, error) {
+func (f fakeToolQuotaStore) ReserveOCRSubmission(context.Context, int64, int64, int64, int) (bool, error) {
 	return true, nil
 }
 

@@ -28,6 +28,7 @@ const INITIAL_BOTTOM_LOCK_MS = 1400
 export function MessageList() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeSessionId = useChatStore((s) => s.activeSessionId)
+  const messageWindowGeneration = useChatStore((s) => s.messageWindowGeneration)
   const messages = useChatStore((s) => s.messages)
   const streamingStatus = useChatStore((s) => s.streaming.status)
   const streamingRequestId = useChatStore((s) => s.streaming.requestId)
@@ -63,7 +64,7 @@ export function MessageList() {
   const trimRafRef = useRef(0)
   const turnAnchorsRef = useRef(new Map<number, HTMLDivElement>())
   // 向上加载时锚定视口：prepend 前记录距底距离，prepend 后据此恢复 scrollTop。
-  const pendingAnchorRef = useRef<{ id: number; top: number; until: number } | null>(null)
+  const pendingAnchorRef = useRef<{ id: number; top: number; until: number; windowGeneration: number } | null>(null)
   const pendingAnchorTimerRef = useRef(0)
   const windowSwitchingRef = useRef(false)
   const windowSwitchTokenRef = useRef(0)
@@ -138,10 +139,11 @@ export function MessageList() {
       id: Number(element.dataset.messageId),
       top: element.getBoundingClientRect().top,
       until: Date.now() + 1500,
+      windowGeneration: messageWindowGeneration,
     }
     window.clearTimeout(pendingAnchorTimerRef.current)
     pendingAnchorTimerRef.current = window.setTimeout(clearPendingAnchor, 1500)
-  }, [clearPendingAnchor])
+  }, [clearPendingAnchor, messageWindowGeneration])
 
   const keepInitialBottomLocked = useCallback(() => {
     const el = scrollRef.current
@@ -208,10 +210,18 @@ export function MessageList() {
     const el = scrollRef.current
     const pending = pendingAnchorRef.current
     if (!el || !pending) return
+    if (pending.windowGeneration !== messageWindowGeneration) {
+      clearPendingAnchor()
+      return
+    }
     const anchor = el.querySelector<HTMLElement>(`[data-message-id="${pending.id}"]`)
     if (!anchor) return
     el.scrollTop += anchor.getBoundingClientRect().top - pending.top
-  }, [messages.length])
+  }, [clearPendingAnchor, messageWindowGeneration, messages.length])
+
+  useEffect(() => {
+    clearPendingAnchor()
+  }, [clearPendingAnchor, messageWindowGeneration])
 
   useEffect(() => {
     const list = listRef.current
@@ -219,7 +229,7 @@ export function MessageList() {
     if (!list || !container || typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver(() => {
       const pending = pendingAnchorRef.current
-      if (pending && Date.now() > pending.until) {
+      if (pending && (pending.windowGeneration !== messageWindowGeneration || Date.now() > pending.until)) {
         clearPendingAnchor()
       } else if (pending) {
         const anchor = container.querySelector<HTMLElement>(`[data-message-id="${pending.id}"]`)
@@ -234,7 +244,7 @@ export function MessageList() {
       cancelAnimationFrame(trimRafRef.current)
       observer.disconnect()
     }
-  }, [clearPendingAnchor, enforceMessageWindowHeight])
+  }, [clearPendingAnchor, enforceMessageWindowHeight, messageWindowGeneration])
 
   useLayoutEffect(() => {
     initialScrolledSessionRef.current = null

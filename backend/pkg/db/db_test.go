@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/huoguojun123/effchat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/config"
 	"github.com/lib/pq"
 )
 

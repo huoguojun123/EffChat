@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const { get } = vi.hoisted(() => ({ get: vi.fn() }))
+const { get, patch } = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }))
 
-vi.mock("@/api/client", () => ({ api: { get } }))
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  api: { get, patch },
+}))
 
-import { downloadFilename, searchConversations } from "@/api/sessions"
+import { downloadFilename } from "@/api/client"
+import { searchConversations, updateSession } from "@/api/sessions"
 
 describe("searchConversations", () => {
   beforeEach(() => get.mockReset())
@@ -38,5 +42,30 @@ describe("downloadFilename", () => {
 
   it("rejects malformed encoded filenames", () => {
     expect(downloadFilename("attachment; filename*=UTF-8''%ZZ")).toBe("")
+  })
+})
+
+describe("updateSession", () => {
+  beforeEach(() => patch.mockReset())
+
+  it("returns the canonical session after a partial update", async () => {
+    const updated = {
+      id: 42,
+      user_id: 1,
+      folder_id: null,
+      title: "fixture",
+      title_generated: false,
+      model_id: "fixture-model",
+      provider: "openai",
+      memory_enabled: false,
+      created_at: "2026-08-06T00:00:00Z",
+      updated_at: "2026-08-06T00:01:00Z",
+    }
+    patch.mockResolvedValue(updated)
+
+    await expect(updateSession(42, { memory_enabled: false })).resolves.toBe(updated)
+
+    expect(patch).toHaveBeenCalledOnce()
+    expect(patch).toHaveBeenCalledWith("/sessions/42", { memory_enabled: false })
   })
 })

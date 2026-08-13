@@ -47,3 +47,39 @@ func TestWriteFileRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal("expected symlink write to be rejected")
 	}
 }
+
+func TestWriteFileUsesPrivateAttachmentModes(t *testing.T) {
+	tempRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp root: %v", err)
+	}
+	root := filepath.Join(tempRoot, "storage")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+	path := filepath.Join(root, "attachments", "user", "month", "fixture.png")
+	if err := writeFileUnder(root, path, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("writeFileUnder: %v", err)
+	}
+
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if got := fileInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode=%#o, want 0600", got)
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "attachments"),
+		filepath.Join(root, "attachments", "user"),
+		filepath.Join(root, "attachments", "user", "month"),
+	} {
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			t.Fatalf("stat directory %s: %v", dir, statErr)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Fatalf("directory %s mode=%#o, want 0700", dir, got)
+		}
+	}
+}

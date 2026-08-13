@@ -12,10 +12,18 @@ import { AppLogo } from "@/components/AppLogo"
 import { cn } from "@/lib/utils"
 import type { SessionFolder } from "@/types"
 import { searchConversations, type ConversationSearchResult } from "@/api/sessions"
+import { useAuthStore } from "@/stores/auth"
 
 export function Sidebar() {
   const navigate = useNavigate()
   const createSession = useChatStore((s) => s.createSession)
+  const sessionCreateReadiness = useChatStore((s) => s.sessionCreateReadiness)
+  const isLoadingSessionCreateReadiness = useChatStore((s) => s.isLoadingSessionCreateReadiness)
+  const sessionCreateReadinessError = useChatStore((s) => s.sessionCreateReadinessError)
+  const isCreatingSession = useChatStore((s) => s.isCreatingSession)
+  const sessionCreateError = useChatStore((s) => s.sessionCreateError)
+  const loadSessionCreateReadiness = useChatStore((s) => s.loadSessionCreateReadiness)
+  const user = useAuthStore((s) => s.user)
   const sessions = useChatStore((s) => s.sessions)
   const sessionFolders = useChatStore((s) => s.sessionFolders)
   const activeFolderId = useChatStore((s) => s.activeFolderId)
@@ -50,9 +58,13 @@ export function Sidebar() {
   }
 
   async function handleNewChat() {
-    const session = await createSession()
-    navigate(`/chat/${session.id}`)
-    closeOnMobile()
+    try {
+      const session = await createSession()
+      navigate(`/chat/${session.id}`)
+      closeOnMobile()
+    } catch {
+      // The shared store renders the failure under both creation entries.
+    }
   }
 
   async function confirmCreateFolder() {
@@ -170,18 +182,33 @@ export function Sidebar() {
       <div className="px-2.5 pb-2 space-y-1.5">
         <button
           onClick={handleNewChat}
+          disabled={isLoadingSessionCreateReadiness || !sessionCreateReadiness?.ready || isCreatingSession}
           className="flex w-full items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar px-2.5 py-2 text-[14px] font-medium text-sidebar-foreground shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-[background-color,border-color,box-shadow] motion-control hover:border-sidebar-border hover:bg-sidebar-accent/80 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
           data-testid="new-chat"
         >
-          <Plus className="h-4 w-4" />
-          新对话
+          {isCreatingSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+          {isCreatingSession ? "正在创建" : "新对话"}
         </button>
+        {sessionCreateReadinessError ? (
+          <div role="alert" className="rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+            <p>{sessionCreateReadinessError}</p>
+            <button type="button" className="mt-1 underline" onClick={() => void loadSessionCreateReadiness(true)}>重新检查</button>
+          </div>
+        ) : !isLoadingSessionCreateReadiness && !sessionCreateReadiness?.ready ? (
+          <div role="status" className="rounded-md bg-sidebar-accent/60 px-2.5 py-2 text-xs text-muted-foreground">
+            <p>{user?.role === "admin" ? "请先选择全局默认模型" : "请联系管理员配置默认模型"}</p>
+            {user?.role === "admin" ? <button type="button" className="mt-1 underline" onClick={() => navigate("/admin/models")}>配置模型</button> : null}
+            {sessionCreateReadiness?.retryable ? <button type="button" className="ml-2 mt-1 underline" onClick={() => void loadSessionCreateReadiness(true)}>重新检查</button> : null}
+          </div>
+        ) : sessionCreateError ? (
+          <div role="alert" className="rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">{sessionCreateError}</div>
+        ) : null}
 
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="search"
-            name="fchat-session-search"
+            name="effchat-session-search"
             aria-label="搜索对话"
             autoComplete="off"
             autoCorrect="off"

@@ -5,15 +5,19 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
+
+var ErrConfigInvalid = errors.New("invalid system configuration")
 
 type ConfigItem struct {
 	Key         string          `json:"key"`
@@ -36,7 +40,9 @@ type ConfigOption struct {
 }
 
 type ConfigRepository struct {
-	db *sql.DB
+	db              *sql.DB
+	policyCache     sync.Map
+	uploadMaxSizeMB int
 }
 
 type configExecer interface {
@@ -438,10 +444,10 @@ var AdminEditableConfig = map[string]AdminConfigMeta{
 		ConfigType:  "select",
 		Default:     json.RawMessage(`4000`),
 		Options: []ConfigOption{
-			{Value: 4000, Label: "4K · 默认"},
-			{Value: 8000, Label: "8K · 更长会话状态"},
-			{Value: 12000, Label: "12K · 大量项目记录"},
-			{Value: 16000, Label: "16K · 高上下文模型"},
+			{Value: 4000, Label: "4K · 需 ≥8,192 输出 token"},
+			{Value: 8000, Label: "8K · 需 ≥12,288 输出 token"},
+			{Value: 12000, Label: "12K · 需 ≥16,384 输出 token"},
+			{Value: 16000, Label: "16K · 需 ≥20,480 输出 token"},
 		},
 	},
 	"compression_context_threshold": {
@@ -503,7 +509,7 @@ var AdminEditableConfig = map[string]AdminConfigMeta{
 		Default:     json.RawMessage(`5`),
 	},
 	"extract_summary_enabled": {
-		DisplayName: "网页提炼（小模型）",
+		DisplayName: "长网页提炼（小模型）",
 		Category:    "联网与提取",
 		SortOrder:   50,
 		ConfigType:  "boolean",
@@ -513,6 +519,14 @@ var AdminEditableConfig = map[string]AdminConfigMeta{
 
 func NewConfigRepository(db *sql.DB) *ConfigRepository {
 	return &ConfigRepository{db: db}
+}
+
+// SetUploadMaxSizeMB installs the immutable deployment ceiling used by the
+// admin control plane. The database keeps the user-selected policy, while this
+// process-local value prevents future writes that no deployed request path can
+// fulfill. A non-positive input leaves tests and non-upload callers uncapped.
+func (r *ConfigRepository) SetUploadMaxSizeMB(maxSizeMB int) {
+	r.uploadMaxSizeMB = maxSizeMB
 }
 
 func (r *ConfigRepository) List() ([]*ConfigItem, error) {
@@ -572,6 +586,14 @@ func (r *ConfigRepository) ListAdminEditable() ([]*ConfigItem, error) {
 				item.Value = json.RawMessage(strconv.Itoa(clampToOptions(key, n)))
 			}
 		}
+		if key == "file_upload_max_size_mb" && r.uploadMaxSizeMB > 0 {
+			if n, ok := parseConfigInt(item.Value); ok && n > r.uploadMaxSizeMB {
+				// Legacy installations may have saved a value before the deployment
+				// ceiling existed. Report the effective value without rewriting the
+				// database, so an administrator can review and save deliberately.
+				item.Value = json.RawMessage(strconv.Itoa(r.uploadMaxSizeMB))
+			}
+		}
 		result = append(result, item)
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -609,11 +631,14 @@ func (r *ConfigRepository) GetIntContext(ctx context.Context, key string, fallba
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fallback, ctxErr
 		}
-		return fallback, nil
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	n, parsed := parseConfigInt(item.Value)
 	if !parsed {
-		return fallback, nil
+		return fallback, fmt.Errorf("config %s is not a valid integer", key)
 	}
 	// select 档位兜底：历史脏值（如人为设成 1000）不在合法档位内时，
 	// 夹紧到最近的合法档位，避免阈值低于单条摘要引发每轮重复压缩。
@@ -675,52 +700,78 @@ func (r *ConfigRepository) GetStringContext(ctx context.Context, key, fallback s
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fallback, ctxErr
 		}
-		return fallback, nil
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	var s string
 	if err := json.Unmarshal(item.Value, &s); err == nil {
 		return s, nil
 	}
-	return fallback, nil
+	return fallback, fmt.Errorf("config %s is not a valid string", key)
 }
 
-// GetBool 读取布尔配置，兼容 JSON true/false 与字符串 "true"/"1"。
-func (r *ConfigRepository) GetBool(key string, fallback bool) bool {
-	item, err := r.Get(key)
+func (r *ConfigRepository) GetBoolContext(ctx context.Context, key string, fallback bool) (bool, error) {
+	item, err := r.GetContext(ctx, key)
 	if err != nil {
-		return fallback
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fallback, ctxErr
+		}
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	var b bool
 	if err := json.Unmarshal(item.Value, &b); err == nil {
-		return b
+		return b, nil
 	}
 	var s string
 	if err := json.Unmarshal(item.Value, &s); err == nil {
 		if parsed, err := strconv.ParseBool(s); err == nil {
-			return parsed
+			return parsed, nil
 		}
 	}
-	return fallback
+	return fallback, fmt.Errorf("config %s is not a valid boolean", key)
 }
 
-func (r *ConfigRepository) GetStringSlice(key string, fallback []string) []string {
-	item, err := r.Get(key)
+func (r *ConfigRepository) GetStringSliceContext(ctx context.Context, key string, fallback []string) ([]string, error) {
+	item, err := r.GetContext(ctx, key)
 	if err != nil {
-		return fallback
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fallback, ctxErr
+		}
+		if errors.Is(err, ErrNotFound) {
+			return fallback, nil
+		}
+		return fallback, err
 	}
 	var values []string
-	if err := json.Unmarshal(item.Value, &values); err == nil {
-		return values
+	if err := json.Unmarshal(item.Value, &values); err != nil {
+		return fallback, fmt.Errorf("config %s is not a valid string array", key)
 	}
-	return fallback
+	return values, nil
 }
 
 func (r *ConfigRepository) GetMemoryLimits() sessionmemory.Limits {
+	limits, _ := r.GetMemoryLimitsContext(context.Background())
+	return limits
+}
+
+func (r *ConfigRepository) GetMemoryLimitsContext(ctx context.Context) (sessionmemory.Limits, error) {
 	maxChars := sessionmemory.MaxChars
-	if r != nil {
-		maxChars = r.GetInt("memory_max_chars", maxChars)
+	if err := ctx.Err(); err != nil {
+		return sessionmemory.NormalizeLimits(maxChars, 0), err
 	}
-	return sessionmemory.NormalizeLimits(maxChars, 0)
+	if r != nil {
+		var err error
+		maxChars, err = r.GetIntContext(ctx, "memory_max_chars", maxChars)
+		if err != nil {
+			return sessionmemory.NormalizeLimits(maxChars, 0), err
+		}
+	}
+	return sessionmemory.NormalizeLimits(maxChars, 0), nil
 }
 
 func (r *ConfigRepository) Update(key string, value json.RawMessage) error {
@@ -749,43 +800,86 @@ func updateConfigValue(execer configExecer, key string, value json.RawMessage, c
 }
 
 func (r *ConfigRepository) UpdateAdminEditable(key string, value json.RawMessage) error {
-	meta, err := validateAdminEditableValue(key, value)
+	meta, err := r.validateAdminEditableValue(key, value)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 	}
 	return updateConfigValue(r.db, key, value, meta.ConfigType)
 }
 
 func (r *ConfigRepository) UpdateAdminEditableBatch(updates map[string]json.RawMessage) error {
+	return r.UpdateAdminEditableBatchContext(context.Background(), updates)
+}
+
+func (r *ConfigRepository) UpdateAdminEditableBatchContext(ctx context.Context, updates map[string]json.RawMessage) error {
 	if len(updates) == 0 {
 		return nil
 	}
 	keys := make([]string, 0, len(updates))
 	metas := make(map[string]AdminConfigMeta, len(updates))
 	for key, value := range updates {
-		meta, err := validateAdminEditableValue(key, value)
+		meta, err := r.validateAdminEditableValue(key, value)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 		}
 		keys = append(keys, key)
 		metas[key] = meta
 	}
 	sort.Strings(keys)
 
-	tx, err := r.db.Begin()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to begin config update: %w", err)
+		return fmt.Errorf("failed to begin config update: %w", configContextError(ctx, err))
 	}
 	defer tx.Rollback()
 	for _, key := range keys {
-		if err := updateConfigValue(tx, key, updates[key], metas[key].ConfigType); err != nil {
+		if err := updateConfigValueContext(ctx, tx, key, updates[key], metas[key].ConfigType); err != nil {
 			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit config update: %w", err)
+		return fmt.Errorf("failed to commit config update: %w", configContextError(ctx, err))
 	}
 	return nil
+}
+
+func (r *ConfigRepository) validateAdminEditableValue(key string, value json.RawMessage) (AdminConfigMeta, error) {
+	meta, err := validateAdminEditableValue(key, value)
+	if err != nil || key != "file_upload_max_size_mb" || r.uploadMaxSizeMB <= 0 {
+		return meta, err
+	}
+	requested, ok := parseConfigInt(value)
+	if !ok || requested <= 0 {
+		return AdminConfigMeta{}, fmt.Errorf("file_upload_max_size_mb must be a positive integer")
+	}
+	if requested > r.uploadMaxSizeMB {
+		return AdminConfigMeta{}, fmt.Errorf("file_upload_max_size_mb exceeds the deployed %dMB upload ceiling", r.uploadMaxSizeMB)
+	}
+	return meta, nil
+}
+
+func updateConfigValueContext(ctx context.Context, tx *sql.Tx, key string, value json.RawMessage, configType string) error {
+	const query = `
+		INSERT INTO system_config (key, value, description, config_type, updated_at)
+		VALUES ($1, $2, NULL, $3, NOW())
+		ON CONFLICT (key) DO UPDATE SET
+			value = EXCLUDED.value,
+			config_type = EXCLUDED.config_type,
+			updated_at = NOW()
+	`
+	result, err := tx.ExecContext(ctx, query, key, value, configType)
+	if err != nil {
+		return fmt.Errorf("failed to update config: %w", configContextError(ctx, err))
+	}
+	_, _ = result.RowsAffected()
+	return nil
+}
+
+func configContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 func validateAdminEditableValue(key string, value json.RawMessage) (AdminConfigMeta, error) {
@@ -800,6 +894,20 @@ func validateAdminEditableValue(key string, value json.RawMessage) (AdminConfigM
 		}
 		if err := ValidateSystemPromptTemplate(templateText); err != nil {
 			return AdminConfigMeta{}, err
+		}
+	}
+	if key == "file_upload_allowed_types" {
+		var values []string
+		if err := json.Unmarshal(value, &values); err != nil {
+			return AdminConfigMeta{}, fmt.Errorf("file_upload_allowed_types must be a string array")
+		}
+		if len(values) == 0 {
+			return AdminConfigMeta{}, fmt.Errorf("file_upload_allowed_types must not be empty")
+		}
+		for _, item := range values {
+			if strings.TrimSpace(item) == "" {
+				return AdminConfigMeta{}, fmt.Errorf("file_upload_allowed_types must not contain empty values")
+			}
 		}
 	}
 	// select 类型：拒绝档位外的值，前端下拉之外任何来源都挡在门口。

@@ -11,20 +11,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 var (
-	ErrInvalidMessageInput    = errors.New("invalid message input")
-	ErrMessageTooLarge        = errors.New("message is too large")
-	ErrTooManyAttachments     = errors.New("too many attachments")
-	ErrRetryTargetStale       = repository.ErrRetryTargetStale
-	ErrMessageAlreadyAnswered = repository.ErrMessageAlreadyAnswered
-	ErrMessageUnchanged       = repository.ErrMessageUnchanged
-	ErrChatRunActive          = repository.ErrChatRunActive
+	ErrInvalidMessageInput      = errors.New("invalid message input")
+	ErrMessageTooLarge          = errors.New("message is too large")
+	ErrTooManyAttachments       = errors.New("too many attachments")
+	ErrRetryTargetStale         = repository.ErrRetryTargetStale
+	ErrMessageAlreadyAnswered   = repository.ErrMessageAlreadyAnswered
+	ErrMessageUnchanged         = repository.ErrMessageUnchanged
+	ErrChatRunActive            = repository.ErrChatRunActive
+	ErrConversationTurnNotFound = errors.New("conversation turn not found")
+	ErrCompactionNotFound       = repository.ErrCompactionNotFound
+	ErrCompactionUndoDenied     = repository.ErrCompactionUndoDenied
+	ErrCompactionUndoStale      = repository.ErrCompactionUndoStale
 )
 
 const (
@@ -151,7 +155,7 @@ func (s *MessageService) BuildUserMessagePreview(sessionID, userID int64, req *S
 func (s *MessageService) BuildUserMessagePreviewContext(ctx context.Context, sessionID, userID int64, req *SendMessageRequest) (*model.Message, error) {
 	session, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	return s.buildUserMessage(ctx, session, userID, req)
 }
@@ -421,26 +425,11 @@ func attachMessageMetadata(data map[string]interface{}, patch map[string]interfa
 	data["metadata"] = meta
 }
 
-// ListBySession 获取会话的所有消息（前端展示用，含已压缩消息以支持历史回溯）
-func (s *MessageService) ListBySession(sessionID, userID int64) ([]*MessageResponse, error) {
-	_, err := s.sessionRepo.GetByID(sessionID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
-	}
-
-	messages, err := s.messageRepo.ListAllBySession(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list messages: %w", err)
-	}
-
-	return s.messageResponses(context.Background(), messages)
-}
-
 // ListBySessionPaged 游标分页获取展示用消息，返回 (本页消息, 是否还有更早的消息)。
 // beforeID<=0 取最新一页；否则取更早一页。消息按时间升序返回。
 func (s *MessageService) ListBySessionPaged(sessionID, userID int64, limit int, beforeID int64) ([]*MessageResponse, bool, error) {
 	if _, err := s.sessionRepo.GetByID(sessionID, userID); err != nil {
-		return nil, false, fmt.Errorf("session not found or access denied")
+		return nil, false, sessionLookupError(err)
 	}
 
 	messages, hasMore, err := s.messageRepo.ListBySessionPaged(sessionID, limit, beforeID)
@@ -457,7 +446,7 @@ func (s *MessageService) ListBySessionPaged(sessionID, userID int64, limit int, 
 
 func (s *MessageService) ListConversationTurns(sessionID, userID int64, limit int, beforeTurnID int64) (*ConversationTurnPage, error) {
 	if _, err := s.sessionRepo.GetByID(sessionID, userID); err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	turns, total, hasMore, err := s.messageRepo.ListConversationTurns(sessionID, limit, beforeTurnID)
 	if err != nil {
@@ -486,12 +475,12 @@ func (s *MessageService) ListConversationTurns(sessionID, userID int64, limit in
 
 func (s *MessageService) ListMessageWindow(sessionID, userID int64, mode repository.MessageWindowMode, targetTurnID int64, turnLimit int) (*MessageWindowResponse, error) {
 	if _, err := s.sessionRepo.GetByID(sessionID, userID); err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 	window, err := s.messageRepo.ListMessageWindow(sessionID, mode, targetTurnID, turnLimit)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, fmt.Errorf("turn not found")
+			return nil, ErrConversationTurnNotFound
 		}
 		return nil, err
 	}
@@ -539,6 +528,13 @@ func (s *MessageService) SelectAnswerAttempt(ctx context.Context, sessionID, use
 		return nil, fmt.Errorf("answer attempt selection is unavailable")
 	}
 	return s.answerAttemptRepo.SelectForActiveSession(ctx, sessionID, userID, attemptID)
+}
+
+func (s *MessageService) DeleteAnswerAttempt(ctx context.Context, sessionID, userID, attemptID int64) (*repository.AnswerAttemptDeletion, error) {
+	if s.answerAttemptRepo == nil {
+		return nil, fmt.Errorf("answer attempt deletion is unavailable")
+	}
+	return s.answerAttemptRepo.DeleteForActiveSession(ctx, sessionID, userID, attemptID)
 }
 
 func (s *MessageService) messageResponses(ctx context.Context, messages []*model.Message) ([]*MessageResponse, error) {
@@ -617,7 +613,7 @@ func (s *MessageService) ListForAgentContext(ctx context.Context, sessionID, use
 func (s *MessageService) listForAgentContext(ctx context.Context, sessionID, userID, preserveUserMessageID int64, replacement *model.Message) ([]*model.Message, error) {
 	_, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session not found or access denied")
+		return nil, sessionLookupError(err)
 	}
 
 	messages, err := s.messageRepo.ListBySessionContext(ctx, sessionID)
@@ -673,6 +669,9 @@ func (s *MessageService) RetryAgentContext(ctx context.Context, sessionID, userI
 func (s *MessageService) EditRetryAgentContext(ctx context.Context, sessionID, userID, targetMessageID int64, content, clientRunID string) (*model.Message, []*model.Message, error) {
 	source, err := s.messageRepo.PrepareEditRetryForActiveSession(ctx, sessionID, userID, targetMessageID)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, nil, ErrSessionNotFound
+		}
 		return nil, nil, err
 	}
 	replacement, err := buildEditedRetryMessage(source, content, clientRunID)
@@ -1110,6 +1109,9 @@ func (s *MessageService) PrepareRetry(sessionID, userID, targetMessageID int64) 
 func (s *MessageService) PrepareRetryContext(ctx context.Context, sessionID, userID, targetMessageID int64) (*model.Message, error) {
 	message, err := s.messageRepo.PrepareRetryForActiveSession(ctx, sessionID, userID, targetMessageID)
 	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrSessionNotFound
+		}
 		return nil, err
 	}
 	return message, nil
@@ -1119,7 +1121,8 @@ func (s *MessageService) PrepareRetryContext(ctx context.Context, sessionID, use
 //  1. 将摘要消息存为新消息（role=user, schema_version=v1）
 //  2. 将 beforeMessageID 之前的所有消息标记为已压缩（compressed_at + compression_summary_id）
 //
-// 后续加载 ListBySession 时，已压缩消息被过滤，只返回摘要 + 检查点之后的新消息。
+// Agent context 的 ListBySession 会过滤已压缩消息，只返回摘要 + 检查点之后的新消息；
+// UI 历史窗口使用独立的全历史查询，压缩前消息始终可查看。
 // 压缩检查点来源：auto=对话流自动触发，manual=用户 /compact 手动触发。
 // 前端据 compaction_kind 决定是否显示撤销按钮（自动压缩不显示）。
 const (
@@ -1197,15 +1200,14 @@ func markCompactionSummary(summaryData []byte, kind string, beforeMessageID int6
 	return summaryData
 }
 
-// GetMessageCount 获取会话的消息数量
-func (s *MessageService) GetMessageCount(sessionID int64) (int, error) {
-	return s.messageRepo.CountBySession(sessionID)
-}
-
 // UndoLastCompaction 撤销会话最近一次压缩检查点：恢复被压消息、软删摘要。
 // 找不到可撤销的压缩摘要时返回错误。返回恢复的消息条数。
 func (s *MessageService) UndoLastCompaction(sessionID, userID int64) (int64, error) {
-	return s.messageRepo.UndoLatestManualCheckpointForActiveSession(context.Background(), sessionID, userID)
+	restored, err := s.messageRepo.UndoLatestManualCheckpointForActiveSession(context.Background(), sessionID, userID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return 0, ErrSessionNotFound
+	}
+	return restored, err
 }
 
 // isCompactionSummaryMessage 判断消息是否为压缩摘要（metadata.compaction_summary=true）。

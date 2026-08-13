@@ -1,34 +1,24 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
+	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
-
-const (
-	selectedChatFontConfigKey        = "chat_font_asset_id"
-	selectedChatChineseFontConfigKey = "chat_font_chinese_asset_id"
-	selectedChatLatinFontConfigKey   = "chat_font_latin_asset_id"
-	selectedChatCodeFontConfigKey    = "chat_font_code_asset_id"
-)
-
-type ChatFontSelection struct {
-	Chinese *int64 `json:"chinese"`
-	Latin   *int64 `json:"latin"`
-	Code    *int64 `json:"code"`
-}
-
-type ChatFonts struct {
-	Chinese *model.FontAsset `json:"chinese"`
-	Latin   *model.FontAsset `json:"latin"`
-	Code    *model.FontAsset `json:"code"`
-}
 
 type FontRepository struct {
 	db *sql.DB
+}
+
+type FontPatch struct {
+	DisplayName *string
+	FamilyName  *string
+	Weight      *int
+	Style       *string
+	Enabled     *bool
 }
 
 func NewFontRepository(db *sql.DB) *FontRepository {
@@ -50,7 +40,7 @@ func (r *FontRepository) Create(font *model.FontAsset) error {
 	if font.Style == "" {
 		font.Style = "normal"
 	}
-	return r.db.QueryRow(
+	if err := r.db.QueryRow(
 		query,
 		font.DisplayName,
 		font.FamilyName,
@@ -63,7 +53,10 @@ func (r *FontRepository) Create(font *model.FontAsset) error {
 		font.Style,
 		font.Enabled,
 		font.CreatedBy,
-	).Scan(&font.ID, &font.CreatedAt, &font.UpdatedAt)
+	).Scan(&font.ID, &font.CreatedAt, &font.UpdatedAt); err != nil {
+		return fmt.Errorf("create font: %w", err)
+	}
+	return nil
 }
 
 func (r *FontRepository) List() ([]*model.FontAsset, error) {
@@ -104,6 +97,9 @@ func (r *FontRepository) List() ([]*model.FontAsset, error) {
 		}
 		fonts = append(fonts, font)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate fonts: %w", err)
+	}
 	return fonts, nil
 }
 
@@ -141,180 +137,124 @@ func (r *FontRepository) Get(id int64) (*model.FontAsset, error) {
 	return font, nil
 }
 
-func (r *FontRepository) Update(font *model.FontAsset) error {
-	result, err := r.db.Exec(`
-		UPDATE font_assets
-		SET display_name = $1, family_name = $2, weight = $3, style = $4, enabled = $5, updated_at = NOW()
-		WHERE id = $6 AND deleted_at IS NULL
-	`, font.DisplayName, font.FamilyName, font.Weight, font.Style, font.Enabled, font.ID)
-	if err != nil {
-		return fmt.Errorf("failed to update font: %w", err)
-	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("font not found: %w", ErrNotFound)
-	}
-	return nil
+func (r *FontRepository) Update(font *model.FontAsset) (ChatFontSelection, error) {
+	_, selection, err := r.PatchContext(context.Background(), font.ID, FontPatch{
+		DisplayName: &font.DisplayName, FamilyName: &font.FamilyName,
+		Weight: &font.Weight, Style: &font.Style, Enabled: &font.Enabled,
+	})
+	return selection, err
 }
 
-func (r *FontRepository) Delete(id int64) error {
-	result, err := r.db.Exec(`
+func (r *FontRepository) PatchContext(ctx context.Context, id int64, patch FontPatch) (*model.FontAsset, ChatFontSelection, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, ChatFontSelection{}, fmt.Errorf("begin font patch: %w", fontContextError(ctx, err))
+	}
+	defer func() { _ = tx.Rollback() }()
+	font, err := scanFontRow(tx.QueryRowContext(ctx, `
+		SELECT id, display_name, family_name, file_name, file_path, mime_type,
+		       file_size, checksum, weight, style, enabled, created_by,
+		       created_at, updated_at, deleted_at
+		FROM font_assets WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+	`, id))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
+		}
+		return nil, ChatFontSelection{}, fmt.Errorf("get font for patch: %w", fontContextError(ctx, err))
+	}
+	if patch.DisplayName != nil {
+		font.DisplayName = strings.TrimSpace(*patch.DisplayName)
+	}
+	if patch.FamilyName != nil {
+		font.FamilyName = strings.TrimSpace(*patch.FamilyName)
+	}
+	if patch.Weight != nil {
+		font.Weight = *patch.Weight
+	}
+	if patch.Style != nil {
+		font.Style = *patch.Style
+	}
+	if patch.Enabled != nil {
+		font.Enabled = *patch.Enabled
+	}
+	if font.DisplayName == "" || font.FamilyName == "" {
+		return nil, ChatFontSelection{}, fmt.Errorf("font display_name and family_name are required")
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE font_assets SET display_name = $1, family_name = $2, weight = $3,
+		style = $4, enabled = $5, updated_at = NOW() WHERE id = $6 AND deleted_at IS NULL
+	`, font.DisplayName, font.FamilyName, font.Weight, font.Style, font.Enabled, font.ID)
+	if err != nil {
+		return nil, ChatFontSelection{}, fmt.Errorf("patch font: %w", fontContextError(ctx, err))
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return nil, ChatFontSelection{}, fmt.Errorf("read patched font rows: %w", err)
+		}
+		return nil, ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
+	}
+	if !font.Enabled {
+		if err := clearSelectedFontTxContext(ctx, tx, font.ID); err != nil {
+			return nil, ChatFontSelection{}, err
+		}
+	}
+	selection, err := getSelectedIDsContext(ctx, tx)
+	if err != nil {
+		return nil, ChatFontSelection{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, ChatFontSelection{}, fmt.Errorf("commit font patch: %w", fontContextError(ctx, err))
+	}
+	return font, selection, nil
+}
+
+func fontContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
+func scanFontRow(row *sql.Row) (*model.FontAsset, error) {
+	font := &model.FontAsset{}
+	err := row.Scan(&font.ID, &font.DisplayName, &font.FamilyName, &font.FileName, &font.FilePath,
+		&font.MimeType, &font.FileSize, &font.Checksum, &font.Weight, &font.Style,
+		&font.Enabled, &font.CreatedBy, &font.CreatedAt, &font.UpdatedAt, &font.DeletedAt)
+	return font, err
+}
+
+func (r *FontRepository) Delete(id int64) (ChatFontSelection, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return ChatFontSelection{}, fmt.Errorf("begin font delete: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(`
 		UPDATE font_assets
 		SET deleted_at = NOW(), enabled = false, updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL
 	`, id)
 	if err != nil {
-		return fmt.Errorf("failed to delete font: %w", err)
+		return ChatFontSelection{}, fmt.Errorf("failed to delete font: %w", err)
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return ChatFontSelection{}, fmt.Errorf("read deleted font row count: %w", err)
+	}
 	if rows == 0 {
-		return fmt.Errorf("font not found: %w", ErrNotFound)
+		return ChatFontSelection{}, fmt.Errorf("font not found: %w", ErrNotFound)
 	}
-	selection, err := r.GetSelectedIDs()
-	if err == nil {
-		changed := false
-		if selection.Chinese != nil && *selection.Chinese == id {
-			selection.Chinese = nil
-			changed = true
-		}
-		if selection.Latin != nil && *selection.Latin == id {
-			selection.Latin = nil
-			changed = true
-		}
-		if selection.Code != nil && *selection.Code == id {
-			selection.Code = nil
-			changed = true
-		}
-		if changed {
-			return r.SetSelectedIDs(selection)
-		}
+	if err := clearSelectedFontTx(tx, id); err != nil {
+		return ChatFontSelection{}, err
 	}
-	return nil
-}
-
-func (r *FontRepository) GetSelected() (*model.FontAsset, error) {
-	id, err := r.GetSelectedID()
-	if err != nil || id == nil {
-		return nil, err
-	}
-	font, err := r.Get(*id)
-	if err != nil {
-		return nil, err
-	}
-	if !font.Enabled {
-		return nil, nil
-	}
-	return font, nil
-}
-
-func (r *FontRepository) GetSelectedID() (*int64, error) {
-	return r.getSelectedIDByKey(selectedChatFontConfigKey)
-}
-
-func (r *FontRepository) SetSelectedID(id *int64) error {
-	return r.setSelectedIDByKey(selectedChatFontConfigKey, id)
-}
-
-func (r *FontRepository) GetSelectedIDs() (ChatFontSelection, error) {
-	legacyID, err := r.GetSelectedID()
+	selection, err := getSelectedIDs(tx)
 	if err != nil {
 		return ChatFontSelection{}, err
 	}
-	chineseID, err := r.getSelectedIDByKey(selectedChatChineseFontConfigKey)
-	if err != nil {
-		return ChatFontSelection{}, err
+	if err := tx.Commit(); err != nil {
+		return ChatFontSelection{}, fmt.Errorf("commit font delete: %w", err)
 	}
-	latinID, err := r.getSelectedIDByKey(selectedChatLatinFontConfigKey)
-	if err != nil {
-		return ChatFontSelection{}, err
-	}
-	codeID, err := r.getSelectedIDByKey(selectedChatCodeFontConfigKey)
-	if err != nil {
-		return ChatFontSelection{}, err
-	}
-	if chineseID == nil {
-		chineseID = legacyID
-	}
-	if latinID == nil {
-		latinID = legacyID
-	}
-	if codeID == nil {
-		codeID = legacyID
-	}
-	return ChatFontSelection{Chinese: chineseID, Latin: latinID, Code: codeID}, nil
-}
-
-func (r *FontRepository) SetSelectedIDs(selection ChatFontSelection) error {
-	if err := r.setSelectedIDByKey(selectedChatChineseFontConfigKey, selection.Chinese); err != nil {
-		return err
-	}
-	if err := r.setSelectedIDByKey(selectedChatLatinFontConfigKey, selection.Latin); err != nil {
-		return err
-	}
-	if err := r.setSelectedIDByKey(selectedChatCodeFontConfigKey, selection.Code); err != nil {
-		return err
-	}
-	return r.SetSelectedID(selection.Chinese)
-}
-
-func (r *FontRepository) GetSelectedFonts() (ChatFonts, error) {
-	selection, err := r.GetSelectedIDs()
-	if err != nil {
-		return ChatFonts{}, err
-	}
-	return ChatFonts{
-		Chinese: r.enabledFontOrNil(selection.Chinese),
-		Latin:   r.enabledFontOrNil(selection.Latin),
-		Code:    r.enabledFontOrNil(selection.Code),
-	}, nil
-}
-
-func (r *FontRepository) enabledFontOrNil(id *int64) *model.FontAsset {
-	if id == nil {
-		return nil
-	}
-	font, err := r.Get(*id)
-	if err != nil || !font.Enabled {
-		return nil
-	}
-	return font
-}
-
-func (r *FontRepository) getSelectedIDByKey(key string) (*int64, error) {
-	var raw json.RawMessage
-	err := r.db.QueryRow(`SELECT value FROM system_config WHERE key = $1`, key).Scan(&raw)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get selected font: %w", err)
-	}
-	var id int64
-	if err := json.Unmarshal(raw, &id); err == nil && id > 0 {
-		return &id, nil
-	}
-	return nil, nil
-}
-
-func (r *FontRepository) setSelectedIDByKey(key string, id *int64) error {
-	value := json.RawMessage("null")
-	if id != nil {
-		if _, err := r.Get(*id); err != nil {
-			return err
-		}
-		b, err := json.Marshal(*id)
-		if err != nil {
-			return err
-		}
-		value = b
-	}
-	_, err := r.db.Exec(`
-		INSERT INTO system_config (key, value, description, config_type, updated_at)
-		VALUES ($1, $2, NULL, 'number', NOW())
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, config_type = EXCLUDED.config_type, updated_at = NOW()
-	`, key, value)
-	if err != nil {
-		return fmt.Errorf("failed to set selected font: %w", err)
-	}
-	return nil
+	return selection, nil
 }

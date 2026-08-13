@@ -16,10 +16,13 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/openairesponses"
+	"github.com/huoguojun123/EffChat/internal/providerhttp"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
 	"google.golang.org/genai"
 )
 
@@ -35,6 +38,8 @@ type TitleService struct {
 	backgroundMu       sync.Mutex
 	backgroundDraining bool
 	backgroundTasks    sync.WaitGroup
+	backgroundCtx      context.Context
+	backgroundCancel   context.CancelFunc
 }
 
 // NewTitleService 创建标题服务
@@ -43,12 +48,15 @@ func NewTitleService(sessionRepo *repository.SessionRepository, messageRepo *rep
 	if len(usageServices) > 0 {
 		usageService = usageServices[0]
 	}
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	return &TitleService{
-		sessionRepo: sessionRepo,
-		messageRepo: messageRepo,
-		configRepo:  configRepo,
-		channels:    channels,
-		usage:       usageService,
+		sessionRepo:      sessionRepo,
+		messageRepo:      messageRepo,
+		configRepo:       configRepo,
+		channels:         channels,
+		usage:            usageService,
+		backgroundCtx:    backgroundCtx,
+		backgroundCancel: backgroundCancel,
 	}
 }
 
@@ -76,44 +84,50 @@ func (s *TitleService) GenerateTitle(ctx context.Context, sessionID, userID int6
 	}
 	defer s.claims.Delete(sessionID)
 
+	controlCtx, controlCancel := titleControlContext(ctx)
 	// 1. 检查会话是否已有自定义标题
-	session, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
+	session, err := s.sessionRepo.GetByIDContext(controlCtx, sessionID, userID)
 	if err != nil {
+		controlCancel()
 		return fmt.Errorf("session not found: %w", err)
 	}
 
 	// 如果标题不是"新对话"，说明用户已自定义，不自动生成
 	if session.Title != "新对话" && session.Title != "New Conversation" {
+		controlCancel()
 		return nil
 	}
 	expectedAnswerSelectionRevision := session.AnswerSelectionRevision
 
 	// 2. 获取会话的前两轮对话（user + assistant）
-	messages, err := s.messageRepo.ListBySessionContext(ctx, sessionID)
+	messages, err := s.messageRepo.ListBySessionContext(controlCtx, sessionID)
+	controlCancel()
 	if err != nil {
 		return fmt.Errorf("failed to load messages: %w", err)
 	}
 
 	if len(messages) < 2 {
 		// 消息不足，使用第一条消息截断
-		return s.useFallbackTitle(ctx, sessionID, userID, messages, &expectedAnswerSelectionRevision)
+		return s.useFallbackTitleBounded(ctx, sessionID, userID, messages, &expectedAnswerSelectionRevision)
 	}
 
 	// 3. 构造标题生成提示词
 	conversationText := s.buildTitleSeed(messages)
 	if strings.TrimSpace(conversationText) == "" {
-		return s.useFallbackTitle(ctx, sessionID, userID, messages, &expectedAnswerSelectionRevision)
+		return s.useFallbackTitleBounded(ctx, sessionID, userID, messages, &expectedAnswerSelectionRevision)
 	}
 
 	// 4. 调用管理员配置的轻量模型生成标题
 	generated, err := s.generateTitleWithModel(ctx, sessionID, userID, conversationText)
 	if err != nil {
 		// 生成失败，使用 fallback
-		return s.useFallbackTitle(ctx, sessionID, userID, messages, &expectedAnswerSelectionRevision)
+		return s.useFallbackTitleBounded(ctx, sessionID, userID, messages, &expectedAnswerSelectionRevision)
 	}
 
 	// 5. 更新会话标题
-	updated, err := s.sessionRepo.UpdateAutomaticTitleAtAnswerRevision(ctx, sessionID, userID, generated.Title, true, expectedAnswerSelectionRevision)
+	persistCtx, persistCancel := titleControlContext(ctx)
+	updated, err := s.sessionRepo.UpdateAutomaticTitleAtAnswerRevision(persistCtx, sessionID, userID, generated.Title, true, expectedAnswerSelectionRevision)
+	persistCancel()
 	if err != nil {
 		s.recordTitleTaskRun(ctx, sessionID, userID, generated.Profile, generated.StartedAt, repository.ModelTaskStatusFailed, err)
 		return fmt.Errorf("failed to update title: %w", err)
@@ -133,9 +147,10 @@ func (s *TitleService) GenerateTitleAsync(sessionID, userID int64) {
 	}
 	go func() {
 		defer s.backgroundTasks.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		shouldGenerate, err := s.ShouldGenerateTitle(ctx, sessionID, userID)
+		ctx := s.backgroundTaskContext()
+		controlCtx, controlCancel := titleControlContext(ctx)
+		shouldGenerate, err := s.ShouldGenerateTitle(controlCtx, sessionID, userID)
+		controlCancel()
 		if err != nil {
 			log.Printf("[title_generation] evaluate trigger failed: session=%d err=%v", sessionID, err)
 			return
@@ -154,8 +169,23 @@ func (s *TitleService) startBackgroundTask() bool {
 	if s.backgroundDraining {
 		return false
 	}
+	s.ensureBackgroundContextLocked()
 	s.backgroundTasks.Add(1)
 	return true
+}
+
+func (s *TitleService) backgroundTaskContext() context.Context {
+	s.backgroundMu.Lock()
+	defer s.backgroundMu.Unlock()
+	s.ensureBackgroundContextLocked()
+	return s.backgroundCtx
+}
+
+func (s *TitleService) ensureBackgroundContextLocked() {
+	if s.backgroundCtx != nil {
+		return
+	}
+	s.backgroundCtx, s.backgroundCancel = context.WithCancel(context.Background())
 }
 
 func (s *TitleService) DrainBackgroundTasks(ctx context.Context) bool {
@@ -164,7 +194,11 @@ func (s *TitleService) DrainBackgroundTasks(ctx context.Context) bool {
 	}
 	s.backgroundMu.Lock()
 	s.backgroundDraining = true
+	cancel := s.backgroundCancel
 	s.backgroundMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	done := make(chan struct{})
 	go func() {
 		s.backgroundTasks.Wait()
@@ -183,7 +217,17 @@ const (
 	titleSeedMaxPerMsg    = 200
 	titleSeedMaxTotal     = 1000
 	fallbackTitleMaxRunes = 15
+	titleControlTimeout   = 10 * time.Second
 )
+
+// titleControlContext bounds repository, configuration, provider construction,
+// and final persistence without placing a total deadline around model output.
+func titleControlContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, titleControlTimeout)
+}
 
 // buildTitleSeed 构造标题生成的极小上下文。
 //
@@ -312,19 +356,24 @@ type generatedTitle struct {
 	StartedAt time.Time
 }
 
+const (
+	titleFirstOutputTimeout = 15 * time.Second
+	titleMaxOutputTokens    = 64
+)
+
 func (s *TitleService) generateTitleWithModel(ctx context.Context, sessionID, userID int64, conversationText string) (*generatedTitle, error) {
-	// 设置超时
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	started := time.Now()
 
-	profile, err := s.resolveTitleModelProfile(ctx)
+	setupCtx, setupCancel := titleControlContext(ctx)
+	profile, err := s.resolveTitleModelProfile(setupCtx)
 	if err != nil {
+		setupCancel()
 		s.recordTitleTaskRun(ctx, sessionID, userID, titleModelProfile{}, started, repository.ModelTaskStatusFailed, err)
 		return nil, err
 	}
 
-	baseModel, err := s.buildTitleChatModel(ctx, profile.Provider, profile.ModelID)
+	baseModel, err := s.buildTitleChatModel(setupCtx, profile.Provider, profile.ModelID)
+	setupCancel()
 	if err != nil {
 		err = fmt.Errorf("failed to create chat model: %w", err)
 		s.recordTitleTaskRun(ctx, sessionID, userID, profile, started, repository.ModelTaskStatusFailed, err)
@@ -363,10 +412,11 @@ Requirements:
 		},
 	}
 
-	// 调用模型（非流式）
-	resp, err := chatModel.Generate(ctx, messages)
+	// 标题与主对话走同一个底层 Stream 契约。固定预算只等待首个有效输出；
+	// 首包到达后继续收完整响应，避免慢模型在已经开始生成时被总时长截断。
+	resp, err := modelstream.Collect(ctx, chatModel, messages, titleFirstOutputTimeout)
 	if err != nil {
-		err = fmt.Errorf("model generation failed: %w", err)
+		err = fmt.Errorf("title model stream failed: %w", err)
 		s.recordTitleTaskRun(ctx, sessionID, userID, profile, started, repository.ModelTaskStatusFailed, err)
 		return nil, err
 	}
@@ -397,7 +447,7 @@ Requirements:
 	return &generatedTitle{Title: title, Profile: profile, StartedAt: started}, nil
 }
 
-func (s *TitleService) recordTitleTaskRun(_ context.Context, sessionID, userID int64, profile titleModelProfile, started time.Time, status string, err error) {
+func (s *TitleService) recordTitleTaskRun(ctx context.Context, sessionID, userID int64, profile titleModelProfile, started time.Time, status string, err error) {
 	if s == nil || s.taskRuns == nil {
 		return
 	}
@@ -408,8 +458,12 @@ func (s *TitleService) recordTitleTaskRun(_ context.Context, sessionID, userID i
 	if err != nil {
 		errorType = modelusage.ErrorType(err)
 		errorMessage = err.Error()
-		t := time.Now().Add(30 * time.Minute)
-		retryAfter = &t
+		// User stop and service drain are lifecycle events, not evidence that
+		// the configured title model is unhealthy.
+		if ctx == nil || ctx.Err() == nil {
+			t := time.Now().Add(30 * time.Minute)
+			retryAfter = &t
+		}
 	}
 	_, recordErr := s.taskRuns.Record(recordCtx, repository.RecordModelTaskRunInput{
 		TaskKey:      repository.ModelTaskTitleGeneration,
@@ -448,8 +502,11 @@ func (s *TitleService) resolveTitleModelProfile(ctx context.Context) (titleModel
 	}
 	modelID = strings.TrimSpace(modelID)
 	if modelID != "" {
-		if info := modelbank.Get(modelID); info != nil && info.Enabled && s.titleChannelAvailable(info.Provider) {
+		if info := modelbank.Get(modelID); info != nil && info.Enabled && s.titleChannelAvailable(ctx, info.Provider) {
 			return titleModelProfile{ModelID: info.ID, Provider: info.Provider}, nil
+		}
+		if cause := context.Cause(ctx); cause != nil {
+			return titleModelProfile{}, cause
 		}
 	}
 
@@ -461,8 +518,11 @@ func (s *TitleService) resolveTitleModelProfile(ctx context.Context) (titleModel
 		return candidates[i].Provider < candidates[j].Provider
 	})
 	for _, info := range candidates {
-		if info != nil && info.Enabled && s.titleChannelAvailable(info.Provider) {
+		if info != nil && info.Enabled && s.titleChannelAvailable(ctx, info.Provider) {
 			return titleModelProfile{ModelID: info.ID, Provider: info.Provider}, nil
+		}
+		if cause := context.Cause(ctx); cause != nil {
+			return titleModelProfile{}, cause
 		}
 	}
 	if modelID == "" {
@@ -471,11 +531,11 @@ func (s *TitleService) resolveTitleModelProfile(ctx context.Context) (titleModel
 	return titleModelProfile{}, fmt.Errorf("title model %q is unavailable and no fallback model has an available channel", modelID)
 }
 
-func (s *TitleService) titleChannelAvailable(channelKey string) bool {
+func (s *TitleService) titleChannelAvailable(ctx context.Context, channelKey string) bool {
 	if s == nil || s.channels == nil || strings.TrimSpace(channelKey) == "" {
 		return false
 	}
-	_, err := s.channels.ResolveAIChannel(channelKey)
+	_, err := s.channels.ResolveAIChannelContext(ctx, channelKey)
 	return err == nil
 }
 
@@ -483,7 +543,7 @@ func (s *TitleService) buildTitleChatModel(ctx context.Context, channelKey, mode
 	if s == nil || s.channels == nil {
 		return nil, fmt.Errorf("model channel configuration is not available")
 	}
-	channel, err := s.channels.ResolveAIChannel(channelKey)
+	channel, err := s.channels.ResolveAIChannelContext(ctx, channelKey)
 	if err != nil {
 		return nil, err
 	}
@@ -491,11 +551,19 @@ func (s *TitleService) buildTitleChatModel(ctx context.Context, channelKey, mode
 	switch channel.Adapter {
 	case AdapterOpenAICompatible:
 		return openai.NewChatModel(ctx, buildTitleOpenAIConfig(channel, modelID))
+	case AdapterOpenAIResponses:
+		return openairesponses.NewChatModel(ctx, &openairesponses.Config{
+			APIKey:    channel.APIKey,
+			BaseURL:   channel.BaseURL,
+			Model:     modelID,
+			MaxTokens: intPtr(titleMaxOutputTokens),
+		})
 	case AdapterAnthropic:
 		cfg := &claude.Config{
-			APIKey:    channel.APIKey,
-			Model:     modelID,
-			MaxTokens: 64,
+			APIKey:     channel.APIKey,
+			Model:      modelID,
+			MaxTokens:  titleMaxOutputTokens,
+			HTTPClient: providerhttp.NewAnthropicSingleAttemptClient(nil),
 		}
 		if channel.BaseURL != "" {
 			baseURL := channel.BaseURL
@@ -514,7 +582,7 @@ func (s *TitleService) buildTitleChatModel(ctx context.Context, channelKey, mode
 		return gemini.NewChatModel(ctx, &gemini.Config{
 			Client:    client,
 			Model:     modelID,
-			MaxTokens: intPtr(64),
+			MaxTokens: intPtr(titleMaxOutputTokens),
 		})
 	default:
 		return nil, fmt.Errorf("unsupported adapter %q for channel %q", channel.Adapter, channel.Key)
@@ -533,9 +601,9 @@ func buildTitleOpenAIConfig(channel *model.AIChannel, modelID string) *openai.Ch
 	}
 	format := modelbank.ResolveThinkingFormat(provider, modelID, "auto", true)
 	if format == modelbank.ThinkingFormatOpenAIReasoningEffort || format == modelbank.ThinkingFormatOpenAIGPT56 {
-		cfg.MaxCompletionTokens = intPtr(64)
+		cfg.MaxCompletionTokens = intPtr(titleMaxOutputTokens)
 	} else {
-		cfg.MaxTokens = intPtr(64)
+		cfg.MaxTokens = intPtr(titleMaxOutputTokens)
 	}
 	if format == modelbank.ThinkingFormatOpenAIGPT56 {
 		cfg.ExtraFields = map[string]any{"reasoning_effort": "none"}
@@ -578,6 +646,12 @@ func (s *TitleService) useFallbackTitle(ctx context.Context, sessionID, userID i
 		return repository.ErrAnswerSelectionRevisionConflict
 	}
 	return nil
+}
+
+func (s *TitleService) useFallbackTitleBounded(parent context.Context, sessionID, userID int64, messages []*model.Message, expectedAnswerSelectionRevision *int64) error {
+	ctx, cancel := titleControlContext(parent)
+	defer cancel()
+	return s.useFallbackTitle(ctx, sessionID, userID, messages, expectedAnswerSelectionRevision)
 }
 
 // ShouldGenerateTitle 判断是否应该生成标题

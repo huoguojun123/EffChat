@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
 
 var (
@@ -25,6 +25,7 @@ type SessionMemoryRepository struct {
 
 type SessionMemoryChange struct {
 	ID            int64      `json:"id"`
+	RunID         string     `json:"run_id,omitempty"`
 	SessionID     int64      `json:"session_id"`
 	UserID        int64      `json:"user_id"`
 	Source        string     `json:"source"`
@@ -55,9 +56,14 @@ func (r *SessionMemoryRepository) Get(sessionID int64) (string, error) {
 	return content, nil
 }
 
-// Set upsert 会话记忆正文（整体覆盖）。
+// Set upsert 会话记忆正文（整体覆盖）。即使调用方不支持变更历史，也必须经过与正式
+// 保存路径相同的规范化和 secret guard，避免 fallback store 绕过持久化安全边界。
 func (r *SessionMemoryRepository) Set(sessionID int64, content string) error {
-	_, err := r.db.Exec(`
+	content, _, err := sessionmemory.Normalize(content)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(`
 		INSERT INTO session_memories (session_id, content, updated_at)
 		VALUES ($1, $2, NOW())
 		ON CONFLICT (session_id) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
@@ -116,6 +122,7 @@ func (r *SessionMemoryRepository) GetWithUpdatedAt(ctx context.Context, sessionI
 }
 
 type SaveSessionMemoryInput struct {
+	RunID                           string
 	SessionID                       int64
 	UserID                          int64
 	MemoryEnabled                   *bool
@@ -130,6 +137,22 @@ type SaveSessionMemoryInput struct {
 }
 
 func (r *SessionMemoryRepository) SaveWithChange(ctx context.Context, input SaveSessionMemoryInput) (*SessionMemoryChange, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	change, err := saveSessionMemoryWithChange(ctx, tx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return change, nil
+}
+
+func saveSessionMemoryWithChange(ctx context.Context, tx *sql.Tx, input SaveSessionMemoryInput) (*SessionMemoryChange, error) {
 	if input.SessionID <= 0 || input.UserID <= 0 {
 		return nil, fmt.Errorf("session_id and user_id are required")
 	}
@@ -143,12 +166,6 @@ func (r *SessionMemoryRepository) SaveWithChange(ctx context.Context, input Save
 	if summary == "" {
 		summary = "updated session memory"
 	}
-
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
 	answerSelectionRevision, err := lockActiveSessionAnswerSelectionRevision(ctx, tx, input.SessionID, input.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("session not found or access denied: %w", err)
@@ -179,24 +196,16 @@ func (r *SessionMemoryRepository) SaveWithChange(ctx context.Context, input Save
 		return nil, ErrSessionMemoryConflict
 	}
 	if strings.TrimSpace(before) == strings.TrimSpace(content) {
-		if input.MemoryEnabled != nil {
-			if err := tx.Commit(); err != nil {
-				return nil, err
-			}
-		}
 		return nil, nil
 	}
 	if err := upsertSessionMemory(ctx, tx, input.SessionID, content); err != nil {
 		return nil, err
 	}
-	change, err := insertSessionMemoryChange(ctx, tx, input.SessionID, input.UserID, source, action, before, content, summary)
+	change, err := insertSessionMemoryChange(ctx, tx, input.RunID, input.SessionID, input.UserID, source, action, before, content, summary)
 	if err != nil {
 		return nil, err
 	}
 	if err := pruneSessionMemoryChanges(ctx, tx, input.SessionID); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return change, nil
@@ -272,13 +281,16 @@ func (r *SessionMemoryRepository) UndoChange(ctx context.Context, sessionID, use
 	if strings.TrimSpace(current) != strings.TrimSpace(target.AfterContent) {
 		return nil, ErrMemoryChangeNotUndoable
 	}
-	if err := upsertSessionMemory(ctx, tx, sessionID, target.BeforeContent); err != nil {
+	// Older change rows may contain values recorded before the write guard existed. Undo is a
+	// persistence boundary too: restore the safe representation and never resurrect a credential.
+	restored := sessionmemory.RedactSensitiveValues(target.BeforeContent)
+	if err := upsertSessionMemory(ctx, tx, sessionID, restored); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE session_memory_changes SET undone_at = NOW() WHERE id = $1`, changeID); err != nil {
 		return nil, err
 	}
-	change, err := insertSessionMemoryChange(ctx, tx, sessionID, userID, "undo", "undo", current, target.BeforeContent, "undid memory change")
+	change, err := insertSessionMemoryChange(ctx, tx, "", sessionID, userID, "undo", "undo", current, restored, "undid memory change")
 	if err != nil {
 		return nil, err
 	}
@@ -319,14 +331,20 @@ func upsertSessionMemory(ctx context.Context, tx *sql.Tx, sessionID int64, conte
 	return nil
 }
 
-func insertSessionMemoryChange(ctx context.Context, tx *sql.Tx, sessionID, userID int64, source, action, before, after, summary string) (*SessionMemoryChange, error) {
+func insertSessionMemoryChange(ctx context.Context, tx *sql.Tx, runID string, sessionID, userID int64, source, action, before, after, summary string) (*SessionMemoryChange, error) {
+	// Historical rows may predate the memory write guard. Change history is another durable copy
+	// and feeds undo, so redact recognized credentials before recording; undo then restores the safe
+	// representation instead of resurrecting a secret.
+	before = sessionmemory.RedactSensitiveValues(before)
+	after = sessionmemory.RedactSensitiveValues(after)
+	summary = sessionmemory.RedactSensitiveValues(summary)
 	change := &SessionMemoryChange{}
 	err := tx.QueryRowContext(ctx, `
-		INSERT INTO session_memory_changes (session_id, user_id, source, action, before_content, after_content, summary)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, session_id, user_id, source, action, before_content, after_content, summary, created_at, undone_at
-	`, sessionID, userID, source, action, before, after, summary).Scan(
-		&change.ID, &change.SessionID, &change.UserID, &change.Source, &change.Action,
+		INSERT INTO session_memory_changes (run_id, session_id, user_id, source, action, before_content, after_content, summary)
+		VALUES (NULLIF($1, ''), $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, COALESCE(run_id, ''), session_id, user_id, source, action, before_content, after_content, summary, created_at, undone_at
+	`, runID, sessionID, userID, source, action, before, after, summary).Scan(
+		&change.ID, &change.RunID, &change.SessionID, &change.UserID, &change.Source, &change.Action,
 		&change.BeforeContent, &change.AfterContent, &change.Summary, &change.CreatedAt, &change.UndoneAt,
 	)
 	if err != nil {

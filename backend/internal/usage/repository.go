@@ -179,7 +179,9 @@ func (r *Repository) QuotaUsersForToday(ctx context.Context) ([]QuotaUserUsage, 
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
 			CROSS JOIN bounds b
-			WHERE m.role = 'user' AND m.created_at >= b.start_at
+			WHERE m.role = 'user'
+			  AND COALESCE(m.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			  AND m.created_at >= b.start_at
 			GROUP BY s.user_id
 		),
 		model_usage AS (
@@ -207,7 +209,8 @@ func (r *Repository) QuotaUsersForToday(ctx context.Context) ([]QuotaUserUsage, 
 				COALESCE(SUM(ocr_page_count), 0) AS daily_ocr_pages
 			FROM files f
 			CROSS JOIN bounds b
-			WHERE f.ocr_provider IN ('mineru', 'mineru_light') AND f.created_at >= b.start_at
+			-- created_at is the upload event; OCR quota and usage begin at ocr_started_at.
+			WHERE f.ocr_provider IN ('mineru', 'mineru_light') AND f.ocr_started_at >= b.start_at
 			GROUP BY user_id
 		)
 		SELECT
@@ -541,7 +544,8 @@ func (r *Repository) aggregateOCRTotals(ctx context.Context, start, end time.Tim
 			COALESCE(SUM(ocr_page_count), 0),
 			COUNT(*) FILTER (WHERE extract_status = 'failed')
 		FROM files
-		WHERE ocr_provider IN ('mineru', 'mineru_light') AND created_at >= $1 AND created_at < $2
+		-- A NULL ocr_started_at means the file has not consumed OCR quota yet.
+		WHERE ocr_provider IN ('mineru', 'mineru_light') AND ocr_started_at >= $1 AND ocr_started_at < $2
 	`
 	var totals Totals
 	if err := r.db.QueryRowContext(ctx, query, start, end).Scan(&totals.OCRFiles, &totals.OCRPages, &totals.OCRFailures); err != nil {

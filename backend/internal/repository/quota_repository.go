@@ -62,7 +62,9 @@ type ChatRunReservationInput struct {
 	RuntimeSnapshot      json.RawMessage
 	ReserveMessage       bool
 	AcceptedAt           time.Time
-	ExpiresAt            time.Time
+	// ExpiresAt is retained for terminal replay cleanup and schema compatibility.
+	// Running quota ownership is status-based and deliberately ignores it.
+	ExpiresAt time.Time
 }
 
 type ChatRunReservation struct {
@@ -96,31 +98,15 @@ func NewQuotaRepository(db *sql.DB) *QuotaRepository {
 func (r *QuotaRepository) LimitsForUser(ctx context.Context, userID int64) (UserQuotaLimits, error) {
 	query := `
 		SELECT
-			COALESCE(g.daily_message_limit, dg.daily_message_limit, 0),
-			COALESCE(g.daily_token_limit, dg.daily_token_limit, 0),
-			COALESCE(g.concurrent_run_limit, dg.concurrent_run_limit, 0),
-			COALESCE(g.daily_tool_call_limit, dg.daily_tool_call_limit, 0),
-			COALESCE(g.daily_web_search_limit, dg.daily_web_search_limit, 0),
-			COALESCE(g.daily_web_extract_limit, dg.daily_web_extract_limit, 0),
-			COALESCE(g.daily_ocr_file_limit, dg.daily_ocr_file_limit, 0),
-			COALESCE(g.daily_ocr_page_limit, dg.daily_ocr_page_limit, 0)
-		FROM users u
-		LEFT JOIN user_groups g ON g.id = u.group_id
-		LEFT JOIN LATERAL (
-			SELECT
-				daily_message_limit,
-				daily_token_limit,
-				concurrent_run_limit,
-				daily_tool_call_limit,
-				daily_web_search_limit,
-				daily_web_extract_limit,
-				daily_ocr_file_limit,
-				daily_ocr_page_limit
-			FROM user_groups
-			WHERE is_default = true
-			ORDER BY level ASC, id ASC
-			LIMIT 1
-		) dg ON true
+			COALESCE(assigned_group.daily_message_limit, default_group.daily_message_limit, 0),
+			COALESCE(assigned_group.daily_token_limit, default_group.daily_token_limit, 0),
+			COALESCE(assigned_group.concurrent_run_limit, default_group.concurrent_run_limit, 0),
+			COALESCE(assigned_group.daily_tool_call_limit, default_group.daily_tool_call_limit, 0),
+			COALESCE(assigned_group.daily_web_search_limit, default_group.daily_web_search_limit, 0),
+			COALESCE(assigned_group.daily_web_extract_limit, default_group.daily_web_extract_limit, 0),
+			COALESCE(assigned_group.daily_ocr_file_limit, default_group.daily_ocr_file_limit, 0),
+			COALESCE(assigned_group.daily_ocr_page_limit, default_group.daily_ocr_page_limit, 0)
+		FROM users u` + effectiveUserGroupJoinSQL + `
 		WHERE u.id = $1
 	`
 	var limits UserQuotaLimits
@@ -152,7 +138,10 @@ func (r *QuotaRepository) UsageForToday(ctx context.Context, userID int64) (Quot
 			 FROM messages m
 			 JOIN sessions s ON s.id = m.session_id
 			 CROSS JOIN bounds b
-			 WHERE s.user_id = $1 AND m.role = 'user' AND m.created_at >= b.start_at),
+			 WHERE s.user_id = $1
+			   AND m.role = 'user'
+			   AND COALESCE(m.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			   AND m.created_at >= b.start_at),
 			(SELECT COALESCE(SUM(total_tokens), 0)
 			 FROM model_usage_events e
 			 CROSS JOIN bounds b
@@ -282,7 +271,7 @@ func lockChatRunUser(ctx context.Context, tx *sql.Tx, userID int64, authVersion 
 	return nil
 }
 
-func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, userID int64, pageCount int) (bool, error) {
+func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, userID, generation int64, pageCount int) (bool, error) {
 	if pageCount < 0 {
 		pageCount = 0
 	}
@@ -294,30 +283,38 @@ func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, user
 	if err := lockQuotaUser(ctx, tx, userID); err != nil {
 		return false, err
 	}
-	var alreadyStarted bool
+	var alreadyStarted, owned bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT ocr_started_at IS NOT NULL
+		SELECT ocr_started_at IS NOT NULL,
+		       status = 'staged'
+		         AND extract_status IN ('ocr_pending', 'ocr_running')
+		         AND $3 > 0
+		         AND ocr_lease_generation = $3
 		FROM files
-			WHERE id = $1 AND user_id = $2 AND status = 'staged'
+		WHERE id = $1 AND user_id = $2
 		FOR UPDATE
-	`, fileID, userID).Scan(&alreadyStarted); err != nil {
+	`, fileID, userID, generation).Scan(&alreadyStarted, &owned); err != nil {
 		if err == sql.ErrNoRows {
 			return false, ErrNotFound
 		}
 		return false, fmt.Errorf("lock OCR file reservation: %w", err)
 	}
+	if !owned {
+		return false, ErrOCRLeaseLost
+	}
 	if alreadyStarted {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE files
 			SET ocr_error_type = 'ocr_submission_started',
-			    ocr_page_count = GREATEST(ocr_page_count, $3)
+			    ocr_page_count = GREATEST(ocr_page_count, $4)
 			WHERE id = $1
 			  AND user_id = $2
+			  AND ocr_lease_generation = $3
 			  AND status = 'staged'
 			  AND extract_status IN ('ocr_pending', 'ocr_running')
 			  AND NULLIF(TRIM(ocr_task_id), '') IS NULL
 			  AND ocr_error_type IS NULL
-		`, fileID, userID, pageCount)
+		`, fileID, userID, generation, pageCount)
 		if err != nil {
 			return false, fmt.Errorf("resume OCR submission: %w", err)
 		}
@@ -344,16 +341,17 @@ func (r *QuotaRepository) ReserveOCRSubmission(ctx context.Context, fileID, user
 	result, err := tx.ExecContext(ctx, `
 		UPDATE files
 		SET ocr_error_type = 'ocr_submission_started',
-		    ocr_page_count = GREATEST(ocr_page_count, $3),
+		    ocr_page_count = GREATEST(ocr_page_count, $4),
 		    ocr_started_at = NOW()
 		WHERE id = $1
 		  AND user_id = $2
+		  AND ocr_lease_generation = $3
 		  AND status = 'staged'
 		  AND extract_status IN ('ocr_pending', 'ocr_running')
 		  AND NULLIF(TRIM(ocr_task_id), '') IS NULL
 		  AND ocr_error_type IS NULL
 		  AND ocr_started_at IS NULL
-	`, fileID, userID, pageCount)
+	`, fileID, userID, generation, pageCount)
 	if err != nil {
 		return false, fmt.Errorf("reserve OCR submission: %w", err)
 	}
@@ -395,31 +393,15 @@ func checkOCRQuota(limits UserQuotaLimits, usage QuotaUsage, pageCount int) erro
 func limitsForUserInTx(ctx context.Context, tx *sql.Tx, userID int64) (UserQuotaLimits, error) {
 	query := `
 		SELECT
-			COALESCE(g.daily_message_limit, dg.daily_message_limit, 0),
-			COALESCE(g.daily_token_limit, dg.daily_token_limit, 0),
-			COALESCE(g.concurrent_run_limit, dg.concurrent_run_limit, 0),
-			COALESCE(g.daily_tool_call_limit, dg.daily_tool_call_limit, 0),
-			COALESCE(g.daily_web_search_limit, dg.daily_web_search_limit, 0),
-			COALESCE(g.daily_web_extract_limit, dg.daily_web_extract_limit, 0),
-			COALESCE(g.daily_ocr_file_limit, dg.daily_ocr_file_limit, 0),
-			COALESCE(g.daily_ocr_page_limit, dg.daily_ocr_page_limit, 0)
-		FROM users u
-		LEFT JOIN user_groups g ON g.id = u.group_id
-		LEFT JOIN LATERAL (
-			SELECT
-				daily_message_limit,
-				daily_token_limit,
-				concurrent_run_limit,
-				daily_tool_call_limit,
-				daily_web_search_limit,
-				daily_web_extract_limit,
-				daily_ocr_file_limit,
-				daily_ocr_page_limit
-			FROM user_groups
-			WHERE is_default = true
-			ORDER BY level ASC, id ASC
-			LIMIT 1
-		) dg ON true
+			COALESCE(assigned_group.daily_message_limit, default_group.daily_message_limit, 0),
+			COALESCE(assigned_group.daily_token_limit, default_group.daily_token_limit, 0),
+			COALESCE(assigned_group.concurrent_run_limit, default_group.concurrent_run_limit, 0),
+			COALESCE(assigned_group.daily_tool_call_limit, default_group.daily_tool_call_limit, 0),
+			COALESCE(assigned_group.daily_web_search_limit, default_group.daily_web_search_limit, 0),
+			COALESCE(assigned_group.daily_web_extract_limit, default_group.daily_web_extract_limit, 0),
+			COALESCE(assigned_group.daily_ocr_file_limit, default_group.daily_ocr_file_limit, 0),
+			COALESCE(assigned_group.daily_ocr_page_limit, default_group.daily_ocr_page_limit, 0)
+		FROM users u` + effectiveUserGroupJoinSQL + `
 		WHERE u.id = $1
 	`
 	var limits UserQuotaLimits
@@ -451,7 +433,10 @@ func usageForTodayInTx(ctx context.Context, tx *sql.Tx, userID int64) (QuotaUsag
 			 FROM messages m
 			 JOIN sessions s ON s.id = m.session_id
 			 CROSS JOIN bounds b
-			 WHERE s.user_id = $1 AND m.role = 'user' AND m.created_at >= b.start_at),
+			 WHERE s.user_id = $1
+			   AND m.role = 'user'
+			   AND COALESCE(m.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			   AND m.created_at >= b.start_at),
 			(SELECT COALESCE(SUM(total_tokens), 0)
 			 FROM model_usage_events e
 			 CROSS JOIN bounds b

@@ -1,28 +1,25 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 func ActiveRunHandler(runHub *service.RunHub, sessionService *service.SessionService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		sessionID, ok := runSessionID(c)
+		if !ok {
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 		snapshot := runHub.Active(sessionID, userID)
@@ -59,22 +56,21 @@ func chatRunStatusPayload(record repository.ChatRunRecord) chatRunStatusResponse
 func RunStatusHandler(quotaService *service.QuotaService, sessionService *service.SessionService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		sessionID, ok := runSessionID(c)
+		if !ok {
+			return
+		}
+		runID, ok := runID(c)
+		if !ok {
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
-		record, err := quotaService.GetChatRunForSession(c.Request.Context(), userID, sessionID, c.Param("run_id"))
+		record, err := quotaService.GetChatRunForSession(c.Request.Context(), userID, sessionID, runID)
 		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read run status"})
+			writeRunError(c, "status", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"run": chatRunStatusPayload(record)})
@@ -84,21 +80,25 @@ func RunStatusHandler(quotaService *service.QuotaService, sessionService *servic
 func ResumeRunHandler(runHub *service.RunHub, sessionService *service.SessionService, heartbeat time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		sessionID, ok := runSessionID(c)
+		if !ok {
+			return
+		}
+		runID, ok := runID(c)
+		if !ok {
+			return
+		}
+		cursor, ok := runCursor(c)
+		if !ok {
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
-		cursor, _ := strconv.ParseInt(c.Query("cursor"), 10, 64)
-		runID := c.Param("run_id")
-
 		events, ch, cleanup, snapshot, err := runHub.EventsAfter(runID, sessionID, userID, cursor)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeRunError(c, "resume", err)
 			return
 		}
 		if cleanup != nil {
@@ -107,7 +107,7 @@ func ResumeRunHandler(runHub *service.RunHub, sessionService *service.SessionSer
 
 		writer, err := streaming.NewSSEWriter(c)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+			writeServerError(c, http.StatusInternalServerError, "stream_unavailable", "streaming not supported", err)
 			return
 		}
 
@@ -208,16 +208,18 @@ func writeRunEvents(writer *streaming.SSEWriter, events []service.RunEvent, curs
 func CancelRunHandler(runHub *service.RunHub, sessionService *service.SessionService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
-		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		sessionID, ok := runSessionID(c)
+		if !ok {
+			return
+		}
+		runID, ok := runID(c)
+		if !ok {
 			return
 		}
 		if _, err := sessionService.GetByID(sessionID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
-		runID := c.Param("run_id")
 		canceled := runHub.Cancel(runID, sessionID, userID)
 		c.JSON(http.StatusOK, gin.H{"canceled": canceled})
 	}

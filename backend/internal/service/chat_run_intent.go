@@ -6,15 +6,17 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 const ChatRunIntentVersion = 1
 
 const (
-	RunOperationSend       = "send"
-	RunOperationRetry      = "retry"
-	RunOperationCompaction = "compaction"
+	RunOperationSend          = "send"
+	RunOperationRetry         = "retry"
+	RunOperationCompaction    = "compaction"
+	RunOperationMemoryCompact = "memory_compact"
+	RunOperationMemoryRetry   = "memory_retry"
 )
 
 type RunIntent struct {
@@ -97,6 +99,16 @@ func BuildCompactionRunIntent(source, thinkingEffort string, preserveMessageID i
 		PreserveMessageID: preserveMessageID,
 	}
 	return newRunIntent(RunOperationCompaction, 0, payload)
+}
+
+func BuildMemoryMaintenanceRunIntent(operation string) RunIntent {
+	if operation != RunOperationMemoryRetry {
+		operation = RunOperationMemoryCompact
+	}
+	payload := struct {
+		Operation string `json:"operation"`
+	}{Operation: operation}
+	return newRunIntent(operation, 0, payload)
 }
 
 func newRunIntent(operation string, retryTargetMessageID int64, payload interface{}) RunIntent {

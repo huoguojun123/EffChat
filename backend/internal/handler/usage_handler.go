@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/usage"
+	"github.com/huoguojun123/EffChat/internal/usage"
 )
 
 func AdminUsageHandler(usageService *usage.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start, end, custom, err := parseUsageWindow(c.Query("range"), c.Query("start_at"), c.Query("end_at"), time.Now())
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "code": "invalid_usage_range"})
+			writePublicError(c, http.StatusBadRequest, "invalid_usage_range", err.Error(), false)
 			return
 		}
 		var summary *usage.Summary
@@ -36,7 +36,12 @@ func parseUsageWindow(rangeValue, startValue, endValue string, now time.Time) (t
 	startValue = strings.TrimSpace(startValue)
 	endValue = strings.TrimSpace(endValue)
 	if startValue == "" && endValue == "" {
-		return time.Time{}, time.Time{}, false, nil
+		switch rangeValue {
+		case "", "today", "7d", "30d":
+			return time.Time{}, time.Time{}, false, nil
+		default:
+			return time.Time{}, time.Time{}, false, fmt.Errorf("range must be today, 7d, or 30d")
+		}
 	}
 	if rangeValue != "" {
 		return time.Time{}, time.Time{}, false, fmt.Errorf("range cannot be combined with start_at and end_at")

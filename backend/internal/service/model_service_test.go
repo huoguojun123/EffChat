@@ -1,13 +1,46 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
+
+// ModelService writes deliberately replace the process-wide runtime registry.
+// Restore the package fixture after each such test so later service tests do
+// not inherit a database-specific model catalog.
+func preserveModelBank(t *testing.T) {
+	t.Helper()
+	previous := modelbank.List()
+	t.Cleanup(func() {
+		models := make([]*model.Model, 0, len(previous))
+		for _, info := range previous {
+			models = append(models, &model.Model{
+				ID:                   info.ID,
+				DisplayName:          info.DisplayName,
+				Provider:             info.Provider,
+				Vision:               info.Capabilities.Vision,
+				ToolUse:              info.Capabilities.ToolUse,
+				Reasoning:            info.Capabilities.Reasoning,
+				ThinkingFormat:       info.ThinkingFormat,
+				SearchImpl:           string(info.Capabilities.SearchImpl),
+				ContextWindow:        info.Capabilities.ContextWindow,
+				MaxOutput:            info.Capabilities.MaxOutput,
+				Enabled:              info.Enabled,
+				TemperaturePolicy:    info.TemperaturePolicy,
+				TemperatureValue:     info.TemperatureValue,
+				OpenAIRequestProfile: info.OpenAIRequestProfile,
+			})
+		}
+		modelbank.LoadModels(models)
+	})
+}
 
 func TestValidateModelInput(t *testing.T) {
 	valid := func() *model.Model {
@@ -51,7 +84,8 @@ func TestValidateModelInput(t *testing.T) {
 	}
 }
 
-func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicModel(t *testing.T) {
+func TestModelService_DeleteHardRemovesAndDefaultValidationRequiresRunnablePublicModel(t *testing.T) {
+	preserveModelBank(t)
 	db := setupMessageTestDB(t)
 	defer db.Close()
 	suffix := time.Now().UnixNano()
@@ -73,17 +107,93 @@ func TestModelService_DeleteDisablesAndDefaultValidationRequiresRunnablePublicMo
 	})
 
 	svc := NewModelService(modelRepo, channelService)
+	if err := svc.ValidateDefaultModel(""); err == nil || !errors.Is(err, ErrModelInvalid) {
+		t.Fatalf("empty default with runnable public model error = %v, want invalid model configuration", err)
+	}
 	if err := svc.ValidateDefaultModel(modelID); err != nil {
 		t.Fatalf("validate runnable public default: %v", err)
 	}
-	if err := svc.Delete(modelID); err != nil {
-		t.Fatalf("disable model: %v", err)
+	if err := svc.Delete(context.Background(), modelID); err != nil {
+		t.Fatalf("delete model: %v", err)
 	}
 	stored, err := modelRepo.Get(modelID)
-	if err != nil || stored == nil || stored.Enabled {
-		t.Fatalf("deleted model = %#v, err=%v; want retained disabled model", stored, err)
+	if err != nil || stored != nil {
+		t.Fatalf("deleted model = %#v, err=%v; want hard deletion", stored, err)
 	}
 	if err := svc.ValidateDefaultModel(modelID); err == nil {
 		t.Fatal("disabled model accepted as default")
+	} else if !errors.Is(err, ErrModelInvalid) {
+		t.Fatalf("disabled model error = %v, want invalid model configuration", err)
+	}
+	if err := svc.ValidateDefaultModel(""); err != nil {
+		t.Fatalf("empty default without runnable public model: %v", err)
+	}
+}
+
+func TestValidateDefaultModelPreservesRepositoryFailure(t *testing.T) {
+	db := setupMessageTestDB(t)
+	modelRepo := repository.NewModelRepository(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	err := NewModelService(modelRepo, nil).ValidateDefaultModel("example-model")
+	if err == nil || errors.Is(err, ErrModelInvalid) {
+		t.Fatalf("repository error = %v, want internal failure", err)
+	}
+}
+
+func TestModelServiceManualCatalogOverrideClearsDirectoryCheckTime(t *testing.T) {
+	preserveModelBank(t)
+	db := setupMessageTestDB(t)
+	defer db.Close()
+
+	modelID := fmt.Sprintf("model-catalog-override-%d", time.Now().UnixNano())
+	checkedAt := time.Date(2026, time.August, 2, 10, 0, 0, 0, time.UTC)
+	repo := repository.NewModelRepository(db)
+	if err := repo.Upsert(&model.Model{
+		ID: modelID, DisplayName: "Catalog Override", Provider: "fixture-channel", ThinkingFormat: "auto",
+		CatalogSource: model.CatalogSourceModelsDev, CatalogCheckedAt: &checkedAt,
+		LifecycleStatus: model.ModelLifecyclePreview,
+	}); err != nil {
+		t.Fatalf("seed catalog model: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM models WHERE id = $1", modelID) })
+
+	source := model.CatalogSourceManual
+	lifecycle := model.ModelLifecycleUnknown
+	updated, err := NewModelService(repo).Update(context.Background(), modelID, &UpdateModelRequest{
+		CatalogSource: &source, LifecycleStatus: &lifecycle,
+	})
+	if err != nil {
+		t.Fatalf("apply manual catalog override: %v", err)
+	}
+	if updated.CatalogSource != model.CatalogSourceManual || updated.LifecycleStatus != model.ModelLifecycleUnknown || updated.CatalogCheckedAt != nil {
+		t.Fatalf("manual override metadata = %#v", updated)
+	}
+}
+
+func TestValidateModelInputRequiresConsistentTemperatureProfile(t *testing.T) {
+	fixed := 1.0
+	base := model.Model{ID: "fixture-model", DisplayName: "Fixture", Provider: "fixture", ThinkingFormat: "auto"}
+
+	validFixed := base
+	validFixed.TemperaturePolicy = model.TemperaturePolicyFixed
+	validFixed.TemperatureValue = &fixed
+	if err := validateModelInput(&validFixed); err != nil {
+		t.Fatalf("valid fixed profile: %v", err)
+	}
+
+	missingFixed := base
+	missingFixed.TemperaturePolicy = model.TemperaturePolicyFixed
+	if err := validateModelInput(&missingFixed); err == nil {
+		t.Fatal("fixed profile without a value was accepted")
+	}
+
+	omitWithValue := base
+	omitWithValue.TemperaturePolicy = model.TemperaturePolicyOmit
+	omitWithValue.TemperatureValue = &fixed
+	if err := validateModelInput(&omitWithValue); err == nil {
+		t.Fatal("omit profile with a fixed value was accepted")
 	}
 }

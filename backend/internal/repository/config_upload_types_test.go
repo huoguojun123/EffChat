@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,63 @@ func TestUploadAllowedTypesCoversRealSupport(t *testing.T) {
 			t.Errorf("DefaultUploadAllowedTypes missing %q", m)
 		}
 	}
+}
+
+func TestValidateUploadAllowedTypesRejectsEmptyPolicy(t *testing.T) {
+	for _, value := range []json.RawMessage{
+		json.RawMessage(`[]`),
+		json.RawMessage(`["text/plain", ""]`),
+		json.RawMessage(`["text/plain", "   "]`),
+	} {
+		if _, err := validateAdminEditableValue("file_upload_allowed_types", value); err == nil {
+			t.Fatalf("expected upload allowlist %s to be rejected", value)
+		}
+	}
+	if _, err := validateAdminEditableValue("file_upload_allowed_types", json.RawMessage(`["text/plain"]`)); err != nil {
+		t.Fatalf("valid upload allowlist rejected: %v", err)
+	}
+}
+
+func TestUploadSizeAdminPolicyHonorsDeploymentCeiling(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewConfigRepository(db)
+	original, originalErr := repo.Get("file_upload_max_size_mb")
+	if originalErr != nil && !errors.Is(originalErr, ErrNotFound) {
+		t.Fatalf("read original upload limit: %v", originalErr)
+	}
+	t.Cleanup(func() {
+		if original != nil {
+			_ = repo.Update("file_upload_max_size_mb", original.Value)
+		} else {
+			_, _ = db.Exec("DELETE FROM system_config WHERE key = 'file_upload_max_size_mb'")
+		}
+	})
+	repo.SetUploadMaxSizeMB(25)
+	if err := repo.UpdateAdminEditable("file_upload_max_size_mb", json.RawMessage(`25`)); err != nil {
+		t.Fatalf("save reachable upload limit: %v", err)
+	}
+	if err := repo.UpdateAdminEditable("file_upload_max_size_mb", json.RawMessage(`26`)); !errors.Is(err, ErrConfigInvalid) || !strings.Contains(err.Error(), "deployed 25MB") {
+		t.Fatalf("save unreachable upload limit error = %v", err)
+	}
+
+	if _, err := db.Exec(`UPDATE system_config SET value = '50' WHERE key = 'file_upload_max_size_mb'`); err != nil {
+		t.Fatalf("seed legacy oversized value: %v", err)
+	}
+	items, err := repo.ListAdminEditable()
+	if err != nil {
+		t.Fatalf("list admin config: %v", err)
+	}
+	for _, item := range items {
+		if item.Key == "file_upload_max_size_mb" {
+			if string(item.Value) != "25" {
+				t.Fatalf("effective legacy upload value = %s, want 25", item.Value)
+			}
+			return
+		}
+	}
+	t.Fatal("file_upload_max_size_mb missing from admin config")
 }
 
 func TestListAdminEditableIncludesSystemPromptDefault(t *testing.T) {
@@ -133,7 +191,7 @@ func TestUpdateAdminEditableBatchIsAtomic(t *testing.T) {
 		"system_name":      json.RawMessage(`"Must Not Persist"`),
 		"memory_max_chars": json.RawMessage(`9999`),
 	})
-	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
+	if !errors.Is(err, ErrConfigInvalid) || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("invalid batch error = %v", err)
 	}
 	gotName, err := repo.Get("system_name")
@@ -191,5 +249,48 @@ func TestUpdateAdminEditableBatchIsAtomic(t *testing.T) {
 	}
 	if got := repo.GetInt("title_generation_trigger", 0); got != 3 {
 		t.Fatalf("title_generation_trigger = %d, want 3", got)
+	}
+}
+
+func TestUpdateAdminEditableBatchHonorsContextCancellation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	repo := NewConfigRepository(db)
+	var original []byte
+	_ = db.QueryRow(`SELECT value FROM system_config WHERE key = 'system_name'`).Scan(&original)
+	if err := repo.Update("system_name", json.RawMessage(`"Original Cancellation Config"`)); err != nil {
+		t.Fatalf("seed system_name: %v", err)
+	}
+	t.Cleanup(func() {
+		if original == nil {
+			_, _ = db.Exec(`DELETE FROM system_config WHERE key = 'system_name'`)
+			return
+		}
+		_, _ = db.Exec(`UPDATE system_config SET value = $1 WHERE key = 'system_name'`, original)
+	})
+
+	blocker, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin blocker transaction: %v", err)
+	}
+	defer blocker.Rollback()
+	var lockedKey string
+	if err := blocker.QueryRowContext(context.Background(), `SELECT key FROM system_config WHERE key = 'system_name' FOR UPDATE`).Scan(&lockedKey); err != nil {
+		t.Fatalf("lock system_name row: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = repo.UpdateAdminEditableBatchContext(ctx, map[string]json.RawMessage{"system_name": json.RawMessage(`"Canceled Config"`)})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("config update error = %v, want context deadline", err)
+	}
+	stored, err := repo.Get("system_name")
+	if err != nil {
+		t.Fatalf("read canceled system_name: %v", err)
+	}
+	if string(stored.Value) != `"Original Cancellation Config"` {
+		t.Fatalf("canceled config update committed %s", stored.Value)
 	}
 }

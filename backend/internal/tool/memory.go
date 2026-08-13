@@ -3,13 +3,16 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
+
+var errMemoryChangedWhileEditing = errors.New("memory changed while editing; view memory again and retry")
 
 // MemoryStore 是 memory 工具所需的最小持久化接口（由 repository.SessionMemoryRepository 实现）。
 // 用接口而非具体类型，避免 tool 包反向依赖 repository 包。
@@ -88,7 +91,7 @@ func (t *MemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 			"Use action=\"replace\" to update a stale or incorrect memory item. Phrases like 请更新这个决策, 刚才说错了, 修改这条记忆, or update that decision mean you must view memory if needed and then replace/add the relevant item before replying. " +
 			"Use action=\"remove\" when the user asks you to forget/delete a specific remembered item. Provide section and line_number when possible. Use action=\"clear\" only when the user explicitly asks to clear all conversation memory. " +
 			"Tool output is deliberately compact: view/read returns numbered high-signal memory_text and items for editing; write operations return only ok/message/action/section/line_number/changed_item. Do not quote the JSON output to the user. " +
-			"For do_not_remember, store only categories to avoid storing; never store exact codes, passwords, tokens, API keys, or other secret values there. " +
+			"Never store exact passwords, tokens, API keys, authorization credentials, private keys, or other secret values in any section. For do_not_remember, store only the category to avoid, never the value. " +
 			"CRITICAL: You cannot remember, update, or forget anything without using this tool first. If the user asks you to remember, update, or forget something and you only acknowledge conversationally, you are lying to them. " +
 			"Use action=\"write\" only as a compatibility escape hatch when you must replace the whole note with a concise fixed-section Markdown note. Never use write to fix a failed replace — use view to get current line numbers, then replace again. " +
 			"Do not store code structure, git history, bugs just fixed, raw tool outputs, file contents, search results, or one-off details that only matter in this turn. " +
@@ -120,21 +123,27 @@ func (t *MemoryTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	}, nil
 }
 
-// InvokableRun 执行记忆操作。失败一律返回结构化输出而非 Go error，避免中止本轮对话
-// （与 web_search 的优雅降级一致）。
+// InvokableRun keeps user-correctable memory edits as structured results.
+// Store, parse, and persistence failures return wrapped Go errors; the product
+// always runs Tools through governance, which converts those errors into a
+// stable public result without aborting the Agent turn.
 func (t *MemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	var input MemoryInput
 	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
-		return marshalMemoryOutput(memoryError("invalid input: " + err.Error()))
+		return marshalMemoryOutput(memoryError("memory input is invalid"))
 	}
 
 	switch strings.ToLower(strings.TrimSpace(input.Action)) {
 	case "read", "view":
 		content, err := t.store.Get(t.sessionID)
 		if err != nil {
-			return marshalMemoryOutput(memoryError("failed to read memory: " + err.Error()))
+			return "", fmt.Errorf("read memory: %w", err)
 		}
-		return marshalMemoryOutput(memoryViewOutput(content))
+		out, err := memoryViewOutput(content)
+		if err != nil {
+			return "", fmt.Errorf("parse stored memory: %w", err)
+		}
+		return marshalMemoryOutput(out)
 
 	case "add":
 		content := strings.TrimSpace(input.Content)
@@ -146,11 +155,11 @@ func (t *MemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 		}
 		current, err := t.store.Get(t.sessionID)
 		if err != nil {
-			return marshalMemoryOutput(memoryError("failed to read memory before add: " + err.Error()))
+			return "", fmt.Errorf("read memory before add: %w", err)
 		}
 		doc, err := parseMemory(current)
 		if err != nil {
-			return marshalMemoryOutput(memoryError(err.Error()))
+			return "", fmt.Errorf("parse memory before add: %w", err)
 		}
 		for _, item := range memoryItems(doc) {
 			if strings.EqualFold(item.Content, content) {
@@ -162,15 +171,16 @@ func (t *MemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 			return marshalMemoryOutput(memoryError(err.Error()))
 		}
 		doc.Sections[sectionIdx].Items = append(doc.Sections[sectionIdx].Items, content)
-		next := sessionmemory.Serialize(doc)
-		if err := t.validateContent(next); err != nil {
+		next, normalizedDoc, err := sessionmemory.NormalizeWithLimits(sessionmemory.Serialize(doc), sessionmemory.NormalizeLimits(t.maxChars, 0))
+		if err != nil {
 			return marshalMemoryOutput(memoryError(err.Error()))
 		}
 		if err := t.save(ctx, current, next, "update", "added memory item"); err != nil {
-			return marshalMemoryOutput(memoryError("failed to add memory: " + err.Error()))
+			return memoryMutationFailure("add memory item", err)
 		}
-		lineNumber := globalLineNumber(doc, doc.Sections[sectionIdx].Key, len(doc.Sections[sectionIdx].Items))
-		return marshalMemoryOutput(memoryActionOutput("add", doc.Sections[sectionIdx].Key, lineNumber, content, fmt.Sprintf("Added memory item #%d.", lineNumber)))
+		storedItem := normalizedDoc.Sections[sectionIdx].Items[len(normalizedDoc.Sections[sectionIdx].Items)-1]
+		lineNumber := globalLineNumber(normalizedDoc, normalizedDoc.Sections[sectionIdx].Key, len(normalizedDoc.Sections[sectionIdx].Items))
+		return marshalMemoryOutput(memoryActionOutput("add", normalizedDoc.Sections[sectionIdx].Key, lineNumber, storedItem, fmt.Sprintf("Added memory item #%d.", lineNumber)))
 
 	case "replace":
 		content := strings.TrimSpace(input.Content)
@@ -179,34 +189,35 @@ func (t *MemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 		}
 		current, err := t.store.Get(t.sessionID)
 		if err != nil {
-			return marshalMemoryOutput(memoryError("failed to read memory before replace: " + err.Error()))
+			return "", fmt.Errorf("read memory before replace: %w", err)
 		}
 		doc, err := parseMemory(current)
 		if err != nil {
-			return marshalMemoryOutput(memoryError(err.Error()))
+			return "", fmt.Errorf("parse memory before replace: %w", err)
 		}
 		target, err := memoryEntryIndex(doc, input.Section, input.LineNumber, "")
 		if err != nil {
 			return marshalMemoryOutput(memoryError(err.Error()))
 		}
 		doc.Sections[target.SectionIndex].Items[target.ItemIndex] = content
-		next := sessionmemory.Serialize(doc)
-		if err := t.validateContent(next); err != nil {
+		next, normalizedDoc, err := sessionmemory.NormalizeWithLimits(sessionmemory.Serialize(doc), sessionmemory.NormalizeLimits(t.maxChars, 0))
+		if err != nil {
 			return marshalMemoryOutput(memoryError(err.Error()))
 		}
 		if err := t.save(ctx, current, next, "update", "replaced memory item"); err != nil {
-			return marshalMemoryOutput(memoryError("failed to replace memory: " + err.Error()))
+			return memoryMutationFailure("replace memory item", err)
 		}
-		return marshalMemoryOutput(memoryActionOutput("replace", doc.Sections[target.SectionIndex].Key, target.GlobalLine, content, fmt.Sprintf("Replaced memory item #%d.", target.GlobalLine)))
+		storedItem := normalizedDoc.Sections[target.SectionIndex].Items[target.ItemIndex]
+		return marshalMemoryOutput(memoryActionOutput("replace", normalizedDoc.Sections[target.SectionIndex].Key, target.GlobalLine, storedItem, fmt.Sprintf("Replaced memory item #%d.", target.GlobalLine)))
 
 	case "remove", "delete":
 		current, err := t.store.Get(t.sessionID)
 		if err != nil {
-			return marshalMemoryOutput(memoryError("failed to read memory before remove: " + err.Error()))
+			return "", fmt.Errorf("read memory before remove: %w", err)
 		}
 		doc, err := parseMemory(current)
 		if err != nil {
-			return marshalMemoryOutput(memoryError(err.Error()))
+			return "", fmt.Errorf("parse memory before remove: %w", err)
 		}
 		target, err := memoryEntryIndex(doc, input.Section, input.LineNumber, input.Content)
 		if err != nil {
@@ -218,24 +229,24 @@ func (t *MemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 		doc.Sections[target.SectionIndex].Items = append(items[:target.ItemIndex], items[target.ItemIndex+1:]...)
 		next := sessionmemory.Serialize(doc)
 		if err := t.save(ctx, current, next, "update", "removed memory item"); err != nil {
-			return marshalMemoryOutput(memoryError("failed to remove memory: " + err.Error()))
+			return memoryMutationFailure("remove memory item", err)
 		}
 		return marshalMemoryOutput(memoryActionOutput("remove", sectionKey, target.GlobalLine, removedItem, fmt.Sprintf("Removed memory item #%d.", target.GlobalLine)))
 
 	case "clear":
 		current, err := t.store.Get(t.sessionID)
 		if err != nil {
-			return marshalMemoryOutput(memoryError("failed to read memory before clear: " + err.Error()))
+			return "", fmt.Errorf("read memory before clear: %w", err)
 		}
 		if err := t.save(ctx, current, "", "clear", "cleared memory"); err != nil {
-			return marshalMemoryOutput(memoryError("failed to clear memory: " + err.Error()))
+			return memoryMutationFailure("clear memory", err)
 		}
 		return marshalMemoryOutput(MemoryOutput{OK: true, Action: "clear", Message: "Memory cleared."})
 
 	case "write":
 		current, err := t.store.Get(t.sessionID)
 		if err != nil {
-			return marshalMemoryOutput(memoryError("failed to read memory before write: " + err.Error()))
+			return "", fmt.Errorf("read memory before write: %w", err)
 		}
 		content := strings.TrimSpace(input.Content)
 		normalized, _, err := sessionmemory.NormalizeWithLimits(content, sessionmemory.NormalizeLimits(t.maxChars, 0))
@@ -247,13 +258,20 @@ func (t *MemoryTool) InvokableRun(ctx context.Context, argumentsInJSON string, o
 			return marshalMemoryOutput(memoryError(err.Error()))
 		}
 		if err := t.save(ctx, current, content, "update", "rewrote memory note"); err != nil {
-			return marshalMemoryOutput(memoryError("failed to write memory: " + err.Error()))
+			return memoryMutationFailure("write memory", err)
 		}
 		return marshalMemoryOutput(MemoryOutput{OK: true, Action: "write", Message: "Memory saved."})
 
 	default:
 		return marshalMemoryOutput(memoryError(`unknown action; use view, add, replace, remove, clear, or write`))
 	}
+}
+
+func memoryMutationFailure(operation string, err error) (string, error) {
+	if errors.Is(err, errMemoryChangedWhileEditing) {
+		return marshalMemoryOutput(memoryError(errMemoryChangedWhileEditing.Error()))
+	}
+	return "", fmt.Errorf("%s: %w", operation, err)
 }
 
 func (t *MemoryTool) validateContent(content string) error {
@@ -270,7 +288,7 @@ func (t *MemoryTool) save(ctx context.Context, expectedBefore, content, action, 
 			return err
 		}
 		if !saved {
-			return fmt.Errorf("memory changed while editing; view memory again and retry")
+			return errMemoryChangedWhileEditing
 		}
 		return nil
 	}
@@ -284,10 +302,12 @@ func parseMemory(content string) (sessionmemory.Document, error) {
 	return sessionmemory.Parse(content)
 }
 
-func memoryViewOutput(content string) MemoryOutput {
-	doc, err := parseMemory(content)
+func memoryViewOutput(content string) (MemoryOutput, error) {
+	// Tool results are model-visible. Redact legacy credentials here as well as at prompt assembly so
+	// a view call cannot reintroduce a value that predates the current write guard.
+	doc, err := parseMemory(sessionmemory.RedactSensitiveValues(content))
 	if err != nil {
-		return MemoryOutput{OK: false, Error: err.Error()}
+		return MemoryOutput{}, err
 	}
 	items := memoryItems(doc)
 	message := "Memory loaded."
@@ -300,7 +320,7 @@ func memoryViewOutput(content string) MemoryOutput {
 		Action:     "view",
 		MemoryText: memoryText(items),
 		Items:      items,
-	}
+	}, nil
 }
 
 func memoryActionOutput(action, section string, lineNumber int, changedItem, message string) MemoryOutput {
@@ -315,7 +335,7 @@ func memoryActionOutput(action, section string, lineNumber int, changedItem, mes
 }
 
 func memoryError(message string) MemoryOutput {
-	return MemoryOutput{OK: false, Error: message}
+	return MemoryOutput{OK: false, Message: message, Error: message}
 }
 
 type memoryEntryRef struct {

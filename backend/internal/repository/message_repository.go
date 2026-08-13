@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/lib/pq"
 )
 
@@ -68,6 +68,9 @@ var (
 	ErrMessageUnchanged       = errors.New("message content is unchanged")
 	ErrChatRunActive          = errors.New("chat run is still active")
 	ErrChatRunTerminal        = errors.New("chat run is no longer running")
+	ErrCompactionNotFound     = errors.New("compaction checkpoint not found")
+	ErrCompactionUndoDenied   = errors.New("compaction checkpoint cannot be undone")
+	ErrCompactionUndoStale    = errors.New("compaction checkpoint has newer messages")
 )
 
 func NewMessageRepository(db *sql.DB) *MessageRepository {
@@ -172,10 +175,6 @@ func (r *MessageRepository) CreateForActiveSession(ctx context.Context, sessionI
 	return r.createBatchForActiveSession(ctx, sessionID, userID, "", []*model.Message{message})
 }
 
-func (r *MessageRepository) CreateBatchForActiveSession(ctx context.Context, sessionID, userID int64, messages []*model.Message) error {
-	return r.createBatchForActiveSession(ctx, sessionID, userID, "", messages)
-}
-
 func (r *MessageRepository) CreateBatchForActiveRun(ctx context.Context, sessionID, userID int64, runID string, messages []*model.Message) error {
 	return r.createBatchForActiveSession(ctx, sessionID, userID, strings.TrimSpace(runID), messages)
 }
@@ -239,6 +238,11 @@ func (r *MessageRepository) createBatchForActiveSession(ctx context.Context, ses
 	return nil
 }
 
+// CreateBatchAndTransitionActiveRun locks the session before the run and
+// commits attempt state, attachment claims, terminal messages/event and the
+// durable run transition as one fact. Any error rolls all of them back. The
+// RunHub caller may publish terminal SSE only after this method returns a
+// committed canonical record; a repeated terminal commit reloads that record.
 func (r *MessageRepository) CreateBatchAndTransitionActiveRun(ctx context.Context, sessionID, userID int64, runID string, messages []*model.Message, input ChatRunTransitionInput) (ChatRunRecord, bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || input.RunID != runID {
@@ -253,6 +257,15 @@ func (r *MessageRepository) CreateBatchAndTransitionActiveRun(ctx context.Contex
 		return ChatRunRecord{}, false, err
 	}
 	if err := lockActiveChatRun(ctx, tx, runID, sessionID, userID); err != nil {
+		if errors.Is(err, ErrChatRunTerminal) {
+			record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+			if loadErr != nil {
+				return ChatRunRecord{}, false, loadErr
+			}
+			if terminal {
+				return record, false, nil
+			}
+		}
 		return ChatRunRecord{}, false, err
 	}
 	attempt, hasAttempt, err := answerAttemptForRunTx(ctx, tx, runID)
@@ -820,6 +833,9 @@ func (r *MessageRepository) ListConversationTurns(sessionID int64, limit int, be
 }
 
 func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindowMode, targetTurnID int64, turnLimit int) (*MessageWindow, error) {
+	if mode == "" {
+		mode = MessageWindowLatest
+	}
 	if turnLimit <= 0 {
 		turnLimit = 16
 	}
@@ -832,26 +848,55 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		return nil, err
 	}
 	window := &MessageWindow{}
-	if len(turnIDs) == 0 {
-		return window, nil
-	}
-	window.FirstTurnID = turnIDs[0]
-	window.LastTurnID = turnIDs[len(turnIDs)-1]
+	includeCheckpoint := false
+	if len(turnIDs) > 0 {
+		window.FirstTurnID = turnIDs[0]
+		window.LastTurnID = turnIDs[len(turnIDs)-1]
 
-	if err := r.db.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1 FROM messages
-			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
-			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
-			  AND id < $2
-		), EXISTS (
-			SELECT 1 FROM messages
-			WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
-			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
-			  AND id > $3
-		)
-	`, sessionID, window.FirstTurnID, window.LastTurnID).Scan(&window.HasOlder, &window.HasNewer); err != nil {
-		return nil, fmt.Errorf("inspect message window boundaries: %w", err)
+		if err := r.db.QueryRow(`
+			SELECT EXISTS (
+				SELECT 1 FROM messages
+				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				  AND id < $2
+			), EXISTS (
+				SELECT 1 FROM messages
+				WHERE session_id = $1 AND deleted_at IS NULL AND role = 'user'
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				  AND id > $3
+			)
+		`, sessionID, window.FirstTurnID, window.LastTurnID).Scan(&window.HasOlder, &window.HasNewer); err != nil {
+			return nil, fmt.Errorf("inspect message window boundaries: %w", err)
+		}
+		// Compression changes the Agent context, not the user's visible history.
+		// Attach the active checkpoint to the one UI page containing the final
+		// user turn it compressed, so the divider keeps its logical position
+		// without replacing old messages or appearing on multiple pages.
+		var checkpointAnchor sql.NullInt64
+		if err := r.db.QueryRow(`
+			SELECT MAX(history.id)
+			FROM messages checkpoint
+			JOIN messages history
+			  ON history.compression_summary_id = checkpoint.id
+			 AND history.id <> checkpoint.id
+			WHERE checkpoint.session_id = $1
+			  AND checkpoint.deleted_at IS NULL
+			  AND checkpoint.compressed_at IS NULL
+			  AND COALESCE(checkpoint.message_data->'metadata'->>'compaction_summary', '') = 'true'
+			  AND history.deleted_at IS NULL
+			  AND history.role = 'user'
+			  AND COALESCE(history.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+		`, sessionID).Scan(&checkpointAnchor); err != nil {
+			return nil, fmt.Errorf("locate active checkpoint anchor: %w", err)
+		}
+		if checkpointAnchor.Valid {
+			for _, turnID := range turnIDs {
+				if turnID == checkpointAnchor.Int64 {
+					includeCheckpoint = true
+					break
+				}
+			}
+		}
 	}
 
 	query := fmt.Sprintf(`
@@ -872,10 +917,11 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		), window_messages AS (
 			SELECT *
 			FROM visible_messages
-			WHERE turn_id = ANY($2)
+			WHERE turn_id = ANY($2::BIGINT[])
 			   OR (
-				COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
-				AND logical_id BETWEEN $3 AND $4
+				$3
+				AND compressed_at IS NULL
+				AND COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
 			   )
 		)
 		SELECT id, session_id, schema_version, message_data, role,
@@ -884,7 +930,7 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		FROM window_messages
 		ORDER BY logical_id ASC, logical_rank ASC, id ASC
 	`, messageLogicalIDSQL, messageLogicalRankSQL)
-	rows, err := r.db.Query(query, sessionID, pq.Array(turnIDs), window.FirstTurnID, window.LastTurnID)
+	rows, err := r.db.Query(query, sessionID, pq.Array(turnIDs), includeCheckpoint)
 	if err != nil {
 		return nil, fmt.Errorf("list message window: %w", err)
 	}
@@ -985,24 +1031,6 @@ func (r *MessageRepository) messageWindowTurnIDs(sessionID int64, mode MessageWi
 		return nil, ErrNotFound
 	}
 	return ids, nil
-}
-
-// CountBySession 统计会话的消息数量
-func (r *MessageRepository) CountBySession(sessionID int64) (int, error) {
-	var count int
-	query := `
-		SELECT COUNT(*)
-		FROM messages m
-		LEFT JOIN answer_attempts a ON a.id = m.answer_attempt_id
-		WHERE m.session_id = $1
-		  AND m.deleted_at IS NULL
-		  AND (m.answer_attempt_id IS NULL OR a.selected)
-	`
-	err := r.db.QueryRow(query, sessionID).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("failed to count messages: %w", err)
-	}
-	return count, nil
 }
 
 // CountBySessions 批量统计多个会话的消息数。
@@ -1117,6 +1145,11 @@ func (r *MessageRepository) persistCheckpointForActiveSession(ctx context.Contex
 	return nil
 }
 
+// PersistCheckpointAndTransitionActiveRun locks the session selection before
+// the run, then commits the summary, compressed-message pointers and terminal
+// run record together. A revision conflict or any write failure leaves no
+// partial checkpoint. As with message terminals, callers publish terminal SSE
+// only from the canonical record returned after commit.
 func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.Context, sessionID, userID int64, runID string, summary *model.Message, beforeMessageID int64, input ChatRunTransitionInput, expectedAnswerSelectionRevision *int64) (ChatRunRecord, bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" || input.RunID != runID {
@@ -1133,10 +1166,28 @@ func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.
 			return ChatRunRecord{}, false, err
 		}
 		if err := ensureAnswerSelectionRevision(answerSelectionRevision, expectedAnswerSelectionRevision); err != nil {
+			if errors.Is(err, ErrAnswerSelectionRevisionConflict) {
+				record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+				if loadErr != nil {
+					return ChatRunRecord{}, false, loadErr
+				}
+				if terminal {
+					return record, false, nil
+				}
+			}
 			return ChatRunRecord{}, false, err
 		}
 	}
 	if err := lockActiveChatRun(ctx, tx, runID, sessionID, userID); err != nil {
+		if errors.Is(err, ErrChatRunTerminal) {
+			record, terminal, loadErr := loadTerminalChatRunForScope(ctx, tx, runID, sessionID, userID)
+			if loadErr != nil {
+				return ChatRunRecord{}, false, loadErr
+			}
+			if terminal {
+				return record, false, nil
+			}
+		}
 		return ChatRunRecord{}, false, err
 	}
 	if input.Status == "completed" {
@@ -1164,10 +1215,10 @@ func (r *MessageRepository) PersistCheckpointAndTransitionActiveRun(ctx context.
 }
 
 // UndoCompressionCheckpoint 撤销一次压缩检查点（原子事务）：
-//  1. 清除被该摘要压缩的所有消息的 compressed_at / compression_summary_id（恢复可见）
+//  1. 清除被该摘要压缩的所有消息的 compressed_at / compression_summary_id（恢复 Agent 原文上下文）
 //  2. 软删除摘要消息本身
 //
-// 返回被恢复的消息条数。撤销后 ListBySession 重新返回完整历史。
+// 返回被恢复的消息条数。UI 历史始终可见；撤销后 ListBySession 也重新返回完整原文。
 func (r *MessageRepository) UndoCompressionCheckpoint(sessionID, summaryMessageID int64) (int64, error) {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -1219,7 +1270,7 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		LIMIT 1
 	`, sessionID).Scan(&summaryMessageID)
 	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("no compaction checkpoint to undo")
+		return 0, ErrCompactionNotFound
 	}
 	if err != nil {
 		return 0, fmt.Errorf("failed to find latest compaction checkpoint: %w", err)
@@ -1233,7 +1284,7 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		return 0, fmt.Errorf("failed to read compaction checkpoint: %w", err)
 	}
 	if kind != "manual" {
-		return 0, fmt.Errorf("only the latest manual compaction can be undone")
+		return 0, ErrCompactionUndoDenied
 	}
 
 	var hasNewMessages bool
@@ -1249,7 +1300,7 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		return 0, fmt.Errorf("failed to validate compaction checkpoint: %w", err)
 	}
 	if hasNewMessages {
-		return 0, fmt.Errorf("cannot undo compaction after new messages")
+		return 0, ErrCompactionUndoStale
 	}
 
 	res, err := tx.ExecContext(ctx, `
@@ -1271,35 +1322,6 @@ func (r *MessageRepository) UndoLatestManualCheckpointForActiveSession(ctx conte
 		return 0, fmt.Errorf("failed to commit undo tx: %w", err)
 	}
 	return restored, nil
-}
-
-func (r *MessageRepository) DeleteAfter(sessionID, afterMessageID int64) (int64, error) {
-	query := `
-		UPDATE messages
-		SET deleted_at = NOW()
-		WHERE session_id = $1
-		  AND id > $2
-		  AND deleted_at IS NULL
-		RETURNING id
-	`
-	rows, err := r.db.Query(query, sessionID, afterMessageID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to delete messages after id %d: %w", afterMessageID, err)
-	}
-	defer rows.Close()
-
-	var count int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return count, fmt.Errorf("failed to scan deleted message id: %w", err)
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		return count, fmt.Errorf("failed to iterate deleted message ids: %w", err)
-	}
-	return count, nil
 }
 
 // ParseMessageData 解析 message_data JSONB 为 map

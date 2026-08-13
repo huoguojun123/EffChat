@@ -9,7 +9,7 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	sessionmemory "github.com/huoguojun123/effchat/internal/memory"
+	sessionmemory "github.com/huoguojun123/EffChat/internal/memory"
 )
 
 type memoryMaintenanceStreamModel struct {
@@ -102,6 +102,26 @@ func TestMemoryDrainRejectsNewBackgroundTasks(t *testing.T) {
 	}
 }
 
+func TestMemoryDrainTimeoutCancelsActiveBackgroundContext(t *testing.T) {
+	agent := &EinoAgent{}
+	if !agent.startMemoryBackgroundTask() {
+		t.Fatal("memory task should start before drain")
+	}
+	taskCtx := agent.backgroundTaskContext()
+	drainCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	if agent.DrainMemoryTasks(drainCtx) {
+		t.Fatal("drain should report timeout while task is still active")
+	}
+	select {
+	case <-taskCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("drain timeout did not cancel memory background context")
+	}
+	agent.memoryTasks.Done()
+}
+
 func TestMemoryMaintenanceInstructionRoutesFictionalPersona(t *testing.T) {
 	instruction := buildMemoryMaintenanceInstruction(sessionmemory.DefaultLimits())
 	if !strings.Contains(instruction, "fictional") || !strings.Contains(instruction, "Project Context") || !strings.Contains(instruction, "not User Background") {
@@ -126,6 +146,7 @@ func TestMemoryMaintenanceInstructionCarriesMatureMemoryRules(t *testing.T) {
 		"discourages honest feedback",
 		"unsafe, unhealthy, or harmful behavior",
 		"Do not write bullets that say",
+		"Never store exact passwords",
 		"recent conversation window as the source of new facts",
 		"most recent user correction or clarification has highest priority",
 	} {
@@ -311,6 +332,19 @@ func TestBuildMemoryMaintenancePromptIncludesCurrentDate(t *testing.T) {
 	}
 }
 
+func TestBuildMemoryMaintenancePromptRedactsLegacySecret(t *testing.T) {
+	secret := "fixture-password-42"
+	prompt := buildMemoryMaintenancePrompt(
+		"## Decisions\n- password="+secret+"\n- Keep ticket EC-2026-041.",
+		MemoryMaintenanceRequest{UserText: "请整理当前记忆。"},
+		"manual",
+		memoryMaintenanceCalendar{CurrentDate: "2026-08-03", CurrentWeek: "2026-W32", CurrentMonth: "2026-08", Timezone: "Asia/Shanghai"},
+	)
+	if strings.Contains(prompt, secret) || !strings.Contains(prompt, "EC-2026-041") || !strings.Contains(prompt, sessionmemory.SensitiveValuePlaceholder) {
+		t.Fatalf("maintenance prompt leaked secret or lost ordinary context: %s", prompt)
+	}
+}
+
 func TestMemoryMaintenanceCalendarUsesRequestTimezone(t *testing.T) {
 	now := time.Date(2026, time.July, 12, 16, 30, 0, 0, time.UTC)
 	calendar := memoryMaintenanceCalendarAt(now, userLocation([]byte(`{"timezone":"Asia/Shanghai"}`)))
@@ -378,6 +412,37 @@ func TestParseMemoryMaintenanceDecision(t *testing.T) {
 	}
 }
 
+func TestApplyMemoryMaintenanceDecisionUsesAtomicCompatiblePatchShape(t *testing.T) {
+	before := "## User Preferences\n- 使用中文。\n\n## Project Context\n- EffChat 是个人 AI workbench。"
+	decision := memoryMaintenanceDecision{
+		Action: "patch",
+		Operations: []memoryMaintenanceOp{
+			{Op: "update", Section: "user_preferences", Match: "使用中文。", Content: "回答使用简体中文，先给结论。"},
+			{Op: "add", Section: "current_progress", Content: "当前正在修复 Korea 线上反馈。"},
+		},
+	}
+	normalized, doc, err := applyMemoryMaintenanceDecision(before, decision, sessionmemory.DefaultLimits())
+	if err != nil {
+		t.Fatalf("apply patch: %v", err)
+	}
+	if !strings.Contains(normalized, "回答使用简体中文，先给结论。") || !strings.Contains(normalized, "当前正在修复 Korea 线上反馈。") {
+		t.Fatalf("patched memory missing expected items: %s", normalized)
+	}
+	if len(doc.Sections) != len(sessionmemory.SectionDefs) {
+		t.Fatalf("section count = %d, want %d", len(doc.Sections), len(sessionmemory.SectionDefs))
+	}
+}
+
+func TestApplyMemoryMaintenanceDecisionRejectsStalePatchTarget(t *testing.T) {
+	_, _, err := applyMemoryMaintenanceDecision("## User Preferences\n- 使用中文。", memoryMaintenanceDecision{
+		Action:     "patch",
+		Operations: []memoryMaintenanceOp{{Op: "delete", Section: "user_preferences", Match: "已经不存在。"}},
+	}, sessionmemory.DefaultLimits())
+	if err == nil || !strings.Contains(err.Error(), "target not found") {
+		t.Fatalf("expected stale target rejection, got %v", err)
+	}
+}
+
 func TestGenerateMemoryMaintenanceTextStreamsChunks(t *testing.T) {
 	model := &memoryMaintenanceStreamModel{chunks: []*schema.Message{
 		{Role: schema.Assistant, Content: `{"action":"`},
@@ -411,7 +476,7 @@ func TestGenerateMemoryMaintenanceTextReturnsStreamError(t *testing.T) {
 }
 
 func TestValidateMemoryMaintenanceUpdate(t *testing.T) {
-	before := "## User Preferences\n- 默认中文沟通。\n\n## Project Context\n- FChat 是个人 AI workbench。"
+	before := "## User Preferences\n- 默认中文沟通。\n\n## Project Context\n- EffChat 是个人 AI workbench。"
 	if err := validateMemoryMaintenanceUpdate(before, "", false); err == nil {
 		t.Fatal("expected empty update to be rejected")
 	}

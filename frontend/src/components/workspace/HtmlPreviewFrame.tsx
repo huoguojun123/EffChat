@@ -78,7 +78,7 @@ function wrapPreview(type: "html" | "svg", content: string, fontFamily: string) 
 </html>`
   }
 
-  const baseFontStyle = `<style data-fchat-preview-font>html,body{font-family:${safeFontFamily};}</style>`
+  const baseFontStyle = `<style data-effchat-preview-font>html,body{font-family:${safeFontFamily};}</style>`
   const headTag = content.match(/<head\b[^>]*>/i)?.[0]
   if (headTag) return content.replace(headTag, `${headTag}${baseFontStyle}`)
 

@@ -1,4 +1,4 @@
-const storageKey = "fchat:session-drafts"
+const storageKey = "effchat:session-drafts"
 
 export function loadChatDrafts(): Record<number, string> {
   if (typeof sessionStorage === "undefined") return {}

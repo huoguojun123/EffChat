@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestCheckToolQuotaCountLimits(t *testing.T) {
@@ -126,6 +126,53 @@ func TestQuotaRepository_UsageForTodayCountsOCRByStartTime(t *testing.T) {
 	}
 }
 
+func TestQuotaRepositoryUsageAndAdmissionIgnoreCompactionCheckpoints(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	userID := createRepositoryTestUser(t, db, "compaction_quota")
+	session := &model.Session{UserID: userID, Title: "compaction quota", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	groupName := fmt.Sprintf("compaction_quota_group_%d", time.Now().UnixNano())
+	var groupID int64
+	if err := db.QueryRow(`
+		INSERT INTO user_groups (name, level, daily_message_limit, is_default)
+		VALUES ($1, 99, 2, false)
+		RETURNING id
+	`, groupName).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE users SET group_id = $1 WHERE id = $2`, groupID, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	messageRepo := NewMessageRepository(db)
+	for _, message := range []*model.Message{
+		{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"actual user message"}`)},
+		{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"manual"}}`)},
+	} {
+		if err := messageRepo.Create(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	repo := NewQuotaRepository(db)
+	usage, err := repo.UsageForToday(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.DailyMessages != 1 {
+		t.Fatalf("daily messages = %d, want only the actual user message", usage.DailyMessages)
+	}
+	if _, err := repo.ReserveChatRun(context.Background(), ChatRunReservationInput{
+		UserID: userID, AuthVersion: 1, SessionID: session.ID, RunID: "compaction-quota-run",
+		ReserveMessage: true, ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("checkpoint consumed daily message quota: %v", err)
+	}
+}
+
 func TestQuotaRepositoryReserveChatRunEnforcesDailyMessageAndConcurrentLimits(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -166,6 +213,16 @@ func TestQuotaRepositoryReserveChatRunEnforcesDailyMessageAndConcurrentLimits(t 
 		MessageData: []byte(`{"role":"user","content":"reserved message","metadata":{"run_id":"quota-run-1"}}`),
 	}); err != nil {
 		t.Fatalf("admit first run: %v", err)
+	}
+	// expires_at is replay-retention metadata, not a running lease. A model
+	// stream that has already started may legitimately outlive the original
+	// estimate and must keep owning its concurrency slot until terminal state.
+	if _, err := db.Exec(`
+		UPDATE chat_run_reservations
+		SET expires_at = NOW() - INTERVAL '1 second'
+		WHERE run_id = $1
+	`, firstInput.RunID); err != nil {
+		t.Fatalf("age active reservation: %v", err)
 	}
 	if _, err := repo.ReserveChatRun(context.Background(), ChatRunReservationInput{UserID: userID, AuthVersion: 1, SessionID: second.ID, RunID: "quota-run-2", ReserveMessage: true, ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
 		t.Fatal("concurrent reservation should be rejected")
@@ -212,14 +269,15 @@ func TestQuotaRepositoryReserveOCRSubmissionAtomicallyMarksQuotaUsage(t *testing
 		t.Fatal(err)
 	}
 	repo := NewQuotaRepository(db)
-	reserved, err := repo.ReserveOCRSubmission(context.Background(), file.ID, userID, 3)
+	claim := claimRepositoryOCRFile(t, db, file.ID)
+	reserved, err := repo.ReserveOCRSubmission(context.Background(), file.ID, userID, claim.OCRLeaseGeneration, 3)
 	if err != nil || !reserved {
 		t.Fatalf("reserve OCR = %v, %v", reserved, err)
 	}
 	if _, err := db.Exec("UPDATE files SET ocr_provider = 'mineru', ocr_started_at = NOW() WHERE id = $1", file.ID); err != nil {
 		t.Fatalf("mark OCR started: %v", err)
 	}
-	reserved, err = repo.ReserveOCRSubmission(context.Background(), file.ID, userID, 3)
+	reserved, err = repo.ReserveOCRSubmission(context.Background(), file.ID, userID, claim.OCRLeaseGeneration, 3)
 	if err != nil || reserved {
 		t.Fatalf("duplicate OCR reserve = %v, %v", reserved, err)
 	}
@@ -273,7 +331,8 @@ func TestQuotaRepositoryReserveOCRSubmissionCountsByStartTime(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		reserved, err := NewQuotaRepository(db).ReserveOCRSubmission(context.Background(), candidate.ID, userID, 3)
+		claim := claimRepositoryOCRFile(t, db, candidate.ID)
+		reserved, err := NewQuotaRepository(db).ReserveOCRSubmission(context.Background(), candidate.ID, userID, claim.OCRLeaseGeneration, 3)
 		if err != nil || !reserved {
 			t.Fatalf("reserve candidate = %v, %v; pending upload must not consume today's OCR quota", reserved, err)
 		}
@@ -291,10 +350,47 @@ func TestQuotaRepositoryReserveOCRSubmissionCountsByStartTime(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		reserved, err := NewQuotaRepository(db).ReserveOCRSubmission(context.Background(), candidate.ID, userID, 1)
+		claim := claimRepositoryOCRFile(t, db, candidate.ID)
+		reserved, err := NewQuotaRepository(db).ReserveOCRSubmission(context.Background(), candidate.ID, userID, claim.OCRLeaseGeneration, 1)
 		var quotaErr *ToolQuotaExceeded
 		if reserved || !errors.As(err, &quotaErr) || quotaErr.Code != "daily_ocr_file_limit_exceeded" {
 			t.Fatalf("reserve candidate = %v, %v; today's started OCR must consume the file quota", reserved, err)
 		}
 	})
+}
+
+func TestQuotaRepositoryReserveOCRSubmissionRejectsStaleLeaseGeneration(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "ocr_quota_fencing")
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM files WHERE user_id = $1", userID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+	provider := "mineru"
+	file := &model.File{UserID: userID, FileName: "quota.pdf", FilePath: "/tmp/quota.pdf", FileType: "application/pdf", FileSize: 10, ExtractStatus: "ocr_pending", OCRProvider: &provider}
+	if err := NewFileRepository(db).Create(file); err != nil {
+		t.Fatal(err)
+	}
+	ownerA := claimRepositoryOCRFile(t, db, file.ID)
+	if _, err := db.Exec("UPDATE files SET ocr_lease_until = NOW() - INTERVAL '1 second' WHERE id = $1", file.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownerB := claimRepositoryOCRFile(t, db, file.ID)
+	repo := NewQuotaRepository(db)
+	if reserved, err := repo.ReserveOCRSubmission(context.Background(), file.ID, userID, ownerA.OCRLeaseGeneration, 7); reserved || !errors.Is(err, ErrOCRLeaseLost) {
+		t.Fatalf("stale quota reserve=%v err=%v, want fenced", reserved, err)
+	}
+	var startedAt *time.Time
+	var pages int
+	var errorType *string
+	if err := db.QueryRow("SELECT ocr_started_at, ocr_page_count, ocr_error_type FROM files WHERE id = $1", file.ID).Scan(&startedAt, &pages, &errorType); err != nil {
+		t.Fatal(err)
+	}
+	if startedAt != nil || pages != 0 || errorType != nil {
+		t.Fatalf("stale quota mutation persisted started=%v pages=%d error=%v", startedAt, pages, errorType)
+	}
+	if reserved, err := repo.ReserveOCRSubmission(context.Background(), file.ID, userID, ownerB.OCRLeaseGeneration, 7); err != nil || !reserved {
+		t.Fatalf("owner B quota reserve=%v err=%v", reserved, err)
+	}
 }

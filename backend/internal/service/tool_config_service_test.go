@@ -1,9 +1,11 @@
 package service
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func TestToolConfigService_RuntimeConfigDefaults(t *testing.T) {
@@ -18,6 +20,12 @@ func TestToolConfigService_RuntimeConfigDefaults(t *testing.T) {
 	if got := runtime.Timeout("web_extract").Seconds(); got != 30 {
 		t.Fatalf("web_extract timeout = %.0f, want 30", got)
 	}
+	if runtime.IsEnabled("unregistered_tool") {
+		t.Fatal("unknown tools must fail closed")
+	}
+	if runtime.IsKnown("unregistered_tool") {
+		t.Fatal("unknown tool reported as governed")
+	}
 }
 
 func TestToolConfigService_RejectsUnknownTool(t *testing.T) {
@@ -28,8 +36,8 @@ func TestToolConfigService_RejectsUnknownTool(t *testing.T) {
 		Enabled:        &enabled,
 		TimeoutSeconds: 20,
 	})
-	if err == nil {
-		t.Fatal("unknown tool should be rejected")
+	if !errors.Is(err, ErrToolConfigInvalid) {
+		t.Fatalf("unknown tool error = %v, want invalid tool configuration", err)
 	}
 }
 
@@ -55,5 +63,15 @@ func TestToolConfigService_RuntimeConfigFailsClosedWhenRepositoryReadFails(t *te
 		if runtime.IsEnabled(key) {
 			t.Fatalf("%s should be disabled when tool configuration cannot be read", key)
 		}
+	}
+}
+
+func TestNormalizeGovernanceReason(t *testing.T) {
+	if got := normalizeGovernanceReason("  ", "fallback"); got != "fallback" {
+		t.Fatalf("empty reason = %q", got)
+	}
+	long := strings.Repeat("治", 501)
+	if got := []rune(normalizeGovernanceReason(long, "fallback")); len(got) != 500 || got[499] != '治' {
+		t.Fatalf("unicode reason length=%d", len(got))
 	}
 }

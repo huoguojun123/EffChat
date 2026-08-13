@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type ChatRunAdmission struct {
@@ -18,6 +18,11 @@ type ChatRunAdmission struct {
 	Existing bool
 }
 
+// reserveChatRunInTx locks the user before the session and run row so all
+// admission callers share one lock order. run_id is the idempotency key: an
+// exact intent match reuses the reservation, while any mismatch conflicts.
+// The caller owns the transaction, so quota reservations disappear with every
+// other admission fact if the surrounding operation rolls back.
 func reserveChatRunInTx(ctx context.Context, tx *sql.Tx, input ChatRunReservationInput) (ChatRunReservation, error) {
 	input, err := normalizeChatRunReservation(input)
 	if err != nil {
@@ -51,7 +56,9 @@ func reserveChatRunInTx(ctx context.Context, tx *sql.Tx, input ChatRunReservatio
 			COUNT(*),
 			COUNT(*) FILTER (WHERE message_reserved)
 		FROM chat_run_reservations
-		WHERE user_id = $1 AND released_at IS NULL AND expires_at > NOW()
+		WHERE user_id = $1
+		  AND status = 'running'
+		  AND released_at IS NULL
 	`, input.UserID).Scan(&activeRuns, &pendingMessages); err != nil {
 		return ChatRunReservation{}, fmt.Errorf("load active chat reservations: %w", err)
 	}
@@ -104,10 +111,13 @@ func normalizeChatRunReservation(input ChatRunReservationInput) (ChatRunReservat
 		input.Operation = "send"
 		if input.Kind == "compaction" {
 			input.Operation = "compaction"
+		} else if input.Kind == "memory_maintenance" {
+			input.Operation = "memory_compact"
 		}
 	}
 	validOperation := input.Kind == "chat" && (input.Operation == "send" || input.Operation == "retry")
 	validOperation = validOperation || input.Kind == "compaction" && input.Operation == "compaction"
+	validOperation = validOperation || input.Kind == "memory_maintenance" && (input.Operation == "memory_compact" || input.Operation == "memory_retry")
 	if !validOperation || input.IntentVersion < 0 || (input.IntentVersion > 0 && input.IntentHash == "") {
 		return input, fmt.Errorf("invalid chat run intent")
 	}
@@ -139,6 +149,10 @@ func chatRunReservationMatches(record ChatRunRecord, input ChatRunReservationInp
 		record.RetryTargetMessageID == input.RetryTargetMessageID
 }
 
+// AdmitChatMessage atomically reserves quota, claims staged attachments,
+// persists the user message and answer attempt, and touches the session. No
+// worker may start from a newly admitted run until this transaction commits;
+// an identical retry reloads the already committed admission instead.
 func (r *QuotaRepository) AdmitChatMessage(ctx context.Context, input ChatRunReservationInput, message *model.Message) (ChatRunAdmission, error) {
 	if message == nil || message.SessionID != input.SessionID {
 		return ChatRunAdmission{}, fmt.Errorf("message does not match chat run")
@@ -190,6 +204,9 @@ func (r *QuotaRepository) AdmitChatMessage(ctx context.Context, input ChatRunRes
 	return ChatRunAdmission{Record: record, Message: &persisted}, nil
 }
 
+// AdmitRetryChatRun applies the same atomic admission boundary to a selected
+// historical user turn: reservation, retry preparation and answer attempt
+// either commit together or remain safe for the caller to retry.
 func (r *QuotaRepository) AdmitRetryChatRun(ctx context.Context, input ChatRunReservationInput, targetMessageID int64) (ChatRunAdmission, error) {
 	if targetMessageID <= 0 || input.RetryTargetMessageID != targetMessageID {
 		return ChatRunAdmission{}, fmt.Errorf("retry target does not match chat run")
@@ -266,7 +283,6 @@ func (r *QuotaRepository) AdmitEditedRetryChatRun(ctx context.Context, input Cha
 			  AND run_id <> $2
 			  AND status = 'running'
 			  AND released_at IS NULL
-			  AND expires_at > NOW()
 		)
 	`, input.SessionID, input.RunID).Scan(&anotherRunActive); err != nil {
 		return ChatRunAdmission{}, fmt.Errorf("inspect active edited retry runs: %w", err)

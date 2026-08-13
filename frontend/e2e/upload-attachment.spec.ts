@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { test, expect, newChat } from "./helpers"
 
 // 守护 P0-2 / P1-1：上传一个声称支持的文件（docx）→ 应上传成功并出现在输入区附件列表，
@@ -5,32 +7,37 @@ import { test, expect, newChat } from "./helpers"
 test("upload a supported docx then send", async ({ authed: page }) => {
   await newChat(page)
 
-  // 构造一个最小合法的 docx（zip 容器 + word/document.xml）。
-  // 这里用浏览器端 File，交给隐藏 input[type=file]。
-  const docxBase64 = await page.evaluate(async () => {
-    // 极小 docx：zip 里仅一个 word/document.xml。用 CompressionStream 构造 store/deflate 较复杂，
-    // 改为内联一个预先构造好的最小 docx 的 base64（含 "hello docx"）。
-    return (window as unknown as { __E2E_DOCX__?: string }).__E2E_DOCX__ || ""
-  })
-
-  // 若页面未注入预置 docx，则用纯文本 .txt 兜底（同样属支持类型，验证上传闭环）。
+  const fixture = fileURLToPath(new URL("./fixtures/sample.docx.b64", import.meta.url))
+  const docx = Buffer.from(readFileSync(fixture, "utf8").trim(), "base64")
   const fileInput = page.getByTestId("file-input")
-  if (docxBase64) {
-    await fileInput.setInputFiles({
-      name: "sample.docx",
-      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      buffer: Buffer.from(docxBase64, "base64"),
-    })
-  } else {
-    await fileInput.setInputFiles({
-      name: "note.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from("hello from e2e attachment\n第二行中文", "utf-8"),
-    })
-  }
+  const uploadResponse = page.waitForResponse((response) => response.url().endsWith("/api/v1/files") && response.request().method() === "POST")
+  await fileInput.setInputFiles({
+    name: "sample.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    buffer: docx,
+  })
+  const uploaded = await (await uploadResponse).json() as { id: number; file_type: string }
+  expect(uploaded.file_type).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-  // 上传成功后，输入区应出现附件条目（文件名可见）。
-  await expect(page.getByText(/sample\.docx|note\.txt/)).toBeVisible({ timeout: 20_000 })
+  // Composer deliberately shows a compact count; the staged drawer owns file-level details.
+  const stagedButton = page.getByRole("button", { name: /本次已选 1 个附件，暂存 1 个/ })
+  await expect(stagedButton).toBeVisible({ timeout: 20_000 })
+  await stagedButton.click()
+  await expect(page.getByText("sample.docx")).toBeVisible({ timeout: 10_000 })
+  await page.keyboard.press("Escape")
+
+  const token = await page.evaluate(() => localStorage.getItem("token"))
+  expect(token).toBeTruthy()
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/v1/files/${uploaded.id}/preview`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!response.ok()) return ""
+    return (await response.json() as { content?: string }).content || ""
+  }, { timeout: 20_000 }).toContain("EffChat deterministic DOCX fixture 2026")
+  const download = await page.request.get(`/api/v1/files/${uploaded.id}`, { headers: { Authorization: `Bearer ${token}` } })
+  expect(download.ok()).toBeTruthy()
+  expect(download.headers()["content-type"]).toContain("text/plain")
+  expect(download.headers()["content-disposition"]).toContain("sample.docx.txt")
+  expect((await download.text())).toContain("EffChat deterministic DOCX fixture 2026")
 
   // 附带文字并发送。
   await page.getByTestId("chat-input").fill("请概述这个附件的内容。")

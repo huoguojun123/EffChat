@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 func TestUserGroupService_PreservesDefaultGroupInvariant(t *testing.T) {

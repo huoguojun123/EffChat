@@ -1,11 +1,12 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
 type SessionFolderService struct {
@@ -32,7 +33,7 @@ func (s *SessionFolderService) List(userID int64) ([]*model.SessionFolder, error
 func (s *SessionFolderService) Create(userID int64, req *CreateSessionFolderRequest) (*model.SessionFolder, error) {
 	name := normalizeFolderName(req.Name)
 	if name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, fmt.Errorf("%w: name is required", ErrSessionFolderInvalid)
 	}
 	folder := &model.SessionFolder{
 		UserID: userID,
@@ -45,31 +46,38 @@ func (s *SessionFolderService) Create(userID int64, req *CreateSessionFolderRequ
 }
 
 func (s *SessionFolderService) Update(id, userID int64, req *UpdateSessionFolderRequest) (*model.SessionFolder, error) {
-	folder, err := s.folderRepo.GetByID(id, userID)
-	if err != nil {
-		return nil, err
+	if req.Name == nil && req.Pinned == nil {
+		return nil, fmt.Errorf("%w: at least one field is required", ErrSessionFolderInvalid)
 	}
+	patch := repository.SessionFolderPatch{}
 	if req.Name != nil {
 		name := normalizeFolderName(*req.Name)
 		if name == "" {
-			return nil, fmt.Errorf("name is required")
+			return nil, fmt.Errorf("%w: name is required", ErrSessionFolderInvalid)
 		}
-		folder.Name = name
+		patch.Name = name
+		patch.NameSet = true
 	}
 	if req.Pinned != nil {
-		if err := s.folderRepo.SetPinned(id, userID, *req.Pinned); err != nil {
-			return nil, err
-		}
-		return s.folderRepo.GetByID(id, userID)
+		patch.Pinned = *req.Pinned
+		patch.PinnedSet = true
 	}
-	if err := s.folderRepo.Update(folder); err != nil {
+	folder, err := s.folderRepo.Patch(id, userID, patch)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, fmt.Errorf("%w: %v", ErrSessionFolderNotFound, err)
+		}
 		return nil, err
 	}
 	return folder, nil
 }
 
 func (s *SessionFolderService) Delete(id, userID int64) error {
-	return s.folderRepo.Delete(id, userID)
+	err := s.folderRepo.Delete(id, userID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("%w: %v", ErrSessionFolderNotFound, err)
+	}
+	return err
 }
 
 func normalizeFolderName(name string) string {

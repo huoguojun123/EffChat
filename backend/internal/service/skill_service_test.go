@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	skillparser "github.com/huoguojun123/effchat/internal/skill"
+	"github.com/huoguojun123/EffChat/internal/model"
+	skillparser "github.com/huoguojun123/EffChat/internal/skill"
 )
 
 type fixedSkillResolver struct {

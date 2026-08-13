@@ -9,6 +9,8 @@ else
 fi
 ENV_FILE="${ENV_FILE:-$DEPLOY_ROOT/.env.docker}"
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$SRC_DIR/docker-compose.yml")
+# shellcheck source=compose-env.sh
+source "$SRC_DIR/scripts/compose-env.sh"
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "help" ]; then
   cat <<'USAGE'
@@ -27,18 +29,6 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-env_value() {
-  local key="$1"
-  awk -F= -v key="$key" '
-    $0 !~ /^[[:space:]]*#/ && $1 == key {
-      sub(/^[^=]*=/, "")
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-      print
-      exit
-    }
-  ' "$ENV_FILE"
-}
-
 env_value_or() {
   local value
   value="$(env_value "$1")"
@@ -53,11 +43,7 @@ data_dir() {
   local value
   value="$(env_value DATA_DIR)"
   if [ -z "$value" ]; then
-    if [ "$(basename "$SRC_DIR")" = "src" ]; then
-      value="../data"
-    else
-      value="./data"
-    fi
+    value="../data"
   fi
   case "$value" in
     /*) printf '%s\n' "$value" ;;
@@ -112,6 +98,41 @@ prepare_storage() {
     "$STORAGE_ROOT/fonts" \
     "$STORAGE_ROOT/skills" \
     "$BACKUP_ROOT"
+}
+
+marker_value() {
+  local key="$1"
+  awk -F= -v key="$key" '
+    $1 == key {
+      sub(/^[^=]*=/, "")
+      print
+      exit
+    }
+  ' "$MARKER"
+}
+
+marker_state() {
+  local state
+  state="$(marker_value state)"
+  if [ -n "$state" ]; then
+    printf '%s\n' "$state"
+  elif [ "$(marker_value layout)" = "v1" ]; then
+    # Markers created before explicit states are still reversible migrations.
+    printf 'migrated\n'
+  fi
+}
+
+set_marker_state() {
+  local state="$1" timestamp_key="$2" timestamp="$3" temp_marker
+  temp_marker="${MARKER}.tmp.$$"
+  awk -F= -v timestamp_key="$timestamp_key" '
+    $1 != "state" && $1 != timestamp_key { print }
+  ' "$MARKER" > "$temp_marker"
+  {
+    printf 'state=%s\n' "$state"
+    printf '%s=%s\n' "$timestamp_key" "$timestamp"
+  } >> "$temp_marker"
+  mv -f -- "$temp_marker" "$MARKER"
 }
 
 legacy_file_count() {
@@ -309,7 +330,7 @@ SQL
 }
 
 verify_layout() {
-  local legacy_count managed_paths font_paths missing=0 path host_path
+  local legacy_count managed_paths deferred_paths font_paths missing=0 path host_path
   legacy_count="$(legacy_db_count | tr -d '[:space:]')"
   if [ "$legacy_count" != "0" ]; then
     echo "Database still contains $legacy_count legacy storage path(s)." >&2
@@ -319,11 +340,13 @@ verify_layout() {
   managed_paths="$(db_psql -Atc "
     SELECT path
     FROM (
-      SELECT file_path AS path FROM files WHERE status <> 'storage_removed'
+      SELECT file_path AS path FROM files WHERE status IN ('staged', 'formal')
       UNION
-      SELECT extracted_text_path FROM files WHERE status <> 'storage_removed' AND extracted_text_path IS NOT NULL
+      SELECT extracted_text_path FROM files
+      WHERE status IN ('staged', 'formal') AND extracted_text_path IS NOT NULL
       UNION
-      SELECT ocr_source_path FROM files WHERE status <> 'storage_removed' AND ocr_source_path IS NOT NULL
+      SELECT ocr_source_path FROM files
+      WHERE status IN ('staged', 'formal') AND ocr_source_path IS NOT NULL
       UNION
       SELECT storage_path FROM skill_files
       UNION
@@ -350,6 +373,35 @@ verify_layout() {
       missing=$((missing + 1))
     fi
   done <<< "$managed_paths"
+
+  # Deleted attachments retain path metadata until the cleanup lease reaches
+  # its retention deadline. Their original or derived bytes may never have
+  # existed (for example a cancelled OCR run), but path fencing must remain
+  # strict so a malformed tombstone cannot bless an external cleanup target.
+  deferred_paths="$(db_psql -Atc "
+    SELECT path
+    FROM (
+      SELECT file_path AS path FROM files WHERE status = 'cleanup_claimed'
+      UNION
+      SELECT extracted_text_path FROM files
+      WHERE status = 'cleanup_claimed' AND extracted_text_path IS NOT NULL
+      UNION
+      SELECT ocr_source_path FROM files
+      WHERE status = 'cleanup_claimed' AND ocr_source_path IS NOT NULL
+    ) deferred_paths
+    WHERE path IS NOT NULL AND path <> ''
+    ORDER BY path;
+  ")"
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      storage/*) ;;
+      *)
+        echo "Database path is outside managed storage: $path" >&2
+        missing=$((missing + 1))
+        ;;
+    esac
+  done <<< "$deferred_paths"
 
   if [ "$missing" -ne 0 ]; then
     echo "Storage verification failed with $missing invalid or missing path(s)." >&2
@@ -423,7 +475,7 @@ plan() {
   printf 'storage_files=%s\n' "$(storage_file_count)"
   printf 'legacy_database_paths=%s\n' "$database_paths"
   if [ -f "$MARKER" ]; then
-    printf 'status=migrated\n'
+    printf 'status=%s\n' "$(marker_state)"
   else
     printf 'status=pending\n'
   fi
@@ -467,6 +519,7 @@ apply_layout() {
 
   {
     printf 'layout=v1\n'
+    printf 'state=migrated\n'
     printf 'migrated_at_epoch=%s\n' "$(date +%s)"
     printf 'legacy_root=%s\n' "$LEGACY_ROOT"
     printf 'restore_sql=%s\n' "$restore_sql"
@@ -477,19 +530,29 @@ apply_layout() {
 }
 
 rollback_layout() {
-  ensure_postgres
-  "${COMPOSE[@]}" stop web backend >/dev/null 2>&1 || true
-  WRITERS_STOPPED=1
   if [ ! -f "$MARKER" ]; then
     echo "Storage layout marker not found." >&2
     return 1
   fi
-  local restore_sql
-  restore_sql="$(awk -F= '$1 == "restore_sql" {sub(/^[^=]*=/, ""); print; exit}' "$MARKER")"
+  local state restore_sql
+  state="$(marker_state)"
+  if [ "$state" != "migrated" ]; then
+    echo "Storage layout is $state and cannot be rolled back." >&2
+    return 1
+  fi
+  if [ ! -d "$LEGACY_ROOT" ]; then
+    echo "Legacy uploads are missing; refusing rollback." >&2
+    return 1
+  fi
+  validate_legacy_tree
+  restore_sql="$(marker_value restore_sql)"
   if [ -z "$restore_sql" ] || [ ! -f "$restore_sql" ]; then
     echo "Restore SQL is missing." >&2
     return 1
   fi
+  ensure_postgres
+  "${COMPOSE[@]}" stop web backend >/dev/null 2>&1 || true
+  WRITERS_STOPPED=1
   db_psql -f - < "$restore_sql"
   rm -f "$MARKER"
   WRITERS_STOPPED=0
@@ -497,24 +560,44 @@ rollback_layout() {
 }
 
 finalize_layout() {
-  ensure_postgres
-  verify_layout
   if [ ! -f "$MARKER" ]; then
     echo "Storage layout marker not found." >&2
     return 1
   fi
+  local state
+  state="$(marker_state)"
+  case "$state" in
+    migrated) ;;
+    finalized)
+      if [ -e "$LEGACY_ROOT" ]; then
+        echo "Finalized layout still has a legacy uploads path; refusing to continue." >&2
+        return 1
+      fi
+      ensure_postgres
+      verify_layout
+      echo "Storage layout is already finalized."
+      return
+      ;;
+    *)
+      echo "Unknown storage layout state: ${state:-missing}" >&2
+      return 1
+      ;;
+  esac
   if [ "${CONFIRM_STORAGE_FINALIZE:-}" != "DELETE_LEGACY_UPLOADS" ]; then
     echo "Set CONFIRM_STORAGE_FINALIZE=DELETE_LEGACY_UPLOADS to remove legacy uploads." >&2
     return 1
   fi
   local migrated_at now
-  migrated_at="$(awk -F= '$1 == "migrated_at_epoch" {print $2; exit}' "$MARKER")"
+  migrated_at="$(marker_value migrated_at_epoch)"
   now="$(date +%s)"
   if [ -z "$migrated_at" ] || [ $((now - migrated_at)) -lt 604800 ]; then
     echo "Legacy uploads must be retained for at least 7 days." >&2
     return 1
   fi
-  rm -rf "$LEGACY_ROOT"
+  ensure_postgres
+  verify_layout
+  rm -rf -- "$LEGACY_ROOT"
+  set_marker_state finalized finalized_at_epoch "$now"
   echo "Legacy uploads removed after verification and retention."
 }
 

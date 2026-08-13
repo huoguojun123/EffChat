@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cleanUrl, parseToolFailure } from "@/lib/toolResults"
+import { cleanUrl, extractResultWarning, parseToolFailure } from "@/lib/toolResults"
 
 describe("tool result helpers", () => {
   it("parses structured tool governance failures", () => {
@@ -34,5 +34,24 @@ describe("tool result helpers", () => {
     expect(cleanUrl("javascript:alert(1)")).toBe("")
     expect(cleanUrl("file:///etc/passwd")).toBe("")
     expect(cleanUrl("https://example.com/source")).toBe("https://example.com/source")
+  })
+
+  it.each([
+    ["refinement_disabled", "未启用模型提炼，显示抓取原文"],
+    ["refinement_unavailable", "提炼模型当前不可用，显示抓取原文"],
+    ["refinement_cooldown", "提炼服务暂时冷却，显示抓取原文"],
+    ["refinement_failed", "模型提炼未完成，显示抓取原文"],
+    ["source_truncated", "网页原文过长，仅保留部分内容"],
+  ])("maps %s to a stable user-facing warning", (reason, message) => {
+    expect(extractResultWarning({ degraded: true, degradation_reason: reason })).toBe(message)
+  })
+
+  it("surfaces truncation without requiring a degraded flag", () => {
+    expect(extractResultWarning({ truncated: true })).toBe("内容已截断，仅显示部分结果")
+  })
+
+  it("keeps clean and legacy results free of quality warnings", () => {
+    expect(extractResultWarning({ summarized: true, content: "summary" })).toBe("")
+    expect(extractResultWarning({ content: "legacy result" })).toBe("")
   })
 })

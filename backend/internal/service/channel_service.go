@@ -2,16 +2,24 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+)
+
+var (
+	ErrChannelInvalid     = errors.New("invalid channel configuration")
+	ErrChannelNotFound    = errors.New("channel not found")
+	ErrChannelUnavailable = errors.New("channel unavailable")
 )
 
 const (
 	AdapterOpenAICompatible = "openai_compatible"
+	AdapterOpenAIResponses  = "openai_responses"
 	AdapterAnthropic        = "anthropic"
 	AdapterGoogle           = "google"
 
@@ -50,17 +58,25 @@ type ExternalServiceInput struct {
 }
 
 func (s *ChannelService) ListAIChannels(includeDisabled bool) ([]*model.AIChannel, error) {
-	return s.repo.ListAIChannels(includeDisabled)
+	return s.ListAIChannelsContext(context.Background(), includeDisabled)
+}
+
+func (s *ChannelService) ListAIChannelsContext(ctx context.Context, includeDisabled bool) ([]*model.AIChannel, error) {
+	return s.repo.ListAIChannelsContext(ctx, includeDisabled)
 }
 
 func (s *ChannelService) GetAIChannel(key string) (*model.AIChannel, error) {
-	return s.repo.GetAIChannel(normalizeKey(key))
+	return s.GetAIChannelContext(context.Background(), key)
+}
+
+func (s *ChannelService) GetAIChannelContext(ctx context.Context, key string) (*model.AIChannel, error) {
+	return s.repo.GetAIChannelContext(ctx, normalizeKey(key))
 }
 
 func (s *ChannelService) SaveAIChannel(input *AIChannelInput) (*model.AIChannel, error) {
 	item, replaceKey, err := channelFromInput(input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
 	}
 	if err := s.repo.UpsertAIChannel(item, replaceKey); err != nil {
 		return nil, err
@@ -69,36 +85,52 @@ func (s *ChannelService) SaveAIChannel(input *AIChannelInput) (*model.AIChannel,
 }
 
 func (s *ChannelService) DeleteAIChannel(key string) error {
-	return s.repo.DeleteAIChannel(key)
+	err := s.repo.DeleteAIChannel(key)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrChannelNotFound
+	}
+	return err
 }
 
 func (s *ChannelService) ResolveAIChannel(key string) (*model.AIChannel, error) {
+	return s.ResolveAIChannelContext(context.Background(), key)
+}
+
+func (s *ChannelService) ResolveAIChannelContext(ctx context.Context, key string) (*model.AIChannel, error) {
 	key = normalizeKey(key)
 	if key == "" {
-		return nil, fmt.Errorf("channel is required")
+		return nil, fmt.Errorf("%w: channel is required", ErrChannelInvalid)
 	}
-	item, err := s.repo.GetAIChannel(key)
+	item, err := s.repo.GetAIChannelContext(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	if item == nil {
-		return nil, fmt.Errorf("channel %q is not configured", key)
+		return nil, ErrChannelNotFound
 	}
 	if !item.Enabled {
-		return nil, fmt.Errorf("channel %q is disabled", key)
+		return nil, ErrChannelUnavailable
 	}
 	if strings.TrimSpace(item.APIKey) == "" {
-		return nil, fmt.Errorf("channel %q has no API key configured", key)
+		return nil, ErrChannelUnavailable
 	}
 	return item, nil
 }
 
 func (s *ChannelService) ListExternalServices(includeDisabled bool) ([]*model.ExternalService, error) {
-	return s.repo.ListExternalServices(includeDisabled)
+	return s.ListExternalServicesContext(context.Background(), includeDisabled)
+}
+
+func (s *ChannelService) ListExternalServicesContext(ctx context.Context, includeDisabled bool) ([]*model.ExternalService, error) {
+	return s.repo.ListExternalServicesContext(ctx, includeDisabled)
 }
 
 func (s *ChannelService) GetExternalService(key string) (*model.ExternalService, error) {
-	return s.repo.GetExternalService(normalizeKey(key))
+	return s.GetExternalServiceContext(context.Background(), key)
+}
+
+func (s *ChannelService) GetExternalServiceContext(ctx context.Context, key string) (*model.ExternalService, error) {
+	return s.repo.GetExternalServiceContext(ctx, normalizeKey(key))
 }
 
 func (s *ChannelService) SaveExternalService(input *ExternalServiceInput) (*model.ExternalService, error) {
@@ -108,7 +140,7 @@ func (s *ChannelService) SaveExternalService(input *ExternalServiceInput) (*mode
 func (s *ChannelService) SaveExternalServiceContext(ctx context.Context, input *ExternalServiceInput) (*model.ExternalService, error) {
 	item, replaceKey, err := externalServiceFromInput(input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
 	}
 	if err := s.repo.SaveExternalServiceContext(ctx, item, replaceKey); err != nil {
 		return nil, err
@@ -118,7 +150,10 @@ func (s *ChannelService) SaveExternalServiceContext(ctx context.Context, input *
 
 func ValidateExternalService(input *ExternalServiceInput) (*model.ExternalService, error) {
 	item, _, err := externalServiceFromInput(input)
-	return item, err
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
+	}
+	return item, nil
 }
 
 func CanReuseExternalServiceCredential(saved, candidate *model.ExternalService) bool {
@@ -129,18 +164,29 @@ func CanReuseExternalServiceCredential(saved, candidate *model.ExternalService) 
 }
 
 func (s *ChannelService) ReorderExternalServices(kind string, keys []string) ([]*model.ExternalService, error) {
+	return s.ReorderExternalServicesContext(context.Background(), kind, keys)
+}
+
+func (s *ChannelService) ReorderExternalServicesContext(ctx context.Context, kind string, keys []string) ([]*model.ExternalService, error) {
 	kind = normalizeKey(kind)
 	if kind != ServiceKindSearch && kind != ServiceKindCrawler {
-		return nil, fmt.Errorf("invalid service kind")
+		return nil, fmt.Errorf("%w: invalid service kind", ErrChannelInvalid)
 	}
-	if err := s.repo.ReorderExternalServices(kind, keys); err != nil {
+	if err := s.repo.ReorderExternalServicesContext(ctx, kind, keys); err != nil {
+		if errors.Is(err, repository.ErrExternalServiceOrderInvalid) {
+			return nil, fmt.Errorf("%w: %v", ErrChannelInvalid, err)
+		}
 		return nil, err
 	}
-	return s.repo.ListExternalServices(true)
+	return s.repo.ListExternalServicesContext(ctx, true)
 }
 
 func (s *ChannelService) DeleteExternalService(key string) error {
-	return s.repo.DeleteExternalService(key)
+	err := s.repo.DeleteExternalService(key)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrChannelNotFound
+	}
+	return err
 }
 
 type SearchRuntimeConfig struct {
@@ -174,35 +220,54 @@ type MinerUOCRConfig struct {
 	MaxConcurrency int
 }
 
-func (s *ChannelService) ResolveSearchRuntimeConfig() SearchRuntimeConfig {
-	cfg, _ := s.ResolveSearchRuntimeConfigWithState()
-	return cfg
+func (s *ChannelService) ResolveSearchRuntimeConfigWithState() (SearchRuntimeConfig, SearchRuntimeConfigState) {
+	cfg, state, _ := s.ResolveSearchRuntimeConfigWithStateContext(context.Background())
+	return cfg, state
 }
 
-func (s *ChannelService) ResolveSearchRuntimeConfigWithState() (SearchRuntimeConfig, SearchRuntimeConfigState) {
+func (s *ChannelService) ResolveSearchRuntimeConfigWithStateContext(ctx context.Context) (SearchRuntimeConfig, SearchRuntimeConfigState, error) {
+	if err := ctx.Err(); err != nil {
+		return SearchRuntimeConfig{}, SearchRuntimeConfigState{}, err
+	}
 	if s == nil || s.repo == nil {
 		cfg, state := BuildSearchRuntimeConfigWithState(nil)
 		state.Search = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:search:unavailable", nil))
 		state.Extract = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:crawler:unavailable", nil))
-		return cfg, state
+		return cfg, state, nil
 	}
-	services, err := s.repo.ListExternalServices(true)
+	services, err := s.repo.ListExternalServicesContext(ctx, true)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return SearchRuntimeConfig{}, SearchRuntimeConfigState{}, ctxErr
+		}
 		cfg, state := BuildSearchRuntimeConfigWithState(nil)
 		state.Search = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:search:unavailable", nil))
 		state.Extract = runtimeConfigState(RuntimeStateUnavailable, "repository_unavailable", runtimeConfigVersion("external:crawler:unavailable", nil))
-		return cfg, state
+		return cfg, state, nil
 	}
-	return BuildSearchRuntimeConfigWithState(services)
+	cfg, state := BuildSearchRuntimeConfigWithState(services)
+	return cfg, state, nil
 }
 
 func (s *ChannelService) ResolveMinerUOCRConfig() MinerUOCRConfig {
+	config, _ := s.ResolveMinerUOCRConfigContext(context.Background())
+	return config
+}
+
+// ResolveMinerUOCRConfigContext preserves repository failures for HTTP
+// admission paths that must distinguish an intentionally disabled service from
+// a temporarily unreadable control plane. Background recovery keeps using the
+// compatibility wrapper above and treats either case as fail-closed.
+func (s *ChannelService) ResolveMinerUOCRConfigContext(ctx context.Context) (MinerUOCRConfig, error) {
 	if s == nil || s.repo == nil {
-		return MinerUOCRConfig{}
+		return MinerUOCRConfig{}, errors.New("MinerU channel repository is unavailable")
 	}
-	item, err := s.repo.GetExternalService("mineru")
-	if err != nil || item == nil || !item.Enabled || strings.TrimSpace(item.APIKey) == "" {
-		return MinerUOCRConfig{}
+	item, err := s.repo.GetExternalServiceContext(ctx, "mineru")
+	if err != nil {
+		return MinerUOCRConfig{}, fmt.Errorf("resolve MinerU OCR config: %w", err)
+	}
+	if item == nil || !item.Enabled || strings.TrimSpace(item.APIKey) == "" {
+		return MinerUOCRConfig{}, nil
 	}
 	baseURL := strings.TrimSpace(item.BaseURL)
 	if baseURL == "" {
@@ -212,7 +277,7 @@ func (s *ChannelService) ResolveMinerUOCRConfig() MinerUOCRConfig {
 	if concurrency <= 0 {
 		concurrency = 2
 	}
-	return MinerUOCRConfig{Enabled: true, BaseURL: baseURL, APIKey: item.APIKey, MaxConcurrency: concurrency}
+	return MinerUOCRConfig{Enabled: true, BaseURL: baseURL, APIKey: item.APIKey, MaxConcurrency: concurrency}, nil
 }
 
 func BuildSearchRuntimeConfig(services []*model.ExternalService) SearchRuntimeConfig {
@@ -270,6 +335,8 @@ func BuildSearchRuntimeConfigWithState(services []*model.ExternalService) (Searc
 	if len(cfg.SearchProviders) > 0 {
 		cfg.SearchProvider = cfg.SearchProviders[0]
 	}
+	// External crawlers keep the exact administrator-defined order. Basic is
+	// not persisted as an external service and remains the final local fallback.
 	cfg.CrawlerProviders = append(cfg.CrawlerProviders, "basic")
 	cfg.CrawlerImpl = cfg.CrawlerProviders[0]
 	return cfg, SearchRuntimeConfigState{
@@ -378,7 +445,7 @@ func externalServiceFromInput(input *ExternalServiceInput) (*model.ExternalServi
 
 func validAdapter(adapter string) bool {
 	switch adapter {
-	case AdapterOpenAICompatible, AdapterAnthropic, AdapterGoogle:
+	case AdapterOpenAICompatible, AdapterOpenAIResponses, AdapterAnthropic, AdapterGoogle:
 		return true
 	default:
 		return false
@@ -432,13 +499,14 @@ func effectiveExternalServiceBaseURL(key, value string) string {
 	}
 }
 
-// NormalizeOpenAICompatibleBaseURL keeps AI channel base URLs at the API root.
+// NormalizeOpenAICompatibleBaseURL keeps OpenAI-family channel base URLs at the API root.
 // Admins sometimes paste concrete OpenAI endpoints such as /responses,
-// /chat/completions, or /models. Eino's OpenAI-compatible adapter expects the
-// root ending at /v1, and the model-list probe appends /models itself.
+// /chat/completions, or /models. Both Eino OpenAI adapters expect the root
+// ending at /v1, and the model-list probe appends /models itself.
 func NormalizeOpenAICompatibleBaseURL(adapter string, raw string) string {
 	base := strings.TrimRight(strings.TrimSpace(raw), "/")
-	if normalizeKey(adapter) != AdapterOpenAICompatible {
+	adapter = normalizeKey(adapter)
+	if adapter != AdapterOpenAICompatible && adapter != AdapterOpenAIResponses {
 		return base
 	}
 	for {

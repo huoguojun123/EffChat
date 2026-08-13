@@ -10,40 +10,43 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
-const acceptedRuntimeSnapshotVersion = 2
+const acceptedRuntimeSnapshotVersion = 4
 
 type AcceptedRuntimeSnapshot struct {
-	Version              int                              `json:"version"`
-	CapturedAt           time.Time                        `json:"captured_at"`
-	ModelID              string                           `json:"model_id"`
-	Provider             string                           `json:"provider"`
-	ChannelKey           string                           `json:"channel_key"`
-	ContextWindow        int                              `json:"context_window"`
-	ModelMaxOutput       int                              `json:"model_max_output"`
-	RequestedMaxOutput   int                              `json:"requested_max_output,omitempty"`
-	ThinkingFormat       string                           `json:"thinking_format"`
-	ThinkingEffort       string                           `json:"thinking_effort,omitempty"`
-	ModelChecksum        string                           `json:"model_checksum"`
-	ChannelChecksum      string                           `json:"channel_checksum"`
-	RequestChecksum      string                           `json:"request_checksum"`
-	PromptChecksum       string                           `json:"prompt_checksum"`
-	ConfigChecksum       string                           `json:"config_checksum"`
-	MemoryChecksum       string                           `json:"memory_checksum"`
-	Skills               []RuntimeDependencyRef           `json:"skills,omitempty"`
-	SkillsChecksum       string                           `json:"skills_checksum"`
-	EnabledTools         []string                         `json:"enabled_tools,omitempty"`
-	ToolConfigChecksum   string                           `json:"tool_config_checksum"`
-	ToolConfigState      service.RuntimeConfigState       `json:"tool_config_state"`
-	SearchProviders      []string                         `json:"search_providers,omitempty"`
-	ExtractProviders     []string                         `json:"extract_providers,omitempty"`
-	SearchConfigChecksum string                           `json:"search_config_checksum"`
-	SearchConfigState    service.SearchRuntimeConfigState `json:"search_config_state"`
-	MemoryState          service.RuntimeConfigState       `json:"memory_state"`
-	Checksum             string                           `json:"checksum"`
+	Version                int                              `json:"version"`
+	CapturedAt             time.Time                        `json:"captured_at"`
+	ModelID                string                           `json:"model_id"`
+	Provider               string                           `json:"provider"`
+	ChannelKey             string                           `json:"channel_key"`
+	ContextWindow          int                              `json:"context_window"`
+	ModelMaxOutput         int                              `json:"model_max_output"`
+	RequestedMaxOutput     int                              `json:"requested_max_output,omitempty"`
+	ThinkingFormat         string                           `json:"thinking_format"`
+	ThinkingEffort         string                           `json:"thinking_effort,omitempty"`
+	ModelChecksum          string                           `json:"model_checksum"`
+	ChannelChecksum        string                           `json:"channel_checksum"`
+	RequestChecksum        string                           `json:"request_checksum"`
+	PromptChecksum         string                           `json:"prompt_checksum"`
+	ConfigChecksum         string                           `json:"config_checksum"`
+	ExtractSummaryChecksum string                           `json:"extract_summary_checksum"`
+	MemoryChecksum         string                           `json:"memory_checksum"`
+	Skills                 []RuntimeDependencyRef           `json:"skills,omitempty"`
+	SkillsChecksum         string                           `json:"skills_checksum"`
+	EnabledTools           []string                         `json:"enabled_tools,omitempty"`
+	ToolConfigChecksum     string                           `json:"tool_config_checksum"`
+	ToolConfigState        service.RuntimeConfigState       `json:"tool_config_state"`
+	SearchProviders        []string                         `json:"search_providers,omitempty"`
+	ExtractProviders       []string                         `json:"extract_providers,omitempty"`
+	SearchConfigChecksum   string                           `json:"search_config_checksum"`
+	SearchConfigState      service.SearchRuntimeConfigState `json:"search_config_state"`
+	ExtractSummaryState    service.RuntimeConfigState       `json:"extract_summary_state"`
+	MemoryState            service.RuntimeConfigState       `json:"memory_state"`
+	Checksum               string                           `json:"checksum"`
 }
 
 type RuntimeDependencyRef struct {
@@ -61,6 +64,12 @@ type runtimeModelMaterial struct {
 	SearchImpl    modelbank.SearchImpl
 	ContextWindow int
 	MaxOutput     int
+	// Keep the backwards-compatible configurable default out of the checksum
+	// JSON so pre-047 accepted runs are not invalidated by a no-op schema field.
+	// Omit/fixed policies remain checksum-owned runtime dependencies.
+	TemperaturePolicy    string                      `json:"TemperaturePolicy,omitempty"`
+	TemperatureValue     *float64                    `json:"TemperatureValue,omitempty"`
+	OpenAIRequestProfile *model.OpenAIRequestProfile `json:"OpenAIRequestProfile,omitempty"`
 }
 
 type runtimeChannelMaterial struct {
@@ -111,7 +120,107 @@ type runtimeConfigMaterial struct {
 	CompressionContextThreshold int
 	ExtractSummaryEnabled       bool
 	ExtractSummaryModel         string
+	ExtractSummaryState         service.RuntimeConfigState
 	MemoryMaxChars              int
+}
+
+type runtimeExtractSummaryMaterial struct {
+	Enabled           bool
+	ConfiguredModelID string
+	State             service.RuntimeConfigState
+	Available         bool
+	Model             runtimeModelMaterial
+	Channel           runtimeChannelMaterial
+}
+
+func runtimeModelInfoMaterial(info *modelbank.ModelInfo) runtimeModelMaterial {
+	if info == nil {
+		return runtimeModelMaterial{}
+	}
+	policy := model.NormalizeTemperaturePolicy(info.TemperaturePolicy)
+	materialPolicy := policy
+	if policy == model.TemperaturePolicyConfigurable {
+		materialPolicy = ""
+	}
+	return runtimeModelMaterial{
+		ID:                   info.ID,
+		Provider:             info.Provider,
+		Vision:               info.Capabilities.Vision,
+		ToolUse:              info.Capabilities.ToolUse,
+		Reasoning:            info.Capabilities.Reasoning,
+		Thinking:             info.ThinkingFormat,
+		SearchImpl:           info.Capabilities.SearchImpl,
+		ContextWindow:        info.Capabilities.ContextWindow,
+		MaxOutput:            info.Capabilities.MaxOutput,
+		TemperaturePolicy:    materialPolicy,
+		TemperatureValue:     cloneFloat64Value(info.TemperatureValue),
+		OpenAIRequestProfile: cloneOpenAIRequestProfilePointer(info.OpenAIRequestProfile),
+	}
+}
+
+func cloneOpenAIRequestProfilePointer(profile model.OpenAIRequestProfile) *model.OpenAIRequestProfile {
+	if model.OpenAIRequestProfileEmpty(profile) {
+		return nil
+	}
+	clone := model.CloneOpenAIRequestProfile(profile)
+	return &clone
+}
+
+func cloneFloat64Value(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func runtimeAIChannelMaterial(channel *model.AIChannel) runtimeChannelMaterial {
+	if channel == nil {
+		return runtimeChannelMaterial{}
+	}
+	return runtimeChannelMaterial{
+		Key:     channel.Key,
+		Adapter: channel.Adapter,
+		BaseURL: channel.BaseURL,
+		APIKey:  channel.APIKey,
+		Enabled: channel.Enabled,
+	}
+}
+
+// resolveAcceptedExtractSummaryRuntime resolves the exact utility dependency
+// selected at admission. Non-context availability failures preserve the main
+// run and become a fixed per-run refinement downgrade; cancellation and setup
+// deadlines still abort admission so they cannot be mistaken for availability.
+func (a *EinoAgent) resolveAcceptedExtractSummaryRuntime(
+	ctx context.Context,
+	config runtimeConfigMaterial,
+) (*modelbank.ModelInfo, *model.AIChannel, runtimeExtractSummaryMaterial, error) {
+	material := runtimeExtractSummaryMaterial{
+		Enabled:           config.ExtractSummaryEnabled,
+		ConfiguredModelID: strings.TrimSpace(config.ExtractSummaryModel),
+		State:             config.ExtractSummaryState,
+	}
+	if !material.Enabled {
+		return nil, nil, material, nil
+	}
+
+	info, channel, err := a.resolveUtilityModelInfo(ctx, material.ConfiguredModelID)
+	if err != nil {
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return nil, nil, runtimeExtractSummaryMaterial{}, ctxErr
+		}
+		return nil, nil, material, nil
+	}
+	if info == nil || channel == nil {
+		return nil, nil, material, nil
+	}
+
+	infoCopy := *info
+	channelCopy := *channel
+	material.Available = true
+	material.Model = runtimeModelInfoMaterial(&infoCopy)
+	material.Channel = runtimeAIChannelMaterial(&channelCopy)
+	return &infoCopy, &channelCopy, material, nil
 }
 
 func (a *EinoAgent) CaptureAcceptedRuntimeSnapshot(ctx context.Context, req *ChatRequest) (json.RawMessage, error) {
@@ -152,8 +261,16 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	currentReq.RuntimeToolConfigState = service.RuntimeConfigState{}
 	currentReq.RuntimeSearchConfig = service.SearchRuntimeConfig{}
 	currentReq.RuntimeSearchConfigState = service.SearchRuntimeConfigState{}
+	currentReq.RuntimeExtractSummaryEnabled = false
+	currentReq.RuntimeExtractSummaryModel = ""
+	currentReq.RuntimeExtractSummaryState = service.RuntimeConfigState{}
+	currentReq.RuntimeExtractSummaryModelInfo = nil
+	currentReq.RuntimeExtractSummaryChannel = nil
 	current, err := a.captureAcceptedRuntimeSnapshot(ctx, &currentReq)
 	if err != nil {
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return ctxErr
+		}
 		return runtimeDependencyChangedError()
 	}
 	if current.Checksum != expected.Checksum {
@@ -170,6 +287,11 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	req.RuntimeToolConfigState = currentReq.RuntimeToolConfigState
 	req.RuntimeSearchConfig = currentReq.RuntimeSearchConfig
 	req.RuntimeSearchConfigState = currentReq.RuntimeSearchConfigState
+	req.RuntimeExtractSummaryEnabled = currentReq.RuntimeExtractSummaryEnabled
+	req.RuntimeExtractSummaryModel = currentReq.RuntimeExtractSummaryModel
+	req.RuntimeExtractSummaryState = currentReq.RuntimeExtractSummaryState
+	req.RuntimeExtractSummaryModelInfo = currentReq.RuntimeExtractSummaryModelInfo
+	req.RuntimeExtractSummaryChannel = currentReq.RuntimeExtractSummaryChannel
 	req.ContextWindow = expected.ContextWindow
 	req.ModelMaxOutput = expected.ModelMaxOutput
 	req.Vision = currentReq.Vision
@@ -178,6 +300,10 @@ func (a *EinoAgent) ValidateAcceptedRuntimeSnapshot(ctx context.Context, req *Ch
 	req.ThinkingFormat = expected.ThinkingFormat
 	req.ThinkingEffort = expected.ThinkingEffort
 	req.SearchImpl = currentReq.SearchImpl
+	req.TemperaturePolicy = currentReq.TemperaturePolicy
+	req.TemperatureValue = cloneFloat64Value(currentReq.TemperatureValue)
+	req.Temperature = cloneFloat64Value(currentReq.Temperature)
+	req.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(currentReq.OpenAIRequestProfile)
 	return nil
 }
 
@@ -196,6 +322,9 @@ func ParseAcceptedRuntimeSnapshot(raw json.RawMessage) (*AcceptedRuntimeSnapshot
 }
 
 func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *ChatRequest) (*AcceptedRuntimeSnapshot, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return nil, cause
+	}
 	if a == nil || req == nil {
 		return nil, fmt.Errorf("runtime snapshot is unavailable")
 	}
@@ -203,11 +332,14 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	if modelInfo == nil || !modelInfo.Enabled || strings.TrimSpace(modelInfo.Provider) != strings.TrimSpace(req.Provider) {
 		return nil, fmt.Errorf("accepted model is no longer available")
 	}
-	channel, err := a.channelService.ResolveAIChannel(req.Provider)
+	channel, err := a.channelService.ResolveAIChannelContext(ctx, req.Provider)
 	if err != nil {
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("accepted channel is no longer available: %w", err)
 	}
-	templateText, err := loadPromptTemplate(a.configRepo)
+	templateText, err := loadPromptTemplateContext(ctx, a.configRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -221,21 +353,17 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 		thinkingEffort = ""
 	}
 	req.ThinkingEffort = thinkingEffort
-	modelMaterial := runtimeModelMaterial{
-		ID:            modelInfo.ID,
-		Provider:      modelInfo.Provider,
-		Vision:        modelInfo.Capabilities.Vision,
-		ToolUse:       modelInfo.Capabilities.ToolUse,
-		Reasoning:     modelInfo.Capabilities.Reasoning,
-		Thinking:      modelInfo.ThinkingFormat,
-		SearchImpl:    modelInfo.Capabilities.SearchImpl,
-		ContextWindow: modelInfo.Capabilities.ContextWindow,
-		MaxOutput:     modelInfo.Capabilities.MaxOutput,
+	modelMaterial := runtimeModelInfoMaterial(modelInfo)
+	acceptedTemperaturePolicy := model.NormalizeTemperaturePolicy(modelInfo.TemperaturePolicy)
+	effectiveTemperature, err := model.ResolveTemperatureForRequest(acceptedTemperaturePolicy, modelInfo.TemperatureValue, req.Temperature)
+	if err != nil {
+		return nil, fmt.Errorf("invalid accepted model temperature profile: %w", err)
 	}
-	channelMaterial := runtimeChannelMaterial{
-		Key: channel.Key, Adapter: channel.Adapter, BaseURL: channel.BaseURL,
-		APIKey: channel.APIKey, Enabled: channel.Enabled,
-	}
+	req.TemperaturePolicy = acceptedTemperaturePolicy
+	req.TemperatureValue = cloneFloat64Value(modelInfo.TemperatureValue)
+	req.Temperature = effectiveTemperature
+	req.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile)
+	channelMaterial := runtimeAIChannelMaterial(channel)
 	requestMaterial := runtimeRequestMaterial{
 		SystemName: req.SystemName, SystemPrompt: req.SystemPrompt, Temperature: req.Temperature,
 		MaxTokens: req.MaxTokens, SchemaVersion: req.SchemaVersion, MessageFormat: req.MessageFormat,
@@ -247,18 +375,25 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 		PreferModelNativeSearch: req.PreferModelNativeSearch, MemoryEnabled: req.MemoryEnabled,
 	}
 
-	memory, memoryState := a.readRuntimeMemory(ctx, req.SessionID, req.MemoryEnabled)
-	toolRuntime, toolRuntimeState := a.resolveToolRuntimeConfigWithState()
-	searchRuntime, searchRuntimeState := a.resolveSearchRuntimeConfigWithState()
-	configMaterial := runtimeConfigMaterial{
-		CompressionContextThreshold: a.compressionContextThreshold(),
-		ExtractSummaryEnabled:       true,
-		ExtractSummaryModel:         "claude-haiku-4-5",
-		MemoryMaxChars:              a.memoryLimits().MaxChars,
+	memory, memoryState, err := a.readRuntimeMemoryContext(ctx, req.SessionID, req.MemoryEnabled)
+	if err != nil {
+		return nil, err
 	}
-	if a.configRepo != nil {
-		configMaterial.ExtractSummaryEnabled = a.configRepo.GetBool("extract_summary_enabled", true)
-		configMaterial.ExtractSummaryModel = a.configRepo.GetString("extract_summary_model", configMaterial.ExtractSummaryModel)
+	toolRuntime, toolRuntimeState, err := a.resolveToolRuntimeConfigWithStateContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	searchRuntime, searchRuntimeState, err := a.resolveSearchRuntimeConfigWithStateContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	configMaterial, err := a.runtimeConfigMaterialContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	extractSummaryInfo, extractSummaryChannel, extractSummaryMaterial, err := a.resolveAcceptedExtractSummaryRuntime(ctx, configMaterial)
+	if err != nil {
+		return nil, err
 	}
 
 	req.PromptTime = capturedAt
@@ -276,6 +411,11 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	req.RuntimeToolConfigState = toolRuntimeState
 	req.RuntimeSearchConfig = searchRuntime
 	req.RuntimeSearchConfigState = searchRuntimeState
+	req.RuntimeExtractSummaryEnabled = configMaterial.ExtractSummaryEnabled
+	req.RuntimeExtractSummaryModel = configMaterial.ExtractSummaryModel
+	req.RuntimeExtractSummaryState = configMaterial.ExtractSummaryState
+	req.RuntimeExtractSummaryModelInfo = extractSummaryInfo
+	req.RuntimeExtractSummaryChannel = extractSummaryChannel
 	req.ContextWindow = modelMaterial.ContextWindow
 	req.ModelMaxOutput = modelMaterial.MaxOutput
 	req.Vision = modelMaterial.Vision
@@ -288,52 +428,65 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	enabledTools := enabledToolNames(plan.mountedTools)
 	skillRefs, skillChecksum := runtimeSkillRefs(req.EnabledSkills)
 	snapshot := &AcceptedRuntimeSnapshot{
-		Version:              acceptedRuntimeSnapshotVersion,
-		CapturedAt:           capturedAt,
-		ModelID:              req.ModelID,
-		Provider:             req.Provider,
-		ChannelKey:           channel.Key,
-		ContextWindow:        modelMaterial.ContextWindow,
-		ModelMaxOutput:       modelMaterial.MaxOutput,
-		RequestedMaxOutput:   req.MaxTokens,
-		ThinkingFormat:       modelMaterial.Thinking,
-		ThinkingEffort:       thinkingEffort,
-		ModelChecksum:        checksumValue("model", modelMaterial),
-		ChannelChecksum:      checksumValue("channel", channelMaterial),
-		RequestChecksum:      checksumValue("request", requestMaterial),
-		PromptChecksum:       checksumValue("prompt", templateText),
-		ConfigChecksum:       checksumValue("config", configMaterial),
-		MemoryChecksum:       checksumValue("memory", memory),
-		Skills:               skillRefs,
-		SkillsChecksum:       skillChecksum,
-		EnabledTools:         enabledTools,
-		ToolConfigChecksum:   checksumValue("tools", toolRuntime),
-		ToolConfigState:      toolRuntimeState,
-		SearchProviders:      append([]string(nil), searchRuntime.SearchProviders...),
-		ExtractProviders:     append([]string(nil), searchRuntime.CrawlerProviders...),
-		SearchConfigChecksum: checksumValue("search", searchRuntime),
-		SearchConfigState:    searchRuntimeState,
-		MemoryState:          memoryState,
+		Version:                acceptedRuntimeSnapshotVersion,
+		CapturedAt:             capturedAt,
+		ModelID:                req.ModelID,
+		Provider:               req.Provider,
+		ChannelKey:             channel.Key,
+		ContextWindow:          modelMaterial.ContextWindow,
+		ModelMaxOutput:         modelMaterial.MaxOutput,
+		RequestedMaxOutput:     req.MaxTokens,
+		ThinkingFormat:         modelMaterial.Thinking,
+		ThinkingEffort:         thinkingEffort,
+		ModelChecksum:          checksumValue("model", modelMaterial),
+		ChannelChecksum:        checksumValue("channel", channelMaterial),
+		RequestChecksum:        checksumValue("request", requestMaterial),
+		PromptChecksum:         checksumValue("prompt", templateText),
+		ConfigChecksum:         checksumValue("config", configMaterial),
+		ExtractSummaryChecksum: checksumValue("extract-summary", extractSummaryMaterial),
+		MemoryChecksum:         checksumValue("memory", memory),
+		Skills:                 skillRefs,
+		SkillsChecksum:         skillChecksum,
+		EnabledTools:           enabledTools,
+		ToolConfigChecksum:     checksumValue("tools", toolRuntime),
+		ToolConfigState:        toolRuntimeState,
+		SearchProviders:        append([]string(nil), searchRuntime.SearchProviders...),
+		ExtractProviders:       append([]string(nil), searchRuntime.CrawlerProviders...),
+		SearchConfigChecksum:   checksumValue("search", searchRuntime),
+		SearchConfigState:      searchRuntimeState,
+		ExtractSummaryState:    configMaterial.ExtractSummaryState,
+		MemoryState:            memoryState,
 	}
 	snapshot.Checksum = acceptedRuntimeChecksum(snapshot)
 	return snapshot, nil
 }
 
 func (a *EinoAgent) readRuntimeMemory(ctx context.Context, sessionID int64, enabled bool) (string, service.RuntimeConfigState) {
+	value, state, _ := a.readRuntimeMemoryContext(ctx, sessionID, enabled)
+	return value, state
+}
+
+func (a *EinoAgent) readRuntimeMemoryContext(ctx context.Context, sessionID int64, enabled bool) (string, service.RuntimeConfigState, error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return "", service.RuntimeConfigState{}, cause
+	}
 	if !enabled {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateDisabled, Cause: "session_disabled", Version: "disabled"}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateDisabled, Cause: "session_disabled", Version: "disabled"}, nil
 	}
 	if a == nil || a.memoryRepo == nil || sessionID <= 0 {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}, nil
 	}
 	value, updatedAt, err := a.memoryRepo.GetWithUpdatedAt(ctx, sessionID)
 	if err != nil {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}
+		if ctxErr := runtimeContextError(ctx, err); ctxErr != nil {
+			return "", service.RuntimeConfigState{}, ctxErr
+		}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateUnavailable, Cause: "repository_unavailable", Version: "unavailable"}, nil
 	}
 	if updatedAt.IsZero() {
-		return "", service.RuntimeConfigState{State: service.RuntimeStateUnconfigured, Cause: "empty_memory", Version: "empty"}
+		return "", service.RuntimeConfigState{State: service.RuntimeStateUnconfigured, Cause: "empty_memory", Version: "empty"}, nil
 	}
-	return value, service.RuntimeConfigState{State: service.RuntimeStateReady, Version: updatedAt.UTC().Format(time.RFC3339Nano)}
+	return value, service.RuntimeConfigState{State: service.RuntimeStateReady, Version: updatedAt.UTC().Format(time.RFC3339Nano)}, nil
 }
 
 func runtimeSkillRefs(skills []SkillInstruction) ([]RuntimeDependencyRef, string) {

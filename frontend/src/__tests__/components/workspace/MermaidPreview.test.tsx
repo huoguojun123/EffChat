@@ -14,15 +14,15 @@ describe("MermaidPreview security config", () => {
   })
 
   it("passes active UI colors into Mermaid without weakening security", () => {
-    const config = mermaidRenderConfig(false, { background: "#fff", foreground: "#111", accent: "#06c", fontFamily: '"FChat Body", serif' })
+    const config = mermaidRenderConfig(false, { background: "#fff", foreground: "#111", accent: "#06c", fontFamily: '"EffChat Body", serif' })
 
     expect(config.themeVariables).toMatchObject({
       background: "#fff",
       primaryTextColor: "#111",
       primaryBorderColor: "#06c",
-      fontFamily: '"FChat Body", serif',
+      fontFamily: '"EffChat Body", serif',
     })
-    expect(config.themeCSS).toContain('font-family: "FChat Body", serif !important')
+    expect(config.themeCSS).toContain('font-family: "EffChat Body", serif !important')
     expect(config.securityLevel).toBe("strict")
   })
 

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -68,7 +69,7 @@ func TestMarkCompactionSummary(t *testing.T) {
 	})
 }
 
-// Start 未指定 kind 时应回落为 chat；显式 compaction 应被保留。
+// Start 未指定 kind 时应回落为 chat；显式后台模型任务 kind 应被保留。
 func TestRunHubStartKind(t *testing.T) {
 	hub := NewRunHub(time.Minute, 1<<20)
 
@@ -87,6 +88,25 @@ func TestRunHubStartKind(t *testing.T) {
 	}
 	if comp.Kind != RunKindCompaction {
 		t.Errorf("kind = %q, want %q", comp.Kind, RunKindCompaction)
+	}
+	hub.Complete(comp.RunID, nil, nil)
+
+	memory, err := hub.Start(1, 2, 0, "", RunKindMemoryMaintenance)
+	if err != nil {
+		t.Fatalf("start memory maintenance: %v", err)
+	}
+	if memory.Kind != RunKindMemoryMaintenance || memory.Operation != RunOperationMemoryCompact {
+		t.Errorf("memory run = kind %q operation %q", memory.Kind, memory.Operation)
+	}
+	if !hub.CancelWithCause(memory.RunID, 1, 2, RunCancelUserStop) {
+		t.Fatal("cancel memory maintenance")
+	}
+	if _, _, _, err := hub.Transition(context.Background(), memory.RunID, RunTerminal{Status: RunStatusCanceled}); err != nil {
+		t.Fatalf("finalize memory cancellation: %v", err)
+	}
+	events, _, err := hub.EventsSince(memory.RunID, 1, 2, 0)
+	if err != nil || len(events) != 1 || events[0].Event != "memory_maintenance_canceled" {
+		t.Fatalf("memory cancellation events = %+v err=%v", events, err)
 	}
 }
 

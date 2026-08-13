@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import csv
-import html
+import asyncio
 import http.client
 import importlib
 import io
@@ -19,11 +18,10 @@ from urllib.parse import urlsplit
 from urllib import request as urlrequest
 
 import pdfplumber
-from docx import Document
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
-from openpyxl import load_workbook
-from pptx import Presentation
 from starlette.concurrency import run_in_threadpool
+
+from app import docx_content, markdown_table, pptx_content, resource_limits, xlsx_content
 
 
 app = FastAPI(title="EffChat Extractor", version="0.3.4")
@@ -36,6 +34,9 @@ MINERU_MAX_PAGES = 200
 MINERU_MAX_ZIP_BYTES = int(os.getenv("MINERU_MAX_ZIP_BYTES", str(100 * 1024 * 1024)))
 MINERU_UPLOAD_TIMEOUT_SECONDS = int(os.getenv("MINERU_UPLOAD_TIMEOUT_SECONDS", "300"))
 MINERU_DEFAULT_BASE_URL = "https://mineru.net"
+LOCAL_PARSE_CONCURRENCY = 2
+LOCAL_PARSE_QUEUE_TIMEOUT_SECONDS = 5.0
+LOCAL_PARSE_SLOTS = asyncio.Semaphore(LOCAL_PARSE_CONCURRENCY)
 
 
 @dataclass
@@ -94,8 +95,17 @@ async def extract(
     parser_name = getattr(parser, "__name__", "unknown")
 
     try:
-        doc = parser(data, safe_name)
-    except HTTPException:
+        doc = await run_local_parser(parser, data, safe_name)
+    except HTTPException as exc:
+        logger.warning(
+            "[py-extractor] extract rejected filename=%s parser=%s reason=%s status=%d bytes=%d duration_ms=%d",
+            safe_name,
+            parser_name,
+            exc.detail,
+            exc.status_code,
+            len(data),
+            elapsed_ms(started_at),
+        )
         raise
     except Exception as exc:
         logger.exception(
@@ -151,6 +161,25 @@ async def extract(
         "table_count": doc.table_count,
         "warnings": doc.warnings,
     }
+
+
+async def run_local_parser(
+    parser: Callable[[bytes, str], ExtractedDocument],
+    data: bytes,
+    safe_name: str,
+) -> ExtractedDocument:
+    # Office/PDF/CSV parsers are synchronous and may spend meaningful time in
+    # Python or native libraries. Two slots keep that work off the sole uvicorn
+    # event loop without allowing the default thread pool to multiply each
+    # request's bounded memory across dozens of simultaneous parsers.
+    try:
+        await asyncio.wait_for(LOCAL_PARSE_SLOTS.acquire(), timeout=LOCAL_PARSE_QUEUE_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="extractor_busy") from exc
+    try:
+        return await run_in_threadpool(parser, data, safe_name)
+    finally:
+        LOCAL_PARSE_SLOTS.release()
 
 
 @app.post("/ocr/mineru/start")
@@ -467,7 +496,7 @@ def extract_pdf_with_pdfplumber(data: bytes) -> ExtractedDocument:
                 chunks.append(text.strip())
             tables = page.extract_tables() or []
             for table in tables:
-                md = markdown_table(table)
+                md = markdown_table.serialize(table)
                 if md:
                     chunks.append(md)
                     table_count += 1
@@ -484,101 +513,49 @@ def extract_pdf_with_pdfplumber(data: bytes) -> ExtractedDocument:
 
 
 def extract_docx(data: bytes, filename: str) -> ExtractedDocument:
-    doc = Document(io.BytesIO(data))
-    blocks: list[str] = []
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if text:
-            blocks.append(text)
-    table_count = 0
-    for table in doc.tables:
-        rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-        md = markdown_table(rows)
-        if md:
-            blocks.append(md)
-            table_count += 1
+    resource_limits.validate_office_archive(data)
+    content = docx_content.extract(data)
     return ExtractedDocument(
-        text="\n\n".join(blocks),
+        text=content.text,
         parser="python-docx",
-        paragraph_count=len([p for p in doc.paragraphs if p.text.strip()]),
-        table_count=table_count,
+        paragraph_count=content.paragraph_count,
+        table_count=content.table_count,
     )
 
 
 def extract_pptx(data: bytes, filename: str) -> ExtractedDocument:
-    prs = Presentation(io.BytesIO(data))
-    slides: list[str] = []
-    for index, slide in enumerate(prs.slides, start=1):
-        texts: list[str] = []
-        for shape in slide.shapes:
-            if hasattr(shape, "text") and shape.text.strip():
-                texts.append(shape.text.strip())
-        if texts:
-            slides.append(f"## Slide {index}\n\n" + "\n\n".join(texts))
+    resource_limits.validate_office_archive(data)
+    content = pptx_content.extract(data)
     return ExtractedDocument(
-        text="\n\n".join(slides),
+        text=content.text,
         parser="python-pptx",
-        page_count=len(prs.slides),
-        paragraph_count=sum(count_paragraphs(slide) for slide in slides),
+        page_count=content.slide_count,
+        paragraph_count=count_paragraphs(content.text),
+        table_count=content.table_count,
+        warnings=content.warnings,
     )
 
 
 def extract_xlsx(data: bytes, filename: str) -> ExtractedDocument:
-    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    sections: list[str] = []
-    table_count = 0
-    try:
-        for sheet in wb.worksheets:
-            rows: list[list[str]] = []
-            for row in sheet.iter_rows(values_only=True):
-                values = ["" if value is None else str(value) for value in row]
-                if any(cell.strip() for cell in values):
-                    rows.append(values)
-            if rows:
-                sections.append(f"## {sheet.title}\n\n{markdown_table(rows)}")
-                table_count += 1
-    finally:
-        wb.close()
+    resource_limits.validate_office_archive(data)
+    content = xlsx_content.extract(data)
     return ExtractedDocument(
-        text="\n\n".join(sections),
+        text=content.text,
         parser="openpyxl",
-        table_count=table_count,
-        paragraph_count=len(sections),
+        table_count=content.table_count,
+        paragraph_count=content.paragraph_count,
     )
 
 
 def extract_csv(data: bytes, filename: str) -> ExtractedDocument:
     text = decode_text(data)
-    sample = text[:4096]
-    try:
-        dialect = csv.Sniffer().sniff(sample)
-    except csv.Error:
-        dialect = csv.excel
-    reader = csv.reader(io.StringIO(text), dialect)
-    rows = [row for row in reader if any(cell.strip() for cell in row)]
+    rows = resource_limits.read_bounded_csv(text, MAX_OUTPUT_BYTES)
     return ExtractedDocument(
-        text=markdown_table(rows),
+        text=markdown_table.serialize(rows),
         parser="python-csv",
         table_count=1 if rows else 0,
         paragraph_count=len(rows),
     )
-
-
-def markdown_table(rows: list[list[object]]) -> str:
-    cleaned = [[html.escape("" if cell is None else str(cell).strip()) for cell in row] for row in rows]
-    cleaned = [row for row in cleaned if any(cell for cell in row)]
-    if not cleaned:
-        return ""
-    width = max(len(row) for row in cleaned)
-    normalized = [row + [""] * (width - len(row)) for row in cleaned]
-    header = normalized[0]
-    body = normalized[1:] or [[""] * width]
-    lines = [
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join(["---"] * width) + " |",
-    ]
-    lines.extend("| " + " | ".join(row) + " |" for row in body)
-    return "\n".join(lines)
 
 
 def normalize_markdown(text: str) -> str:

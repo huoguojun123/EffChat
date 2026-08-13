@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huoguojun123/effchat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/config"
 	_ "github.com/lib/pq"
 )
 
-const RequiredSchemaVersion = "041_conversation_search.sql"
+const RequiredSchemaVersion = "053_default_user_group_baseline.sql"
 
 func VerifySchemaVersion(ctx context.Context, database *sql.DB) (string, error) {
 	var compatible bool

@@ -39,7 +39,7 @@ export function AttachmentImage({ att }: { att: AttachmentMeta }) {
           url={url}
           filename={att.filename}
           onOpenChange={setOpen}
-          onDownload={att.file_id ? () => filesApi.downloadBlob(att.file_id!, att.filename) : undefined}
+          onDownload={att.file_id ? (signal) => filesApi.downloadBlob(att.file_id!, att.filename, signal) : undefined}
         />
       ) : null}
     </>

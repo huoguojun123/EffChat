@@ -3,6 +3,7 @@ import type { AIChannelAdapter, ExternalServiceKind } from "@/api/admin";
 export const adapterOptions: Array<{ value: AIChannelAdapter; label: string }> =
   [
     { value: "openai_compatible", label: "OpenAI-compatible" },
+    { value: "openai_responses", label: "OpenAI Responses" },
     { value: "anthropic", label: "Anthropic" },
     { value: "google", label: "Google Gemini" },
   ];

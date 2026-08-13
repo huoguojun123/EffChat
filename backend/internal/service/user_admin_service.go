@@ -1,15 +1,28 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
+	"unicode/utf8"
 
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
 	"golang.org/x/crypto/bcrypt"
+)
+
+var ErrUserAdminInvalid = errors.New("invalid administrator user request")
+
+const (
+	adminUsernameMinRunes = 3
+	adminUsernameMaxRunes = 50
+	userNicknameMaxRunes  = 100
+	userEmailMaxRunes     = 255
+	userPasswordMinBytes  = 6
+	userPasswordMaxBytes  = 72
 )
 
 type UserAdminService struct {
@@ -26,16 +39,24 @@ func (s *UserAdminService) SetRunHub(runHub *RunHub) {
 }
 
 type UserResponse struct {
-	ID          int64           `json:"id"`
-	Username    string          `json:"username"`
-	Email       *string         `json:"email,omitempty"`
-	Nickname    *string         `json:"nickname,omitempty"`
-	Role        string          `json:"role"`
-	GroupID     *int64          `json:"group_id,omitempty"`
-	Permissions json.RawMessage `json:"permissions,omitempty"`
-	IsActive    bool            `json:"is_active"`
-	CreatedAt   string          `json:"created_at"`
-	LastLoginAt *string         `json:"last_login_at,omitempty"`
+	ID             int64                      `json:"id"`
+	Username       string                     `json:"username"`
+	Email          *string                    `json:"email,omitempty"`
+	Nickname       *string                    `json:"nickname,omitempty"`
+	Role           string                     `json:"role"`
+	GroupID        *int64                     `json:"group_id"`
+	EffectiveGroup EffectiveUserGroupResponse `json:"effective_group"`
+	Permissions    json.RawMessage            `json:"permissions,omitempty"`
+	IsActive       bool                       `json:"is_active"`
+	CreatedAt      string                     `json:"created_at"`
+	LastLoginAt    *string                    `json:"last_login_at,omitempty"`
+}
+
+type EffectiveUserGroupResponse struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Level     int    `json:"level"`
+	Inherited bool   `json:"inherited"`
 }
 
 type CreateUserRequest struct {
@@ -60,13 +81,16 @@ type ResetPasswordRequest struct {
 	Password string `json:"password" binding:"required,min=6"`
 }
 
-// SetGroupRequest 设置用户分级组（group_id 为 null 时清空，回落默认最低级）。
+// SetGroupRequest 设置原始用户组；group_id 为 null 时动态继承当前默认组。
 type SetGroupRequest struct {
 	GroupID *int64 `json:"group_id"`
 }
 
 // SetGroup 设置用户所属分级组。
 func (s *UserAdminService) SetGroup(userID int64, groupID *int64) (*UserResponse, error) {
+	if groupID != nil && *groupID <= 0 {
+		return nil, fmt.Errorf("%w: group_id must be a positive integer or null", ErrUserAdminInvalid)
+	}
 	if err := s.userRepo.SetGroup(userID, groupID); err != nil {
 		return nil, err
 	}
@@ -95,9 +119,18 @@ func (s *UserAdminService) List(limit, offset int) ([]*UserResponse, int, error)
 }
 
 func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error) {
+	if err := validateUsername(req.Username); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if err := validateUserPassword(req.Password); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if err := validateUserNickname(req.Nickname); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
 	email, err := normalizeOptionalEmail(req.Email)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
 	existing, err := s.userRepo.GetByUsername(req.Username)
@@ -105,7 +138,7 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 		return nil, err
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("username already exists")
+		return nil, repository.ErrUserConflict
 	}
 
 	role := req.Role
@@ -113,7 +146,7 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 		role = "user"
 	}
 	if err := validateRole(role); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
 	isActive := true
@@ -126,7 +159,7 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 		permissions = []byte(`{}`)
 	}
 	if !json.Valid(permissions) {
-		return nil, fmt.Errorf("permissions must be valid json")
+		return nil, fmt.Errorf("%w: permissions must be valid json", ErrUserAdminInvalid)
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -151,56 +184,66 @@ func (s *UserAdminService) Create(req *CreateUserRequest) (*UserResponse, error)
 	if err := s.userRepo.Create(user); err != nil {
 		return nil, err
 	}
-	return toUserResponse(user), nil
-}
-
-func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserResponse, error) {
-	user, err := s.userRepo.GetByIDIncludeInactive(userID)
+	created, err := s.userRepo.GetByIDIncludeInactive(user.ID)
 	if err != nil {
 		return nil, err
 	}
-	invalidateActiveRuns := (req.Role != nil && *req.Role != user.Role) || (req.IsActive != nil && *req.IsActive != user.IsActive)
+	return toUserResponse(created), nil
+}
+
+func (s *UserAdminService) Update(userID int64, req *UpdateUserRequest) (*UserResponse, error) {
+	return s.UpdateContext(context.Background(), userID, req)
+}
+
+func (s *UserAdminService) UpdateContext(ctx context.Context, userID int64, req *UpdateUserRequest) (*UserResponse, error) {
 	email, err := normalizeOptionalEmail(req.Email)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if err := validateUserNickname(req.Nickname); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 	}
 
 	if req.Role != nil {
 		if err := validateRole(*req.Role); err != nil {
-			return nil, err
-		}
-		user.Role = *req.Role
-	}
-	if req.IsActive != nil {
-		user.IsActive = *req.IsActive
-	}
-	if req.Email != nil {
-		user.Email = email
-	}
-	if req.Nickname != nil {
-		if *req.Nickname == "" {
-			user.Nickname = nil
-		} else {
-			user.Nickname = req.Nickname
+			return nil, fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
 		}
 	}
+	nickname := req.Nickname
+	if nickname != nil && *nickname == "" {
+		nickname = nil
+	}
+	permissionsSet := len(req.Permissions) > 0
 	if len(req.Permissions) > 0 {
 		if !json.Valid(req.Permissions) {
-			return nil, fmt.Errorf("permissions must be valid json")
+			return nil, fmt.Errorf("%w: permissions must be valid json", ErrUserAdminInvalid)
 		}
-		user.Permissions = req.Permissions
 	}
 
-	if err := s.userRepo.UpdateAdminFields(user); err != nil {
+	result, err := s.userRepo.UpdateFieldsContext(ctx, userID, repository.UserPatch{
+		EmailSet:       req.Email != nil,
+		Email:          email,
+		NicknameSet:    req.Nickname != nil,
+		Nickname:       nickname,
+		Role:           req.Role,
+		PermissionsSet: permissionsSet,
+		Permissions:    req.Permissions,
+		IsActive:       req.IsActive,
+	})
+	if err != nil {
 		return nil, err
 	}
-	if s.runHub != nil && invalidateActiveRuns {
+	if s.runHub != nil && result.InvalidatedRuns {
 		s.runHub.CancelByUser(userID)
+	}
+	user, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID)
+	if err != nil {
+		return nil, err
 	}
 	return toUserResponse(user), nil
 }
 
-// normalizeOptionalEmail 统一管理员创建/更新用户时的邮箱口径。
+// normalizeOptionalEmail 统一个人资料与管理员用户维护的邮箱口径。
 //
 // 前端为了保持表单可控，空输入会自然提交为空字符串；如果仍把 gin 的
 // binding:"omitempty,email" 放在 *string 字段上，空字符串指针有时会先触发
@@ -214,6 +257,9 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
+	if utf8.RuneCountInString(trimmed) > userEmailMaxRunes {
+		return nil, fmt.Errorf("email must be at most %d characters", userEmailMaxRunes)
+	}
 	addr, err := mail.ParseAddress(trimmed)
 	if err != nil || addr.Address != trimmed {
 		return nil, fmt.Errorf("invalid email")
@@ -221,15 +267,18 @@ func normalizeOptionalEmail(value *string) (*string, error) {
 	return &trimmed, nil
 }
 
-func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest) error {
-	if _, err := s.userRepo.GetByIDIncludeInactive(userID); err != nil {
+func (s *UserAdminService) ResetPasswordContext(ctx context.Context, userID int64, req *ResetPasswordRequest) error {
+	if err := validateUserPassword(req.Password); err != nil {
+		return fmt.Errorf("%w: %v", ErrUserAdminInvalid, err)
+	}
+	if _, err := s.userRepo.GetByIDIncludeInactiveContext(ctx, userID); err != nil {
 		return err
 	}
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
-	if err := s.userRepo.UpdatePassword(userID, string(hashedPassword)); err != nil {
+	if err := s.userRepo.UpdatePasswordContext(ctx, userID, string(hashedPassword)); err != nil {
 		return err
 	}
 	if s.runHub != nil {
@@ -239,16 +288,23 @@ func (s *UserAdminService) ResetPassword(userID int64, req *ResetPasswordRequest
 }
 
 func toUserResponse(u *model.User) *UserResponse {
+	effectiveGroup := EffectiveUserGroupResponse{Inherited: u.GroupID == nil}
+	if u.EffectiveGroup != nil {
+		effectiveGroup.ID = u.EffectiveGroup.ID
+		effectiveGroup.Name = u.EffectiveGroup.Name
+		effectiveGroup.Level = u.EffectiveGroup.Level
+	}
 	resp := &UserResponse{
-		ID:          u.ID,
-		Username:    u.Username,
-		Email:       u.Email,
-		Nickname:    u.Nickname,
-		Role:        u.Role,
-		GroupID:     u.GroupID,
-		Permissions: json.RawMessage(u.Permissions),
-		IsActive:    u.IsActive,
-		CreatedAt:   u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:             u.ID,
+		Username:       u.Username,
+		Email:          u.Email,
+		Nickname:       u.Nickname,
+		Role:           u.Role,
+		GroupID:        u.GroupID,
+		EffectiveGroup: effectiveGroup,
+		Permissions:    json.RawMessage(u.Permissions),
+		IsActive:       u.IsActive,
+		CreatedAt:      u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if u.LastLoginAt != nil {
 		s := u.LastLoginAt.Format("2006-01-02T15:04:05Z07:00")
@@ -260,6 +316,29 @@ func toUserResponse(u *model.User) *UserResponse {
 func validateRole(role string) error {
 	if role != "admin" && role != "user" {
 		return fmt.Errorf("invalid role: must be admin or user")
+	}
+	return nil
+}
+
+func validateUsername(username string) error {
+	length := utf8.RuneCountInString(username)
+	if length < adminUsernameMinRunes || length > adminUsernameMaxRunes {
+		return fmt.Errorf("username must be between %d and %d characters", adminUsernameMinRunes, adminUsernameMaxRunes)
+	}
+	return nil
+}
+
+func validateUserNickname(nickname *string) error {
+	if nickname != nil && utf8.RuneCountInString(*nickname) > userNicknameMaxRunes {
+		return fmt.Errorf("nickname must be at most %d characters", userNicknameMaxRunes)
+	}
+	return nil
+}
+
+func validateUserPassword(password string) error {
+	length := len(password)
+	if length < userPasswordMinBytes || length > userPasswordMaxBytes {
+		return fmt.Errorf("password must be between %d and %d bytes", userPasswordMinBytes, userPasswordMaxBytes)
 	}
 	return nil
 }

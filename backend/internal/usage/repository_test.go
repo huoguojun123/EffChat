@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/testutil"
+	"github.com/huoguojun123/EffChat/internal/testutil"
 )
 
 func TestRepositoryAggregateSeparatesRunsAttemptsAndDegradedTools(t *testing.T) {
@@ -111,6 +111,111 @@ func TestRepositoryAggregateSeparatesRunsAttemptsAndDegradedTools(t *testing.T) 
 			t.Fatalf("web extract totals = %#v", item)
 		}
 	}
+}
+
+func TestRepositoryQuotaUsersIgnoreCompactionCheckpoints(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+
+	var userID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO users (username, password_hash, role, is_active, permissions, preferences)
+		VALUES ($1, 'hash', 'user', true, '{}', '{}')
+		RETURNING id
+	`, fmt.Sprintf("usage_compaction_%d", time.Now().UnixNano())).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	var sessionID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO sessions (user_id, title, model_id, provider)
+		VALUES ($1, 'Compaction quota', 'model-a', 'provider-a')
+		RETURNING id
+	`, userID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO messages (session_id, schema_version, message_data)
+		VALUES
+			($1, 'v1', '{"role":"user","content":"actual user message"}'),
+			($1, 'v1', '{"role":"user","content":"checkpoint","metadata":{"compaction_summary":true}}')
+	`, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := repo.QuotaUsersForToday(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if user.UserID == userID {
+			if user.DailyMessages != 1 {
+				t.Fatalf("admin daily messages = %d, want only the actual user message", user.DailyMessages)
+			}
+			return
+		}
+	}
+	t.Fatalf("quota user %d was not returned", userID)
+}
+
+func TestRepositoryOCRUsageUsesStartTimeAcrossAdminAggregates(t *testing.T) {
+	db := testutil.OpenPostgresTestDB(t)
+	repo := NewRepository(db)
+	ctx := context.Background()
+	var now, startToday time.Time
+	if err := db.QueryRowContext(ctx, "SELECT NOW(), date_trunc('day', NOW())").Scan(&now, &startToday); err != nil {
+		t.Fatal(err)
+	}
+
+	var userID int64
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO users (username, password_hash, role, is_active, permissions, preferences)
+		VALUES ($1, 'hash', 'user', true, '{}', '{}')
+		RETURNING id
+	`, fmt.Sprintf("usage_ocr_time_%d", time.Now().UnixNano())).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = db.ExecContext(context.Background(), "DELETE FROM users WHERE id = $1", userID) })
+
+	insertFile := func(name string, createdAt time.Time, startedAt *time.Time, pages int, extractStatus string) {
+		path := fmt.Sprintf("/tmp/%s_%d.pdf", name, time.Now().UnixNano())
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO files (
+				user_id, file_name, file_path, file_type, file_size, status, extract_status,
+				ocr_provider, ocr_page_count, created_at, ocr_started_at
+			) VALUES ($1, $2, $3, 'application/pdf', 10, 'formal', $4, 'mineru', $5, $6, $7)
+		`, userID, name, path, extractStatus, pages, createdAt, startedAt); err != nil {
+			t.Fatalf("insert OCR fixture %s: %v", name, err)
+		}
+	}
+
+	startedToday := now
+	// The upload happened yesterday, but this OCR started today and must count today.
+	insertFile("overnight", startToday.Add(-time.Hour), &startedToday, 7, "failed")
+	// A queued upload has no start event and must not count in either Admin aggregate.
+	insertFile("queued", now.Add(-30*time.Minute), nil, 3, "ocr_pending")
+
+	summary, err := repo.Aggregate(ctx, startToday, startToday.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("aggregate OCR usage: %v", err)
+	}
+	if summary.Totals.OCRFiles != 1 || summary.Totals.OCRPages != 7 || summary.Totals.OCRFailures != 1 {
+		t.Fatalf("Admin OCR totals = files=%d pages=%d failures=%d, want 1/7/1", summary.Totals.OCRFiles, summary.Totals.OCRPages, summary.Totals.OCRFailures)
+	}
+
+	users, err := repo.QuotaUsersForToday(ctx)
+	if err != nil {
+		t.Fatalf("aggregate quota users: %v", err)
+	}
+	for _, item := range users {
+		if item.UserID == userID {
+			if item.DailyOCRFiles != 1 || item.DailyOCRPages != 7 {
+				t.Fatalf("Admin quota pressure = files=%d pages=%d, want 1/7", item.DailyOCRFiles, item.DailyOCRPages)
+			}
+			return
+		}
+	}
+	t.Fatalf("quota user %d was not returned", userID)
 }
 
 func timePointer(value time.Time) *time.Time {

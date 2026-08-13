@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func TestPromptGroupRepositoryUpdateRollsBackWhenPromptSyncFails(t *testing.T) {
@@ -67,8 +67,9 @@ func TestPromptWritesWaitForPendingGroupRename(t *testing.T) {
 		{
 			name: "update",
 			run: func(repo *PromptRepository, _ int64, prompt *model.Prompt) error {
-				prompt.Title = "updated during rename"
-				return repo.Update(prompt)
+				title := "updated during rename"
+				_, err := repo.PatchContext(context.Background(), prompt.ID, prompt.UserID, PromptPatch{Title: &title})
+				return err
 			},
 		},
 	}
@@ -140,12 +141,23 @@ func TestPromptRepositoryUpdateContextCancelsGroupLockWait(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	err = NewPromptRepository(db).UpdateContext(ctx, prompt)
+	title := "canceled update"
+	_, err = NewPromptRepository(db).PatchContext(ctx, prompt.ID, prompt.UserID, PromptPatch{
+		Title: &title, GroupID: prompt.GroupID, GroupIDSet: true,
+	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("update error = %v, want context deadline", err)
 	}
-	if _, err := db.Exec(`SELECT 1 FROM prompts WHERE id = $1`, prompt.ID); err != nil {
+	if err := pendingRename.Rollback(); err != nil {
+		t.Fatalf("release pending rename: %v", err)
+	}
+	var storedTitle, storedGroupName string
+	var storedGroupID *int64
+	if err := db.QueryRow(`SELECT title, group_id, group_name FROM prompts WHERE id = $1`, prompt.ID).Scan(&storedTitle, &storedGroupID, &storedGroupName); err != nil {
 		t.Fatalf("verify prompt after canceled update: %v", err)
+	}
+	if storedTitle != prompt.Title || storedGroupID == nil || *storedGroupID != group.ID || storedGroupName != group.Name {
+		t.Fatalf("canceled Prompt patch changed title/group: title=%q group_id=%v group_name=%q", storedTitle, storedGroupID, storedGroupName)
 	}
 }
 

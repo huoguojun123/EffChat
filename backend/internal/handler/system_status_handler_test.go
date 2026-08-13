@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/extractor"
+	"github.com/huoguojun123/EffChat/internal/extractor"
 )
 
 func TestAdminSystemStatusHandlerReturnsPartialSafeStatus(t *testing.T) {

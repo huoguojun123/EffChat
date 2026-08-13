@@ -2,7 +2,7 @@ import type { PreparedDiagramSvg } from "./diagramSvg"
 
 type DiagramKind = "mermaid" | "graphviz"
 
-const prefix = "fchat:diagram:v1:"
+const prefix = "effchat:diagram:v1:"
 const indexKey = `${prefix}index`
 const maxEntries = 24
 const memoryCache = new Map<string, PreparedDiagramSvg>()

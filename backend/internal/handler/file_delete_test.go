@@ -17,7 +17,7 @@ func TestManagedUploadPathRejectsOutsideUploads(t *testing.T) {
 
 func TestRemoveManagedFilePathsDeduplicatesTextSidecar(t *testing.T) {
 	userDir := filepath.Join(uploadDir, "delete-test")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(userDir) })

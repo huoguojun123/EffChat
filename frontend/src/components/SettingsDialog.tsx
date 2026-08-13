@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useAuthStore } from "@/stores/auth"
 import { usersApi } from "@/api/users"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { MotionView } from "@/components/ui/motion"
 import { useUIStore } from "@/stores/ui"
-import { ACCENTS, COLOR_THEMES, colorTheme, type ColorThemeId } from "@/lib/themes"
+import { ACCENTS, COLOR_THEMES, THEME_PREVIEW_COLORS, accentPreviewColor, type ColorThemeId } from "@/lib/themes"
 import { cn } from "@/lib/utils"
 import { UserAvatar } from "@/components/UserAvatar"
+import { EditorOwnership } from "@/components/admin/editorOwnership"
 import { User as UserIcon, Lock, Check, AlertCircle, Camera, FileText, LoaderCircle, Monitor, Moon, Palette, Sun, Trash2 } from "lucide-react"
 
 interface Props {
@@ -18,16 +19,21 @@ interface Props {
 
 function useDelayedAction(action: () => void, delay: number) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const actionRef = useRef(action)
+
+  useEffect(() => {
+    actionRef.current = action
+  }, [action])
 
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current)
   }, [])
 
-  return () => {
+  return (shouldRun: () => boolean = () => true) => {
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = null
-      action()
+      if (shouldRun()) actionRef.current()
     }, delay)
   }
 }
@@ -35,17 +41,30 @@ function useDelayedAction(action: () => void, delay: number) {
 export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Props) {
   const [tab, setTab] = useState<"profile" | "password" | "appearance">("profile")
   const [direction, setDirection] = useState<"forward" | "back">("forward")
+  const [dirty, setDirty] = useState(false)
+
+  const leaveCurrentForm = useCallback((leave: () => void) => {
+    if (dirty && !window.confirm("放弃当前设置中未保存的修改？")) return
+    setDirty(false)
+    leave()
+  }, [dirty])
+
+  const close = useCallback(() => {
+    leaveCurrentForm(() => onOpenChange(false))
+  }, [leaveCurrentForm, onOpenChange])
 
   function switchTab(next: "profile" | "password" | "appearance") {
     if (next === tab) return
-    const order = ["profile", "password", "appearance"]
-    setDirection(order.indexOf(next) > order.indexOf(tab) ? "forward" : "back")
-    setTab(next)
+    leaveCurrentForm(() => {
+      const order = ["profile", "password", "appearance"]
+      setDirection(order.indexOf(next) > order.indexOf(tab) ? "forward" : "back")
+      setTab(next)
+    })
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[min(90dvh,680px)] max-w-[600px] overflow-hidden p-0">
+    <Dialog open={open} onOpenChange={(next) => next ? onOpenChange(true) : close()}>
+      <DialogContent className="max-h-[min(90dvh,680px)] max-w-[var(--settings-dialog-width)] overflow-hidden p-0">
         <DialogHeader>
           <DialogTitle className="border-b border-border px-5 py-4">设置</DialogTitle>
           <DialogDescription className="sr-only">配置个人资料、密码和界面外观。</DialogDescription>
@@ -66,10 +85,12 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 rounded-lg"
+            className="shrink-0 rounded-lg text-sm"
             onClick={() => {
-              onOpenChange(false)
-              onOpenPromptManager()
+              leaveCurrentForm(() => {
+                onOpenChange(false)
+                onOpenPromptManager()
+              })
             }}
           >
             <FileText className="h-3.5 w-3.5" />
@@ -79,8 +100,8 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
 
         <div className="min-h-0 overflow-y-auto px-5 pb-5">
           <MotionView viewKey={tab} direction={direction}>
-            {tab === "profile" ? <ProfileForm onDone={() => onOpenChange(false)} /> : null}
-            {tab === "password" ? <PasswordForm onDone={() => onOpenChange(false)} /> : null}
+            {tab === "profile" ? <ProfileForm onDone={close} onDirtyChange={setDirty} /> : null}
+            {tab === "password" ? <PasswordForm onDone={close} onDirtyChange={setDirty} /> : null}
             {tab === "appearance" ? <AppearanceSettings /> : null}
           </MotionView>
         </div>
@@ -124,7 +145,7 @@ function AppearanceSettings() {
                 "relative h-7 w-7 rounded-full ring-offset-2 ring-offset-background transition-transform motion-control hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 accent === item.id && "ring-2 ring-foreground/70"
               )}
-              style={{ background: item.color }}
+              style={{ background: accentPreviewColor(item.id) }}
               title={item.label}
               aria-label={`强调色：${item.label}`}
               aria-pressed={accent === item.id}
@@ -155,7 +176,7 @@ function ModeButton({ active, icon, label, onClick }: { active: boolean; icon: R
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-medium text-muted-foreground transition-[background-color,color,box-shadow] motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-background/50",
+        "flex h-8 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium text-muted-foreground transition-[background-color,color,box-shadow] motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-background/50",
         active && "bg-background text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.05)] hover:bg-background"
       )}
     >
@@ -166,12 +187,14 @@ function ModeButton({ active, icon, label, onClick }: { active: boolean; icon: R
 }
 
 function ThemeSelect({ value, mode, onChange }: { value: ColorThemeId; mode: "light" | "dark"; onChange: (value: ColorThemeId) => void }) {
-  const selected = colorTheme(value)
-  const swatches = mode === "light" ? selected.lightSwatches : selected.darkSwatches
   return (
     <label className="relative flex h-9 items-center rounded-lg border border-input bg-popover pl-2 pr-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow,background-color] motion-control hover:border-input/80 focus-within:border-input/80 focus-within:ring-2 focus-within:ring-ring/60">
-      <span className="mr-2 flex overflow-hidden rounded-sm border border-black/10 dark:border-white/10" aria-hidden="true">
-        {swatches.map((color) => <span key={color} className="h-4 w-3" style={{ backgroundColor: color }} />)}
+      <span
+        data-color-theme={value}
+        className={cn("theme-preview mr-2 flex overflow-hidden rounded-sm border border-black/10", mode === "dark" && "dark border-white/10")}
+        aria-hidden="true"
+      >
+        {THEME_PREVIEW_COLORS.map((color) => <span key={color} className="h-4 w-3" style={{ backgroundColor: color }} />)}
       </span>
       <select
         value={value}
@@ -210,9 +233,14 @@ function TabBtn({
   )
 }
 
-function ProfileForm({ onDone }: { onDone: () => void }) {
+function ProfileForm({ onDone, onDirtyChange }: { onDone: () => void; onDirtyChange: (dirty: boolean) => void }) {
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
+  const [owner] = useState(() => {
+    const value = new EditorOwnership()
+    value.activate("settings-profile")
+    return value
+  })
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const [nickname, setNickname] = useState(user?.nickname || "")
   const [email, setEmail] = useState(user?.email || "")
@@ -221,6 +249,8 @@ function ProfileForm({ onDone }: { onDone: () => void }) {
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null)
   const closeAfterSuccess = useDelayedAction(onDone, 800)
+
+  useEffect(() => () => owner.invalidate(), [owner])
 
   useEffect(() => () => {
     if (avatarPreview) URL.revokeObjectURL(avatarPreview)
@@ -270,21 +300,43 @@ function ProfileForm({ onDone }: { onDone: () => void }) {
   }
 
   async function handleSave() {
+    const operation = owner.beginOperation()
+    const payload = {
+      nickname: nickname.trim(),
+      email: email.trim(),
+    }
     setSaving(true)
     setFeedback(null)
     try {
-      const updated = await usersApi.updateMe({
-        nickname: nickname.trim(),
-        email: email.trim(),
-      })
+      const updated = await usersApi.updateMe(payload)
+      // A committed profile mutation updates shared auth state even if the
+      // initiating dialog has since closed; draft UI remains generation-fenced.
       setUser(updated)
-      setFeedback({ type: "success", msg: "已保存" })
-      closeAfterSuccess()
+      if (owner.owns(operation, false)) {
+        owner.acknowledge(operation.revision)
+        onDirtyChange(owner.isDirty())
+        if (owner.owns(operation)) {
+          setNickname(updated.nickname || "")
+          setEmail(updated.email || "")
+          setFeedback({ type: "success", msg: "已保存" })
+          closeAfterSuccess(() => owner.owns(operation))
+        } else {
+          setFeedback({ type: "success", msg: "已保存较早版本，当前修改仍未保存" })
+        }
+      }
     } catch (e) {
-      setFeedback({ type: "error", msg: e instanceof Error ? e.message : "保存失败" })
+      if (owner.owns(operation, false)) {
+        setFeedback({ type: "error", msg: e instanceof Error ? e.message : "保存失败" })
+      }
     } finally {
-      setSaving(false)
+      if (owner.owns(operation, false)) setSaving(false)
     }
+  }
+
+  function changeDraft(update: () => void) {
+    owner.change()
+    update()
+    onDirtyChange(true)
   }
 
   return (
@@ -332,20 +384,20 @@ function ProfileForm({ onDone }: { onDone: () => void }) {
       <Field label="邮箱">
         <input
           type="email"
-          name="fchat-profile-email"
+          name="effchat-profile-email"
           autoComplete="off"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => changeDraft(() => setEmail(e.target.value))}
           placeholder="用于联系和找回账号"
           className="form-input"
         />
       </Field>
       <Field label="昵称">
         <input
-          name="fchat-profile-nickname"
+          name="effchat-profile-nickname"
           autoComplete="off"
           value={nickname}
-          onChange={(e) => setNickname(e.target.value)}
+          onChange={(e) => changeDraft(() => setNickname(e.target.value))}
           placeholder="显示名称"
           className="form-input"
         />
@@ -365,14 +417,21 @@ function ProfileForm({ onDone }: { onDone: () => void }) {
   )
 }
 
-function PasswordForm({ onDone }: { onDone: () => void }) {
+function PasswordForm({ onDone, onDirtyChange }: { onDone: () => void; onDirtyChange: (dirty: boolean) => void }) {
   const username = useAuthStore((s) => s.user?.username || "")
+  const [owner] = useState(() => {
+    const value = new EditorOwnership()
+    value.activate("settings-password")
+    return value
+  })
   const [oldPwd, setOldPwd] = useState("")
   const [newPwd, setNewPwd] = useState("")
   const [confirm, setConfirm] = useState("")
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null)
   const closeAfterSuccess = useDelayedAction(onDone, 800)
+
+  useEffect(() => () => owner.invalidate(), [owner])
 
   async function handleSave() {
     if (newPwd !== confirm) {
@@ -383,17 +442,38 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
       setFeedback({ type: "error", msg: "密码至少 6 位" })
       return
     }
+    const operation = owner.beginOperation()
+    const payload = { old_password: oldPwd, new_password: newPwd }
     setSaving(true)
     setFeedback(null)
     try {
-      await usersApi.changePassword({ old_password: oldPwd, new_password: newPwd })
-      setFeedback({ type: "success", msg: "密码已更新" })
-      closeAfterSuccess()
+      await usersApi.changePassword(payload)
+      if (owner.owns(operation, false)) {
+        owner.acknowledge(operation.revision)
+        onDirtyChange(owner.isDirty())
+        if (owner.owns(operation)) {
+          setOldPwd("")
+          setNewPwd("")
+          setConfirm("")
+          setFeedback({ type: "success", msg: "密码已更新" })
+          closeAfterSuccess(() => owner.owns(operation))
+        } else {
+          setFeedback({ type: "success", msg: "已提交较早的新密码，当前输入仍未保存" })
+        }
+      }
     } catch (e) {
-      setFeedback({ type: "error", msg: e instanceof Error ? e.message : "更新失败" })
+      if (owner.owns(operation, false)) {
+        setFeedback({ type: "error", msg: e instanceof Error ? e.message : "更新失败" })
+      }
     } finally {
-      setSaving(false)
+      if (owner.owns(operation, false)) setSaving(false)
     }
+  }
+
+  function changeDraft(update: () => void) {
+    owner.change()
+    update()
+    onDirtyChange(true)
   }
 
   return (
@@ -407,13 +487,13 @@ function PasswordForm({ onDone }: { onDone: () => void }) {
     >
       <input className="sr-only" type="text" name="username" autoComplete="username" value={username} readOnly tabIndex={-1} />
       <Field label="当前密码">
-        <input type="password" name="fchat-current-password" autoComplete="current-password" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} className="form-input" />
+        <input type="password" name="effchat-current-password" autoComplete="current-password" value={oldPwd} onChange={(e) => changeDraft(() => setOldPwd(e.target.value))} className="form-input" />
       </Field>
       <Field label="新密码">
-        <input type="password" name="fchat-new-password" autoComplete="new-password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="form-input" />
+        <input type="password" name="effchat-new-password" autoComplete="new-password" value={newPwd} onChange={(e) => changeDraft(() => setNewPwd(e.target.value))} className="form-input" />
       </Field>
       <Field label="确认密码">
-        <input type="password" name="fchat-confirm-password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="form-input" />
+        <input type="password" name="effchat-confirm-password" autoComplete="new-password" value={confirm} onChange={(e) => changeDraft(() => setConfirm(e.target.value))} className="form-input" />
       </Field>
 
       {feedback && <FeedbackLine {...feedback} />}

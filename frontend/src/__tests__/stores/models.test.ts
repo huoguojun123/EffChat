@@ -32,6 +32,10 @@ function model(id: string, sortOrder = 0): Model {
     sort_order: sortOrder,
     min_group_level: 0,
     enabled: true,
+    catalog_source: "manual",
+    lifecycle_status: "unknown",
+    temperature_policy: "configurable",
+    openai_request_profile: {},
   }
 }
 

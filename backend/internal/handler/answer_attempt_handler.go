@@ -6,12 +6,12 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 func SelectAnswerAttemptHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, einoAgent *agent.EinoAgent) gin.HandlerFunc {
@@ -23,7 +23,7 @@ func SelectAnswerAttemptHandler(messageService *service.MessageService, sessionS
 		}
 		attemptID, err := strconv.ParseInt(c.Param("attempt_id"), 10, 64)
 		if err != nil || attemptID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid answer attempt id", "code": "answer_attempt_invalid"})
+			writePublicError(c, http.StatusBadRequest, "answer_attempt_invalid", "invalid answer attempt id", false)
 			return
 		}
 
@@ -44,19 +44,65 @@ func SelectAnswerAttemptHandler(messageService *service.MessageService, sessionS
 	}
 }
 
+func DeleteAnswerAttemptHandler(messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, einoAgent *agent.EinoAgent) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := middleware.GetUserID(c)
+		sessionID, ok := parseSessionID(c)
+		if !ok {
+			return
+		}
+		attemptID, err := strconv.ParseInt(c.Param("attempt_id"), 10, 64)
+		if err != nil || attemptID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "answer_attempt_invalid", "invalid answer attempt id", false)
+			return
+		}
+
+		deletion, err := messageService.DeleteAnswerAttempt(c.Request.Context(), sessionID, userID, attemptID)
+		if err != nil {
+			writeAnswerAttemptDeletionError(c, err)
+			return
+		}
+		memoryReconciliationStarted := false
+		selectedAttemptID := int64(0)
+		if deletion.SelectedAttempt != nil {
+			selectedAttemptID = deletion.SelectedAttempt.ID
+			memoryReconciliationStarted = startAnswerSelectionMemoryReconciliation(c, messageService, sessionService, authService, einoAgent, sessionID, userID, deletion.SelectedAttempt)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"deleted_attempt_id":            deletion.DeletedAttemptID,
+			"selected_attempt_id":           selectedAttemptID,
+			"selection_changed":             deletion.SelectionChanged,
+			"answer_selection_revision":     deletion.SelectionRevision,
+			"memory_reconciliation_started": memoryReconciliationStarted,
+		})
+	}
+}
+
 func writeAnswerAttemptSelectionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, repository.ErrNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "session not found", "code": "session_not_found"})
+		writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "answer attempt not found", "code": "answer_attempt_not_found"})
-	case errors.Is(err, repository.ErrAnswerAttemptNotLatest):
-		c.JSON(http.StatusConflict, gin.H{"error": "只能切换当前最后一轮的回答", "code": "answer_attempt_not_latest"})
+		writePublicError(c, http.StatusNotFound, "answer_attempt_not_found", "answer attempt not found", false)
 	case errors.Is(err, repository.ErrAnswerAttemptNotSelectable):
-		c.JSON(http.StatusConflict, gin.H{"error": "该回答不可切换", "code": "answer_attempt_not_selectable"})
+		writePublicError(c, http.StatusConflict, "answer_attempt_not_selectable", "该回答不可切换", false)
 	default:
-		logger.Error("select answer attempt failed: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "切换回答失败，请重试", "code": "answer_attempt_select_failed", "retryable": true})
+		writeServerError(c, http.StatusInternalServerError, "answer_attempt_select_failed", "切换回答失败，请重试", err)
+	}
+}
+
+func writeAnswerAttemptDeletionError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
+	case errors.Is(err, repository.ErrAnswerAttemptNotFound):
+		writePublicError(c, http.StatusNotFound, "answer_attempt_not_found", "answer attempt not found", false)
+	case errors.Is(err, repository.ErrAnswerAttemptNotSelectable):
+		writePublicError(c, http.StatusConflict, "answer_attempt_not_selectable", "该回答不可删除", false)
+	case errors.Is(err, repository.ErrAnswerAttemptLastRemaining):
+		writePublicError(c, http.StatusConflict, "answer_attempt_last_remaining", "每轮至少需要保留一个回答", false)
+	default:
+		writeServerError(c, http.StatusInternalServerError, "answer_attempt_delete_failed", "删除回答失败，请重试", err)
 	}
 }
 

@@ -22,13 +22,13 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/extractor"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/internal/extractor"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 	_ "golang.org/x/image/webp"
 )
 
@@ -43,12 +43,7 @@ type uploadFileHandlerOptions struct {
 	channelService  *service.ChannelService
 	quotaService    *service.QuotaService
 	ocrRecovery     *OCRRecoveryRunner
-}
-
-type uploadLimits struct {
-	MaxFileSizeMB   int      `json:"max_file_size_mb"`
-	MaxSessionFiles int      `json:"max_session_files"`
-	AllowedTypes    []string `json:"allowed_types"`
+	maxUploadBytes  int64
 }
 
 type UploadFileHandlerOption func(*uploadFileHandlerOptions)
@@ -83,49 +78,27 @@ func WithUploadOCRRecoveryRunner(runner *OCRRecoveryRunner) UploadFileHandlerOpt
 	}
 }
 
-func resolveUploadLimits(configRepo *repository.ConfigRepository) uploadLimits {
-	limits := uploadLimits{
-		MaxFileSizeMB:   20,
-		MaxSessionFiles: 50,
-		AllowedTypes:    append([]string(nil), repository.DefaultUploadAllowedTypes...),
+func WithUploadMaxBytes(maxBytes int64) UploadFileHandlerOption {
+	return func(opts *uploadFileHandlerOptions) {
+		opts.maxUploadBytes = maxBytes
 	}
-	if configRepo != nil {
-		limits.MaxFileSizeMB = configRepo.GetInt("file_upload_max_size_mb", limits.MaxFileSizeMB)
-		limits.MaxSessionFiles = configRepo.GetInt("file_upload_max_session_files", limits.MaxSessionFiles)
-		limits.AllowedTypes = configRepo.GetStringSlice("file_upload_allowed_types", limits.AllowedTypes)
-	}
-	if limits.MaxFileSizeMB <= 0 {
-		limits.MaxFileSizeMB = 20
-	}
-	if limits.MaxSessionFiles <= 0 {
-		limits.MaxSessionFiles = 50
-	}
-	if len(limits.AllowedTypes) == 0 {
-		limits.AllowedTypes = append([]string(nil), repository.DefaultUploadAllowedTypes...)
-	}
-	limits.AllowedTypes = normalizeUploadAllowedTypes(limits.AllowedTypes)
-	return limits
-}
-
-func normalizeUploadAllowedTypes(allowedTypes []string) []string {
-	normalized := make([]string, 0, len(allowedTypes)+3)
-	for _, contentType := range allowedTypes {
-		if contentType == "image/*" {
-			normalized = append(normalized, "image/png", "image/jpeg", "image/gif", "image/webp")
-			continue
-		}
-		normalized = append(normalized, contentType)
-	}
-	return normalized
 }
 
 // UploadLimitsHandler 返回当前登录用户上传前端预校验所需的全局限制。
 //
 // 后端仍是最终裁判；这个接口只负责让 ChatInput 不再硬编码“5 个 / 20MB”，
 // 避免管理员改了系统配置后前端提示和真实上传行为漂移。
-func UploadLimitsHandler(configRepo *repository.ConfigRepository) gin.HandlerFunc {
+func UploadLimitsHandler(configRepo *repository.ConfigRepository, deploymentMaxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, resolveUploadLimits(configRepo))
+		limits, err := resolveUploadLimits(c.Request.Context(), configRepo, deploymentMaxBytes)
+		if err != nil {
+			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
+			return
+		}
+		if limits.PolicyDegraded {
+			log.Printf("[file_upload] upload policy degraded; using last-known-good limits")
+		}
+		c.JSON(http.StatusOK, limits)
 	}
 }
 
@@ -138,32 +111,41 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		}
 	}
 	return func(c *gin.Context) {
+		requestCtx := c.Request.Context()
 		userID := middleware.GetUserID(c)
-		limits := resolveUploadLimits(configRepo)
-		extractTimeoutSeconds := 60
-		maxOutputMB := 5
-		if configRepo != nil {
-			extractTimeoutSeconds = configRepo.GetInt("attachment_extract_timeout_seconds", extractTimeoutSeconds)
-			maxOutputMB = configRepo.GetInt("attachment_max_output_mb", maxOutputMB)
+		var persistedFile *model.File
+		defer func() {
+			cleanupCancelledUpload(requestCtx, fileRepo, persistedFile, userID)
+		}()
+
+		limits, err := resolveUploadLimits(requestCtx, configRepo, opts.maxUploadBytes)
+		if err != nil {
+			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
+			return
 		}
-		if extractTimeoutSeconds <= 0 {
-			extractTimeoutSeconds = 60
+		if limits.PolicyDegraded {
+			log.Printf("[file_upload] upload policy degraded; using last-known-good limits")
 		}
-		if maxOutputMB <= 0 {
-			maxOutputMB = 5
+		extractPolicy, err := resolveAttachmentProcessingPolicy(requestCtx, configRepo)
+		if err != nil {
+			writeServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
+			return
+		}
+		if extractPolicy.Degraded {
+			log.Printf("[file_upload] attachment policy degraded; using last-known-good controls")
 		}
 		maxUploadSize := int64(limits.MaxFileSizeMB) << 20
-		maxOutputBytes := int64(maxOutputMB) << 20
+		maxOutputBytes := int64(extractPolicy.MaxOutputMB) << 20
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize+multipartOverheadLimit)
 
 		file, header, err := c.Request.FormFile("file")
 		if err != nil {
 			var maxBytesErr *http.MaxBytesError
 			if errors.As(err, &maxBytesErr) {
-				c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB)})
+				writePublicError(c, http.StatusRequestEntityTooLarge, "file_too_large", fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB), false)
 				return
 			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+			writePublicError(c, http.StatusBadRequest, "file_required", "file is required", false)
 			return
 		}
 		defer file.Close()
@@ -173,8 +155,8 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			return
 		}
 		if opts.sessionRepo != nil {
-			if _, err := opts.sessionRepo.GetByID(sessionID, userID); err != nil {
-				c.JSON(http.StatusForbidden, gin.H{"error": "session not found or access denied"})
+			if _, err := opts.sessionRepo.GetByIDContext(requestCtx, sessionID, userID); err != nil {
+				writeUploadSessionLookupError(c, err)
 				return
 			}
 		}
@@ -188,7 +170,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		}
 
 		if header.Size > maxUploadSize {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB)})
+			writePublicError(c, http.StatusRequestEntityTooLarge, "file_too_large", fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB), false)
 			return
 		}
 
@@ -196,28 +178,31 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		// multipart 头声明的 Content-Type，否则伪装成 text/plain 的二进制即可绕过。
 		content, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+			writeServerError(c, http.StatusInternalServerError, "file_read_failed", "failed to read file", err)
 			return
 		}
 		if int64(len(content)) > maxUploadSize {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB)})
+			writePublicError(c, http.StatusRequestEntityTooLarge, "file_too_large", fmt.Sprintf("file too large (max %dMB)", limits.MaxFileSizeMB), false)
+			return
+		}
+		if requestCtx.Err() != nil {
 			return
 		}
 
 		// declared + 内容嗅探 reconcile，得出可信类型再过白名单。
 		contentType, ok := extractor.ResolveUploadType(declaredType, content, safeName)
 		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "file content does not match its declared type"})
+			writePublicError(c, http.StatusBadRequest, "file_type_mismatch", "file content does not match its declared type", false)
 			return
 		}
 		if !isAllowedContentType(contentType, limits.AllowedTypes) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "file type not allowed"})
+			writePublicError(c, http.StatusUnsupportedMediaType, "file_type_not_allowed", "file type not allowed", false)
 			return
 		}
 		if strings.HasPrefix(contentType, "image/") {
 			verifiedType, err := validateUploadImage(content, contentType)
 			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				writeUploadImageValidationError(c, err)
 				return
 			}
 			contentType = verifiedType
@@ -225,26 +210,26 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 
 		hash := fmt.Sprintf("%x", sha256.Sum256(content))
 
-		if existing, err := fileRepo.FindActiveByHashInSession(userID, sessionID, hash, int64(len(content))); err == nil {
+		if existing, err := fileRepo.FindActiveByHashInSessionContext(requestCtx, userID, sessionID, hash, int64(len(content))); err == nil {
 			c.JSON(http.StatusOK, existing)
 			return
 		} else if !errors.Is(err, repository.ErrNotFound) {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check duplicate file"})
+			writeServerError(c, http.StatusInternalServerError, "file_duplicate_check_failed", "failed to check duplicate file", err)
 			return
 		}
 
-		if count, err := fileRepo.CountActiveBySession(userID, sessionID); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check session file count"})
+		if count, err := fileRepo.CountActiveBySessionContext(requestCtx, userID, sessionID); err != nil {
+			writeServerError(c, http.StatusInternalServerError, "session_file_count_failed", "failed to check session file count", err)
 			return
 		} else if count >= limits.MaxSessionFiles {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("session has too many active files (max %d)", limits.MaxSessionFiles)})
+			writePublicError(c, http.StatusConflict, "session_file_limit_reached", fmt.Sprintf("session has too many active files (max %d)", limits.MaxSessionFiles), false)
 			return
 		}
 
 		// 生成存储路径名。文档类解析成功后只保留解析文本；图片类才保留原始文件。
 		userDir := uploadUserMonthDir(userID, time.Now())
-		if err := os.MkdirAll(userDir, 0755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload directory"})
+		if err := os.MkdirAll(userDir, 0700); err != nil {
+			writeServerError(c, http.StatusInternalServerError, "upload_directory_create_failed", "failed to create upload directory", err)
 			return
 		}
 
@@ -267,8 +252,8 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		isImage := strings.HasPrefix(contentType, "image/")
 		if isImage {
 			storedPath := filepath.Join(userDir, storedName)
-			if err := filepolicy.WriteFile(storedPath, content, 0o644); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
+			if err := filepolicy.WriteFile(storedPath, content, 0o600); err != nil {
+				writeServerError(c, http.StatusInternalServerError, "file_write_failed", "failed to save file", err)
 				return
 			}
 			f.FilePath = storedPath
@@ -280,61 +265,56 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		// 文本字节数，避免 data 目录和预览接口被异常超大解析结果撑爆。
 		// 普通文档仍同步提取；MinerU PDF 会先创建可轮询的 pending 记录，再由后台任务处理，
 		// 避免浏览器或反向代理 60 秒超时导致“转圈后文件消失”。
-		extractEnabled := true
-		if configRepo != nil {
-			extractEnabled = configRepo.GetBool("attachment_extract_enabled", true)
-		}
 		if !isImage {
-			if !extractEnabled {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "附件文本解析已关闭，无法保存文档附件"})
+			if !extractPolicy.Enabled {
+				writePublicError(c, http.StatusConflict, "attachment_extract_disabled", "附件文本解析已关闭，无法保存文档附件", false)
 				return
 			}
 			if isPDFUpload(contentType, safeName) {
 				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d file=%q bytes=%d strategy=mineru_async_first", userID, sessionID, safeName, len(content))
-				if queuedFile, status, body := queueMinerUOCR(c.Request.Context(), fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractTimeoutSeconds, maxOutputBytes); queuedFile != nil {
-					c.JSON(status, queuedFile)
+				if queuedFile, queueErr := queueMinerUOCR(requestCtx, fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
+					persistedFile = queuedFile
+					c.JSON(http.StatusAccepted, queuedFile)
 					return
-				} else if body != nil {
-					c.JSON(status, body)
+				} else if queueErr != nil {
+					writeOCRQueueError(c, queueErr)
 					return
 				}
 				log.Printf("[file_ocr] local_fallback_start user=%d session=%d file=%q", userID, sessionID, safeName)
 			}
 
-			extractCtx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(extractTimeoutSeconds)*time.Second)
+			extractCtx, cancel := context.WithTimeout(requestCtx, time.Duration(extractPolicy.TimeoutSeconds)*time.Second)
 			defer cancel()
 			res, err := extractor.ExtractWithSidecar(extractCtx, content, contentType, safeName, opts.extractorClient)
-			if err == extractor.ErrUnsupported {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "文件类型暂不支持解析，请转换为 PDF、Word、Excel、Markdown 或文本后重新上传"})
-				return
-			} else if err != nil {
+			if err != nil {
 				if isPDFUpload(contentType, safeName) && shouldOfferMinerUOCR(err) {
 					log.Printf("[file_ocr] local_fallback_empty user=%d session=%d file=%q err=%v", userID, sessionID, safeName, err)
-					writePDFExtractionFailure(c, 0, nil)
+					writePDFExtractionFailure(c)
 					return
 				}
 				log.Printf("[file_upload] extract_failed user=%d session=%d file=%q content_type=%s err=%v", userID, sessionID, safeName, contentType, err)
-				c.JSON(http.StatusBadRequest, gin.H{"error": "文件解析失败，未保存附件，请重试或换一个可提取文字的文件"})
+				writeAttachmentExtractionError(c, err)
 				return
 			} else {
+				if requestCtx.Err() != nil {
+					return
+				}
 				if int64(len([]byte(res.Text))) > maxOutputBytes {
-					c.JSON(http.StatusBadRequest, gin.H{
-						"error": fmt.Sprintf("解析结果过大（上限 %dMB），请上传更小的文件", maxOutputMB),
-					})
+					writePublicError(c, http.StatusRequestEntityTooLarge, "attachment_extract_too_large", fmt.Sprintf("解析结果过大（上限 %dMB），请上传更小的文件", extractPolicy.MaxOutputMB), false)
 					return
 				}
 				if strings.TrimSpace(res.Text) == "" {
 					if isPDFUpload(contentType, safeName) {
 						log.Printf("[file_ocr] local_fallback_empty user=%d session=%d file=%q reason=empty_text", userID, sessionID, safeName)
-						writePDFExtractionFailure(c, 0, nil)
+						writePDFExtractionFailure(c)
 						return
 					}
-					c.JSON(http.StatusBadRequest, gin.H{"error": "未能从文件提取到文字，未保存附件；如果是扫描件或图片 PDF，请先 OCR 后重新上传"})
+					writePublicError(c, http.StatusUnprocessableEntity, "attachment_no_readable_text", "未能从文件提取到文字，未保存附件；如果是扫描件或图片 PDF，请先 OCR 后重新上传", false)
 					return
 				}
 				extractedPath, err := writeExtractedTextSidecar(userID, storedName, res.Text)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save extracted text"})
+					writeServerError(c, http.StatusInternalServerError, "extracted_text_write_failed", "failed to save extracted text", err)
 					return
 				}
 				f.FilePath = extractedPath
@@ -352,24 +332,48 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		}
 
 		if strings.TrimSpace(f.FilePath) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "文件未能保存，请重试"})
+			writeServerError(c, http.StatusInternalServerError, "file_storage_incomplete", "文件未能保存，请重试", errors.New("upload completed without a managed file path"))
 			return
 		}
 
-		if err := fileRepo.Create(f); err != nil {
+		if requestCtx.Err() != nil {
 			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file metadata"})
 			return
 		}
+		if err := fileRepo.CreateContext(requestCtx, f); err != nil {
+			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
+			if requestCtx.Err() != nil {
+				return
+			}
+			writeServerError(c, http.StatusInternalServerError, "file_metadata_create_failed", "failed to save file metadata", err)
+			return
+		}
+		persistedFile = f
 
 		c.JSON(http.StatusCreated, f)
+	}
+}
+
+func cleanupCancelledUpload(requestCtx context.Context, fileRepo *repository.FileRepository, file *model.File, userID int64) {
+	if requestCtx.Err() == nil || file == nil || file.ID <= 0 {
+		return
+	}
+	// A browser abort can race with the final response after storage and
+	// metadata have been committed. The upload was never accepted by the
+	// client, so make the staged row inaccessible immediately and let the
+	// existing deferred-cleanup lifecycle remove managed bytes safely.
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	now := time.Now()
+	if err := fileRepo.RequestDeletion(cleanupCtx, file.ID, userID, now, now); err != nil && !errors.Is(err, repository.ErrNotFound) {
+		logger.Error("cancelled upload cleanup failed: user=%d file_id=%d err=%v", userID, file.ID, err)
 	}
 }
 
 func validateUploadImage(content []byte, declaredType string) (string, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(content))
 	if err != nil || config.Width <= 0 || config.Height <= 0 {
-		return "", fmt.Errorf("image content is invalid or unsupported")
+		return "", errUploadImageInvalid
 	}
 	actualType, ok := map[string]string{
 		"gif":  "image/gif",
@@ -378,10 +382,10 @@ func validateUploadImage(content []byte, declaredType string) (string, error) {
 		"webp": "image/webp",
 	}[format]
 	if !ok || !strings.EqualFold(declaredType, actualType) {
-		return "", fmt.Errorf("image content does not match its declared type")
+		return "", errUploadImageTypeMismatch
 	}
 	if int64(config.Width)*int64(config.Height) > maxUploadImagePixels {
-		return "", fmt.Errorf("image dimensions exceed the %d pixel limit", maxUploadImagePixels)
+		return "", errUploadImagePixelsExceeded
 	}
 	return actualType, nil
 }
@@ -389,12 +393,12 @@ func validateUploadImage(content []byte, declaredType string) (string, error) {
 func parseRequiredSessionID(c *gin.Context) (int64, bool) {
 	raw := strings.TrimSpace(c.PostForm("session_id"))
 	if raw == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		writePublicError(c, http.StatusBadRequest, "session_id_required", "session_id is required", false)
 		return 0, false
 	}
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+		writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session_id", false)
 		return 0, false
 	}
 	return id, true
@@ -526,13 +530,13 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeFileLookupError(c, err)
 			return
 		}
 
@@ -540,7 +544,7 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		filename := f.FileName
 		contentType := f.FileType
 		if !strings.HasPrefix(f.FileType, "image/") && f.ExtractStatus != "ready" {
-			c.JSON(http.StatusConflict, gin.H{"error": "文件仍在解析中，暂不能下载；解析完成后请使用文本预览"})
+			writePublicError(c, http.StatusConflict, "file_content_pending", "文件仍在解析中，暂不能下载；解析完成后请使用文本预览", true)
 			return
 		}
 		if f.ExtractedTextPath != nil && strings.TrimSpace(*f.ExtractedTextPath) != "" && !strings.HasPrefix(f.FileType, "image/") {
@@ -548,13 +552,17 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			filename = f.FileName + ".txt"
 			contentType = "text/plain; charset=utf-8"
 		}
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-		c.Header("Content-Type", contentType)
 		path, err = filepolicy.ExistingPath(path)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "file storage is unavailable"})
+			writeServerError(c, http.StatusInternalServerError, "file_download_unavailable", "file storage is unavailable", err)
 			return
 		}
+		// The download can be an extracted text sidecar rather than the original
+		// Office/PDF upload. FormatMediaType preserves that server-selected name
+		// (including non-ASCII names) so authenticated browser clients do not have
+		// to guess an extension from stale attachment metadata.
+		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+		c.Header("Content-Type", contentType)
 		c.File(path)
 	}
 }
@@ -570,7 +578,7 @@ func ListFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		if rawSessionID := strings.TrimSpace(c.Query("session_id")); rawSessionID != "" {
 			sessionID, parseErr := strconv.ParseInt(rawSessionID, 10, 64)
 			if parseErr != nil || sessionID <= 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+				writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session_id", false)
 				return
 			}
 			if parseBoolQuery(c.Query("referenced")) {
@@ -584,7 +592,7 @@ func ListFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			files, err = fileRepo.ListByUser(userID, limit+1, offset)
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list files"})
+			writeServerError(c, http.StatusInternalServerError, "file_list_failed", "failed to list files", err)
 			return
 		}
 		if files == nil {
@@ -613,7 +621,7 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 		maxChars := parsePreviewMaxChars(c.Query("max_chars"))
@@ -621,7 +629,7 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeFileLookupError(c, err)
 			return
 		}
 		if strings.HasPrefix(f.FileType, "image/") {
@@ -629,21 +637,22 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 			return
 		}
 		if f.ExtractedTextPath == nil || strings.TrimSpace(*f.ExtractedTextPath) == "" {
-			c.JSON(http.StatusOK, gin.H{"file": f, "content": "", "next_cursor": "", "has_more": false, "truncated": false, "error": "no extracted text"})
+			retryable := f.ExtractStatus == "pending" || f.ExtractStatus == "ocr_pending" || f.ExtractStatus == "ocr_running"
+			c.JSON(http.StatusOK, gin.H{"file": f, "content": "", "next_cursor": "", "has_more": false, "truncated": false, "error": "no extracted text", "code": "file_text_unavailable", "retryable": retryable})
 			return
 		}
 		path, pathErr := filepolicy.ExistingPath(*f.ExtractedTextPath)
 		if pathErr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read extracted text"})
+			writeServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", pathErr)
 			return
 		}
 		chunk, err := service.ReadFilePreviewChunk(path, cursor, maxChars)
 		if errors.Is(err, service.ErrInvalidPreviewCursor) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid preview cursor"})
+			writePublicError(c, http.StatusBadRequest, "preview_cursor_invalid", "invalid preview cursor", false)
 			return
 		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read extracted text"})
+			writeServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -662,52 +671,84 @@ func RefreshOCRFileHandler(fileRepo *repository.FileRepository, channelService *
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			writeFileLookupError(c, err)
 			return
 		}
 		c.JSON(http.StatusOK, f)
 	}
 }
 
-func RetryOCRFileHandler(fileRepo *repository.FileRepository, channelService *service.ChannelService, extractorClient *extractor.SidecarClient, runner *OCRRecoveryRunner) gin.HandlerFunc {
+func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *repository.ConfigRepository, channelService *service.ChannelService, extractorClient *extractor.SidecarClient, runner *OCRRecoveryRunner) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 		if err != nil || id <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
-		if channelService == nil || extractorClient == nil || !extractorClient.Enabled() || !channelService.ResolveMinerUOCRConfig().Enabled || runner == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 服务未启用，请联系管理员", "code": "ocr_service_unavailable"})
+		policy, err := resolveAttachmentProcessingPolicy(c.Request.Context(), configRepo)
+		if err != nil {
+			writeServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
+			return
+		}
+		if !policy.Enabled {
+			writePublicError(c, http.StatusConflict, "attachment_extract_disabled", "附件文本解析已关闭，无法重试 OCR", false)
+			return
+		}
+		if policy.Degraded {
+			log.Printf("[file_ocr] retry policy degraded; using last-known-good controls file_id=%d", id)
+		}
+		if channelService == nil || extractorClient == nil || !extractorClient.Enabled() || runner == nil {
+			writeServerError(c, http.StatusServiceUnavailable, "ocr_runtime_unavailable", "OCR runtime is temporarily unavailable", errors.New("OCR retry runtime dependency is unavailable"))
+			return
+		}
+		ocrConfig, err := channelService.ResolveMinerUOCRConfigContext(c.Request.Context())
+		if err != nil {
+			writeServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
+			return
+		}
+		if !ocrConfig.Enabled {
+			writePublicError(c, http.StatusConflict, "ocr_service_unavailable", "OCR 服务未启用，请联系管理员", false)
 			return
 		}
 		file, err := fileRepo.RestartOCR(id, userID, time.Now(), time.Now().Add(-ocrSourceRetention))
-		if errors.Is(err, repository.ErrOCRSourceUnavailable) {
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
-			return
-		}
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restart OCR"})
+			writeOCRRetryMutationError(c, err)
 			return
 		}
 		if file.OCRSourcePath == nil || strings.TrimSpace(*file.OCRSourcePath) == "" {
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
+			cause := errors.New("OCR source path is missing after restart")
+			if err := markOCRSourceUnavailable(fileRepo, file.ID, userID, cause); err != nil {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
+				return
+			}
+			writeOCRSourceUnavailable(c)
 			return
 		}
 		sourcePath, pathErr := managedUploadPath(*file.OCRSourcePath)
 		if pathErr != nil {
-			_ = fileRepo.FailOCR(file.ID, userID, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
+			if err := markOCRSourceUnavailable(fileRepo, file.ID, userID, pathErr); err != nil {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
+				return
+			}
+			writeServerError(c, http.StatusInternalServerError, "ocr_source_path_invalid", "OCR source path is invalid", pathErr)
 			return
 		}
 		if _, err := os.Stat(sourcePath); err != nil {
-			_ = fileRepo.FailOCR(file.ID, userID, "ocr_source_missing", "OCR 原文件不存在，无法继续解析")
-			c.JSON(http.StatusConflict, gin.H{"error": "OCR 原文件已过期或不存在，无法重试", "code": "ocr_source_unavailable"})
+			if !os.IsNotExist(err) {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_check_failed", "failed to verify OCR source", err)
+				return
+			}
+			if reconcileErr := markOCRSourceUnavailable(fileRepo, file.ID, userID, err); reconcileErr != nil {
+				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", reconcileErr)
+				return
+			}
+			writeOCRSourceUnavailable(c)
 			return
 		}
 		runner.Wake()
@@ -731,47 +772,39 @@ func DeleteFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 		id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file id"})
+		if err != nil || id <= 0 {
+			writePublicError(c, http.StatusBadRequest, "file_id_invalid", "invalid file id", false)
 			return
 		}
 
 		f, err := fileRepo.GetByID(id, userID)
 		if err != nil {
-			status := http.StatusBadRequest
-			message := "failed to load file"
-			if errors.Is(err, repository.ErrNotFound) {
-				status = http.StatusNotFound
-				message = "file not found"
-			} else {
-				logger.Error("failed to load file before delete: user=%d file=%d err=%v", userID, id, err)
-			}
-			c.JSON(status, gin.H{"error": message})
+			writeFileLookupError(c, err)
 			return
 		}
 		if _, err := managedUploadPath(f.FilePath); err != nil {
 			logger.Error("refuse deleting file with unsafe path: user=%d file=%d path=%q err=%v", userID, id, f.FilePath, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "file path is outside managed storage"})
+			writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 			return
 		}
 		if f.ExtractedTextPath != nil && strings.TrimSpace(*f.ExtractedTextPath) != "" {
 			if _, err := managedUploadPath(*f.ExtractedTextPath); err != nil {
 				logger.Error("refuse deleting file with unsafe extracted path: user=%d file=%d path=%q err=%v", userID, id, *f.ExtractedTextPath, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "file path is outside managed storage"})
+				writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 				return
 			}
 		}
 		if f.OCRSourcePath != nil && strings.TrimSpace(*f.OCRSourcePath) != "" {
 			if _, err := managedUploadPath(*f.OCRSourcePath); err != nil {
 				logger.Error("refuse deleting file with unsafe OCR source path: user=%d file=%d path=%q err=%v", userID, id, *f.OCRSourcePath, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "file path is outside managed storage"})
+				writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 				return
 			}
 		}
 		now := time.Now()
 		if err := fileRepo.RequestDeletion(c.Request.Context(), id, userID, now, now.Add(ocrSourceRetention)); err != nil {
 			logger.Error("failed to request file deletion: user=%d file=%d err=%v", userID, id, err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to delete file"})
+			writeFileDeletionError(c, err)
 			return
 		}
 
@@ -787,42 +820,46 @@ func DeleteFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 // 在物理清理后再次写入。
 func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		olderThanHours := parseBoundedPositiveInt(c.Query("older_than_hours"), 24, 1, 24*30)
-		limit := parseBoundedPositiveInt(c.Query("limit"), 100, 1, 1000)
+		olderThanHours, ok := parseCleanupBoundedPositiveInt(c, "older_than_hours", 24, 1, 24*30)
+		if !ok {
+			return
+		}
+		limit, ok := parseCleanupBoundedPositiveInt(c, "limit", 100, 1, 1000)
+		if !ok {
+			return
+		}
 		cutoff := time.Now().Add(-time.Duration(olderThanHours) * time.Hour)
 
 		now := time.Now()
-		expiredOCR, err := fileRepo.ExpireStaleOCROriginals(cutoff, now, limit)
+		referenced, err := fileRepo.CountStaleReferencedFiles(cutoff)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to expire OCR source files"})
+			writeServerError(c, http.StatusInternalServerError, "file_cleanup_reference_count_failed", "failed to count referenced files", err)
+			return
+		}
+		expiredOCR, err := fileRepo.ExpireStaleOCROriginalsContext(c.Request.Context(), cutoff, now, limit)
+		if err != nil {
+			writeServerError(c, http.StatusInternalServerError, "ocr_source_expire_failed", "failed to expire OCR source files", err)
 			return
 		}
 		claims, err := fileRepo.ClaimFilesForStorageCleanup(c.Request.Context(), cutoff, now, 2*time.Minute, limit)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to claim files for cleanup"})
-			return
-		}
-		referenced, err := fileRepo.CountStaleReferencedFiles(cutoff)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to count referenced files"})
+			writeServerError(c, http.StatusInternalServerError, "file_cleanup_claim_failed", "failed to claim files for cleanup", err)
 			return
 		}
 
 		removed := 0
 		removedFileIDs := make(map[int64]struct{}, len(claims))
-		failures := make([]gin.H, 0)
+		failures := make([]fileCleanupFailure, 0)
 		for _, claim := range claims {
 			f := claim.File
 			if err := removeManagedFilePaths(f.FilePath, f.ExtractedTextPath, f.OCRSourcePath); err != nil {
 				logger.Error("failed to remove orphan file paths: file=%d path=%q err=%v", f.ID, f.FilePath, err)
-				_ = fileRepo.ReleaseFileStorageCleanupClaim(c.Request.Context(), f.ID, claim.Token)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to remove file paths"})
+				failures = append(failures, releaseOrCleanupFailure(c, fileRepo, f.ID, claim.Token, "file_cleanup_remove_failed", "failed to remove file paths"))
 				continue
 			}
 			if err := fileRepo.FinalizeFileStorageRemoval(c.Request.Context(), f.ID, claim.Token); err != nil {
 				logger.Error("failed to finalize orphan file cleanup: file=%d err=%v", f.ID, err)
-				_ = fileRepo.ReleaseFileStorageCleanupClaim(c.Request.Context(), f.ID, claim.Token)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to finalize file cleanup"})
+				failures = append(failures, releaseOrCleanupFailure(c, fileRepo, f.ID, claim.Token, "file_cleanup_finalize_failed", "failed to finalize file cleanup"))
 				continue
 			}
 			removed++
@@ -836,18 +873,18 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 			}
 			if err := removeManagedFilePaths("", nil, f.OCRSourcePath); err != nil {
 				logger.Error("failed to remove expired OCR source: file=%d err=%v", f.ID, err)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to remove OCR source"})
+				failures = append(failures, newFileCleanupFailure(f.ID, "ocr_source_remove_failed", "failed to remove OCR source"))
 				continue
 			}
 			if err := fileRepo.ClearOCRSourcePath(f.ID, f.UserID, valueOrEmpty(f.OCRSourcePath)); err != nil {
 				logger.Error("failed to clear expired OCR source path: file=%d err=%v", f.ID, err)
-				failures = append(failures, gin.H{"file_id": f.ID, "error": "failed to finalize OCR source cleanup"})
+				failures = append(failures, newFileCleanupFailure(f.ID, "ocr_source_finalize_failed", "failed to finalize OCR source cleanup"))
 				continue
 			}
 			expiredRemoved++
 		}
 
-		c.JSON(http.StatusOK, gin.H{
+		payload := gin.H{
 			"marked":              len(claims),
 			"removed":             removed,
 			"failed":              len(failures),
@@ -856,20 +893,10 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 			"ocr_expired_count":   len(expiredOCR),
 			"ocr_expired_removed": expiredRemoved,
 			"older_than_hours":    olderThanHours,
-		})
+		}
+		if len(failures) > 0 && c.GetString("request_id") != "" {
+			payload["request_id"] = c.GetString("request_id")
+		}
+		c.JSON(http.StatusOK, payload)
 	}
-}
-
-func parseBoundedPositiveInt(raw string, fallback, min, max int) int {
-	n, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	if n < min {
-		return min
-	}
-	if n > max {
-		return max
-	}
-	return n
 }

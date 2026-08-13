@@ -1,4 +1,4 @@
-import { api } from "./client"
+import { api, downloadFilename } from "./client"
 import type { Session, SessionFolder } from "@/types"
 import type { Model } from "@/types"
 
@@ -28,6 +28,13 @@ export interface ListSessionsResponse {
   next_offset: number
 }
 
+export interface SessionCreateReadiness {
+  ready: boolean
+  code?: string
+  message?: string
+  retryable: boolean
+}
+
 export function listSessions(options: ListSessionsOptions = {}) {
   const limit = options.limit ?? 100
   const offset = options.offset ?? 0
@@ -42,6 +49,10 @@ export function listSessions(options: ListSessionsOptions = {}) {
 
 export function getSession(id: number) {
   return api.get<Session>(`/sessions/${id}`)
+}
+
+export function getSessionCreateReadiness() {
+  return api.get<SessionCreateReadiness>("/sessions/readiness")
 }
 
 export function searchConversations(query: string, folderId: SessionFolderScope, searchAll = false, limit = 30) {
@@ -62,7 +73,7 @@ export function createSession(data: { model_id?: string; provider?: Model["provi
 }
 
 export function updateSession(id: number, data: Partial<Pick<Session, "title" | "model_id" | "provider" | "folder_id" | "system_prompt" | "temperature" | "max_tokens" | "search_mode" | "memory_enabled">> & { pinned?: boolean }) {
-  return api.patch<{ message: string }>(`/sessions/${id}`, data)
+  return api.patch<Session>(`/sessions/${id}`, data)
 }
 
 export async function exportSessionMarkdown(id: number, includeTools = false) {
@@ -79,19 +90,6 @@ export async function exportSessionMarkdown(id: number, includeTools = false) {
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-export function downloadFilename(disposition: string | null) {
-  if (!disposition) return ""
-  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
-  if (encoded) {
-    try {
-      return decodeURIComponent(encoded)
-    } catch {
-      return ""
-    }
-  }
-  return /filename="([^"]+)"/i.exec(disposition)?.[1] || /filename=([^;]+)/i.exec(disposition)?.[1]?.trim() || ""
 }
 
 export interface SessionMemorySection {
@@ -157,12 +155,8 @@ export function saveSessionMemory(id: number, data: { enabled?: boolean; section
   return api.put<SessionMemoryResponse>(`/sessions/${id}/memory`, data)
 }
 
-export function compactSessionMemory(id: number) {
-  return api.post<SessionMemoryResponse>(`/sessions/${id}/memory/compact`, {})
-}
-
-export function retrySessionMemory(id: number) {
-  return api.post<SessionMemoryResponse>(`/sessions/${id}/memory/retry`, {})
+export function memoryMaintenanceUrl(id: number, operation: "compact" | "retry", clientRunId: string) {
+  return `/api/v1/sessions/${id}/memory/${operation}?client_run_id=${encodeURIComponent(clientRunId)}`
 }
 
 export function undoSessionMemoryChange(sessionId: number, changeId: number) {

@@ -1,15 +1,17 @@
-import { useState, type Dispatch, type SetStateAction } from "react"
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react"
 import { adminApi, type CreateGroupInput, type UpdateGroupInput } from "@/api/admin"
 import type { UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { MotionView } from "@/components/ui/motion"
 import { ChevronLeft, Plus, Trash2, X } from "lucide-react"
+import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 
 interface Props {
   groups: UserGroup[]
   setGroups: Dispatch<SetStateAction<UserGroup[]>>
   setError: (error: string) => void
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type GroupDraft = CreateGroupInput & { id?: number }
@@ -29,17 +31,79 @@ const emptyGroup: GroupDraft = {
   daily_ocr_page_limit: 0,
 }
 
-export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
+export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }: Props) {
   const [draft, setDraft] = useState<GroupDraft | null>(null)
   const [saving, setSaving] = useState("")
+  const [editorOwner] = useState(() => new EditorOwnership())
+  const [busyOwner] = useState(() => new BusyOwnership())
+  const mountedRef = useRef(true)
   const activeId = draft?.id
+  const panelDirty = editorOwner.isDirty()
+
+  useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      editorOwner.invalidate()
+    }
+  }, [editorOwner])
+
+  function beginBusy(label: string, scope: string) {
+    const operationId = busyOwner.begin(label, scope)
+    setSaving(label)
+    return operationId
+  }
+
+  function finishBusy(operationId: number) {
+    const remainingLabel = busyOwner.release(operationId)
+    if (remainingLabel !== null && mountedRef.current) setSaving(remainingLabel)
+  }
+
+  function invalidateBusy(scope: string) {
+    setSaving(busyOwner.invalidate(scope))
+  }
+
+  function groupKey(id?: number) {
+    return id ? `group:${id}` : "new-group"
+  }
+
+  function canLeaveGroupEditor(nextKey: string) {
+    if (!editorOwner.isDirty()) return true
+    if (editorOwner.currentEntityKey() === nextKey) return false
+    return window.confirm("放弃当前分组的未保存修改？")
+  }
+
+  function activateGroupEditor(nextDraft: GroupDraft) {
+    invalidateBusy("group-editor")
+    editorOwner.activate(groupKey(nextDraft.id))
+    setDraft(nextDraft)
+  }
+
+  function changeDraft(update: SetStateAction<GroupDraft | null>) {
+    editorOwner.change()
+    setDraft(update)
+  }
+
+  function closeEditor() {
+    if (!canLeaveGroupEditor("")) return
+    invalidateBusy("group-editor")
+    editorOwner.invalidate()
+    setDraft(null)
+  }
 
   function startCreate() {
-    setDraft({ ...emptyGroup, level: nextLevel(groups) })
+    if (!canLeaveGroupEditor("new-group")) return
+    activateGroupEditor({ ...emptyGroup, level: nextLevel(groups) })
   }
 
   function startEdit(group: UserGroup) {
-    setDraft({
+    const key = groupKey(group.id)
+    if (editorOwner.currentEntityKey() === key && draft?.id === group.id) return
+    if (!canLeaveGroupEditor(key)) return
+    activateGroupEditor({
       id: group.id,
       name: group.name,
       level: group.level,
@@ -66,50 +130,82 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
       setError("分组名称不能为空")
       return
     }
-    setSaving(draft.id ? `group-${draft.id}` : "create")
+    const currentDraft = draft
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(currentDraft.id ? `group-${currentDraft.id}` : "create", "group-editor")
     setError("")
     try {
-      if (draft.id) {
+      if (currentDraft.id) {
         const payload: UpdateGroupInput = {
-          name: draft.name,
-          level: draft.level,
-          description: draft.description || "",
-          is_default: draft.is_default,
-          daily_message_limit: draft.daily_message_limit || 0,
-          daily_token_limit: draft.daily_token_limit || 0,
-          concurrent_run_limit: draft.concurrent_run_limit || 0,
-          daily_tool_call_limit: draft.daily_tool_call_limit || 0,
-          daily_web_search_limit: draft.daily_web_search_limit || 0,
-          daily_web_extract_limit: draft.daily_web_extract_limit || 0,
-          daily_ocr_file_limit: draft.daily_ocr_file_limit || 0,
-          daily_ocr_page_limit: draft.daily_ocr_page_limit || 0,
+          name: currentDraft.name,
+          level: currentDraft.level,
+          description: currentDraft.description || "",
+          is_default: currentDraft.is_default,
+          daily_message_limit: currentDraft.daily_message_limit || 0,
+          daily_token_limit: currentDraft.daily_token_limit || 0,
+          concurrent_run_limit: currentDraft.concurrent_run_limit || 0,
+          daily_tool_call_limit: currentDraft.daily_tool_call_limit || 0,
+          daily_web_search_limit: currentDraft.daily_web_search_limit || 0,
+          daily_web_extract_limit: currentDraft.daily_web_extract_limit || 0,
+          daily_ocr_file_limit: currentDraft.daily_ocr_file_limit || 0,
+          daily_ocr_page_limit: currentDraft.daily_ocr_page_limit || 0,
         }
-        const updated = await adminApi.updateGroup(draft.id, payload)
+        const updated = await adminApi.updateGroup(currentDraft.id, payload)
+        // A committed mutation must converge the shared catalog after navigation;
+        // only editor-local state is fenced by the captured generation/revision.
         setGroups((prev) => sortGroups(prev.map((g) => (g.id === updated.id ? updated : g))))
+        if (editorOwner.owns(operation, false)) {
+          editorOwner.acknowledge(operation.revision)
+          if (editorOwner.owns(operation)) {
+            editorOwner.invalidate()
+            setDraft(null)
+          } else {
+            setError("已保存较早版本，当前修改仍未保存")
+          }
+        }
       } else {
-        const created = await adminApi.createGroup(draft)
+        const created = await adminApi.createGroup(currentDraft)
         setGroups((prev) => sortGroups([...prev, created]))
+        if (editorOwner.owns(operation, false)) {
+          const unchanged = editorOwner.owns(operation)
+          editorOwner.rekey(groupKey(created.id))
+          editorOwner.acknowledge(operation.revision)
+          if (unchanged) {
+            editorOwner.invalidate()
+            setDraft(null)
+          } else {
+            setDraft((prev) => prev ? { ...prev, id: created.id } : prev)
+            setError("已保存较早版本，当前修改仍未保存")
+          }
+        }
       }
-      setDraft(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "分组保存失败")
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "分组保存失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
   async function deleteGroup(group: UserGroup) {
-    if (!window.confirm(`删除分组「${group.name}」？该组用户将回落默认最低级。`)) return
-    setSaving(`delete-${group.id}`)
+    if (!window.confirm(`删除分组「${group.name}」？显式绑定该组的用户将继承当前默认组。`)) return
+    const operation = editorOwner.beginOperation()
+    const busy = beginBusy(`delete-${group.id}`, "group-editor")
     setError("")
     try {
       await adminApi.deleteGroup(group.id)
       setGroups((prev) => prev.filter((g) => g.id !== group.id))
-      if (draft?.id === group.id) setDraft(null)
+      if (editorOwner.owns(operation, false)) {
+        editorOwner.invalidate()
+        setDraft(null)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "分组删除失败")
+      if (editorOwner.owns(operation, false)) {
+        setError(err instanceof Error ? err.message : "分组删除失败")
+      }
     } finally {
-      setSaving("")
+      finishBusy(busy)
     }
   }
 
@@ -163,7 +259,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
           <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
             <div className="flex min-w-0 items-center gap-1">
               {draft ? (
-                <Button variant="ghost" size="sm" className="h-8 px-1.5 lg:hidden" onClick={() => setDraft(null)}>
+                <Button variant="ghost" size="sm" className="h-8 px-1.5 lg:hidden" onClick={closeEditor}>
                   <ChevronLeft className="h-3.5 w-3.5" />
                   返回
                 </Button>
@@ -171,7 +267,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
               <div className="truncate font-medium">{draft ? (draft.id ? "编辑分组" : "新建分组") : "分组详情"}</div>
             </div>
             {draft && (
-              <Button variant="ghost" size="sm" className="hidden lg:inline-flex" onClick={() => setDraft(null)}>
+              <Button variant="ghost" size="sm" className="hidden lg:inline-flex" onClick={closeEditor}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -182,25 +278,25 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
               <div className="min-h-0 flex-1 overflow-y-auto p-4">
                 <div className="space-y-3">
                   <Field label="名称">
-                    <Input value={draft.name} onChange={(e) => setDraft((prev) => prev ? { ...prev, name: e.target.value } : prev)} />
+                    <Input value={draft.name} onChange={(e) => changeDraft((prev) => prev ? { ...prev, name: e.target.value } : prev)} />
                   </Field>
                   <Field label="等级（越大权限越高，模型按此过滤）">
-                    <Input type="number" min={0} value={draft.level} onChange={(e) => setDraft((prev) => prev ? { ...prev, level: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                    <Input type="number" min={0} value={draft.level} onChange={(e) => changeDraft((prev) => prev ? { ...prev, level: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                   </Field>
                   <Field label="描述">
-                    <Input value={draft.description || ""} onChange={(e) => setDraft((prev) => prev ? { ...prev, description: e.target.value } : prev)} />
+                    <Input value={draft.description || ""} onChange={(e) => changeDraft((prev) => prev ? { ...prev, description: e.target.value } : prev)} />
                   </Field>
                   <div className="border-t border-border/70 pt-3">
                     <div className="mb-2 text-sm font-semibold">对话和模型</div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <Field label="每日消息">
-                      <Input type="number" min={0} value={draft.daily_message_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_message_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                      <Input type="number" min={0} value={draft.daily_message_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_message_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                     </Field>
                     <Field label="每日 token">
-                      <Input type="number" min={0} value={draft.daily_token_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_token_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                      <Input type="number" min={0} value={draft.daily_token_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_token_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                     </Field>
                     <Field label="并发 run">
-                      <Input type="number" min={0} value={draft.concurrent_run_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, concurrent_run_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                      <Input type="number" min={0} value={draft.concurrent_run_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, concurrent_run_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                     </Field>
                     </div>
                   </div>
@@ -208,19 +304,19 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
                     <div className="mb-2 text-sm font-semibold">工具和联网</div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <Field label="每日工具调用">
-                        <Input type="number" min={0} value={draft.daily_tool_call_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_tool_call_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                        <Input type="number" min={0} value={draft.daily_tool_call_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_tool_call_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                       </Field>
                       <Field label="每日搜索">
-                        <Input type="number" min={0} value={draft.daily_web_search_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_web_search_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                        <Input type="number" min={0} value={draft.daily_web_search_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_web_search_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                       </Field>
                       <Field label="每日网页提取">
-                        <Input type="number" min={0} value={draft.daily_web_extract_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_web_extract_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                        <Input type="number" min={0} value={draft.daily_web_extract_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_web_extract_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                       </Field>
                       <Field label="每日 OCR 文件">
-                        <Input type="number" min={0} value={draft.daily_ocr_file_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_ocr_file_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                        <Input type="number" min={0} value={draft.daily_ocr_file_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_ocr_file_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                       </Field>
                       <Field label="每日 OCR 页数">
-                        <Input type="number" min={0} value={draft.daily_ocr_page_limit || 0} onChange={(e) => setDraft((prev) => prev ? { ...prev, daily_ocr_page_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
+                        <Input type="number" min={0} value={draft.daily_ocr_page_limit || 0} onChange={(e) => changeDraft((prev) => prev ? { ...prev, daily_ocr_page_limit: Math.max(0, Number(e.target.value) || 0) } : prev)} />
                       </Field>
                     </div>
                   </div>
@@ -228,9 +324,9 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
                     <input
                       type="checkbox"
                       checked={draft.is_default}
-                      onChange={(e) => setDraft((prev) => prev ? { ...prev, is_default: e.target.checked } : prev)}
+                      onChange={(e) => changeDraft((prev) => prev ? { ...prev, is_default: e.target.checked } : prev)}
                     />
-                    设为默认组（新用户参考标识，不自动改库）
+                    设为默认组（未显式分组的用户将动态继承）
                   </label>
                 </div>
               </div>
@@ -244,7 +340,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError }: Props) {
                       const group = groups.find((g) => g.id === draft.id)
                       if (group) deleteGroup(group)
                     }}
-                    disabled={saving === `delete-${draft.id}`}
+                    disabled={saving !== ""}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     删除

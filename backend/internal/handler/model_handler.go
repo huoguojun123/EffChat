@@ -1,15 +1,16 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
 )
 
 // ListModelsHandler 模型列表（登录用户可读，?enabled=true 仅返回启用项）。
@@ -22,7 +23,7 @@ func ListModelsHandler(modelService *service.ModelService, userRepo *repository.
 			onlyEnabled := c.Query("enabled") == "true"
 			models, err := modelService.List(onlyEnabled)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list models", "code": "model_list_failed"})
+				writeServerError(c, http.StatusInternalServerError, "model_list_failed", "failed to list models", err)
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"models": models, "total": len(models)})
@@ -36,7 +37,7 @@ func ListModelsHandler(modelService *service.ModelService, userRepo *repository.
 		}
 		models, err := modelService.ListVisible(level)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list models", "code": "model_list_failed"})
+			writeServerError(c, http.StatusInternalServerError, "model_list_failed", "failed to list models", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"models": models, "total": len(models)})
@@ -52,11 +53,15 @@ func ListAvailableModelsHandler(modelService *service.ModelService, channelServi
 		requestedChannel := strings.TrimSpace(c.Query("provider"))
 		channelConfig, ok, err := channelModelListConfig(channelService, requestedChannel)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			if errors.Is(err, service.ErrChannelInvalid) || errors.Is(err, service.ErrChannelNotFound) || errors.Is(err, service.ErrChannelUnavailable) {
+				writePublicError(c, http.StatusBadRequest, "model_channel_unavailable", "selected model channel cannot list models", false)
+			} else {
+				writeServerError(c, http.StatusInternalServerError, "model_channel_load_failed", "failed to load model channel", err)
+			}
 			return
 		}
 		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "no model channel is configured"})
+			writePublicError(c, http.StatusBadRequest, "model_channel_unavailable", "no model channel is configured", false)
 			return
 		}
 
@@ -69,7 +74,7 @@ func ListAvailableModelsHandler(modelService *service.ModelService, channelServi
 
 		existingModels, err := modelService.List(false)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list models", "code": "model_list_failed"})
+			writeServerError(c, http.StatusInternalServerError, "model_list_failed", "failed to list models", err)
 			return
 		}
 
@@ -100,13 +105,13 @@ func GetModelHandler(modelService *service.ModelService, userRepo *repository.Us
 
 		m, err := modelService.Get(id)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeModelError(c, "load", err)
 			return
 		}
 		if middleware.GetRole(c) != "admin" {
 			level, err := userRepo.GetGroupLevel(middleware.GetUserID(c))
 			if err != nil || !m.Enabled || m.MinGroupLevel > level {
-				c.JSON(http.StatusNotFound, gin.H{"error": "model not found"})
+				writePublicError(c, http.StatusNotFound, "model_not_found", "model not found", false)
 				return
 			}
 		}
@@ -126,7 +131,7 @@ func CreateModelHandler(modelService *service.ModelService) gin.HandlerFunc {
 
 		m, err := modelService.Create(&req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeModelError(c, "create", err)
 			return
 		}
 
@@ -145,9 +150,9 @@ func UpdateModelHandler(modelService *service.ModelService) gin.HandlerFunc {
 			return
 		}
 
-		m, err := modelService.Update(id, &req)
+		m, err := modelService.Update(c.Request.Context(), id, &req)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeModelError(c, "update", err)
 			return
 		}
 
@@ -160,8 +165,8 @@ func DeleteModelHandler(modelService *service.ModelService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := modelIDParam(c)
 
-		if err := modelService.Delete(id); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := modelService.Delete(c.Request.Context(), id); err != nil {
+			writeModelError(c, "delete", err)
 			return
 		}
 
@@ -171,4 +176,18 @@ func DeleteModelHandler(modelService *service.ModelService) gin.HandlerFunc {
 
 func modelIDParam(c *gin.Context) string {
 	return strings.TrimPrefix(c.Param("id"), "/")
+}
+
+func writeModelError(c *gin.Context, operation string, err error) {
+	switch {
+	case errors.Is(err, service.ErrModelInvalid):
+		// ErrModelInvalid only wraps local field validation messages.
+		writePublicError(c, http.StatusBadRequest, "model_invalid", err.Error(), false)
+	case errors.Is(err, service.ErrModelExists):
+		writePublicError(c, http.StatusConflict, "model_exists", "model already exists", false)
+	case errors.Is(err, service.ErrModelNotFound), errors.Is(err, repository.ErrNotFound):
+		writePublicError(c, http.StatusNotFound, "model_not_found", "model not found", false)
+	default:
+		writeServerError(c, http.StatusInternalServerError, "model_"+operation+"_failed", "failed to "+operation+" model", err)
+	}
 }

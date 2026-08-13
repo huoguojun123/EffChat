@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 func setupFileLifecycle(t *testing.T) (*sql.DB, *FileRepository, *MessageRepository, int64, *model.Session) {

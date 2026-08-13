@@ -13,14 +13,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 func TestSendMessageRequiresCompactionBeforePersistence(t *testing.T) {
@@ -441,17 +441,17 @@ func TestRunAgentStreamAcknowledgesDurableTurnBeforeCancellation(t *testing.T) {
 	if err := runHub.PersistDurable(context.Background(), run.RunID, func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelDeadline) {
+	if !runHub.CancelWithCause(run.RunID, 7, 9, service.RunCancelFirstOutputTimeout) {
 		t.Fatal("failed to cancel admitted run")
 	}
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/stream", nil)
-	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
+	runAgentStream(c, nil, nil, nil, nil, nil, nil, runHub, nil, 0, time.Second, 7, 9, &model.Message{ID: 44}, run, modelusage.KindChat)
 
 	body := recorder.Body.String()
-	if recorder.Code != http.StatusOK || !strings.Contains(body, streaming.EventMessageStart) || !strings.Contains(body, "run_deadline_exceeded") {
+	if recorder.Code != http.StatusOK || !strings.Contains(body, streaming.EventMessageStart) || !strings.Contains(body, "first_output_timeout") {
 		t.Fatalf("admitted cancellation stream status=%d body=%s", recorder.Code, body)
 	}
 }
@@ -492,6 +492,82 @@ func TestMessageCreationFailureClassifiesUserInput(t *testing.T) {
 	}
 }
 
+func TestMessageMutationEndpointsUseSessionNotFoundContract(t *testing.T) {
+	env := setupTestEnv(t)
+	router := gin.New()
+	auth := router.Group("/api/v1")
+	auth.Use(middleware.AuthMiddleware(env.authService))
+	auth.POST("/sessions/:id/send", SendMessageStreamHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil, nil, nil, 0, 0))
+	auth.POST("/sessions/:id/messages/:message_id/retry", RetryMessageStreamHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil, nil, nil, 0, 0))
+	auth.POST("/sessions/:id/preflight", MessagePreflightHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil))
+	auth.POST("/sessions/:id/compact", CompactSessionHandler(env.messageService, env.sessionService, env.authService, nil, nil, nil, nil, nil, nil, 0, 0))
+	auth.POST("/sessions/:id/undo", UndoCompactionHandler(env.messageService))
+
+	for _, endpoint := range []struct {
+		path string
+		body []byte
+	}{
+		{path: "/api/v1/sessions/9999999999/send", body: []byte(`{"content":"fictional message"}`)},
+		{path: "/api/v1/sessions/9999999999/messages/1/retry"},
+		{path: "/api/v1/sessions/9999999999/preflight", body: []byte(`{"content":"fictional message"}`)},
+		{path: "/api/v1/sessions/9999999999/compact"},
+		{path: "/api/v1/sessions/9999999999/undo"},
+	} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, endpoint.path, bytes.NewReader(endpoint.body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+env.token)
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d, want 404; body=%s", endpoint.path, recorder.Code, recorder.Body.String())
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("%s decode response: %v", endpoint.path, err)
+		}
+		if payload["code"] != "session_not_found" || payload["retryable"] != false {
+			t.Fatalf("%s response=%#v", endpoint.path, payload)
+		}
+	}
+}
+
+func TestMessagePreflightReportsCompactionStateRepositoryFailure(t *testing.T) {
+	env := setupTestEnv(t)
+	created := env.doRequest(http.MethodPost, "/api/v1/sessions", map[string]interface{}{
+		"model_id": "gpt-4o-mini",
+		"provider": env.channelKey,
+		"title":    "Preflight failure",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create session: status=%d body=%s", created.Code, created.Body.String())
+	}
+	var session model.Session
+	if err := json.Unmarshal(created.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+
+	taskDB := setupHandlerTestDB(t)
+	taskRepo := repository.NewModelTaskRunRepository(taskDB)
+	if err := taskDB.Close(); err != nil {
+		t.Fatalf("close task database: %v", err)
+	}
+	_, failure := evaluateMessagePreflight(
+		t.Context(),
+		env.messageService,
+		env.authService,
+		service.NewSkillService(nil, nil, nil),
+		newCompactionGateTestAgent(t, env),
+		nil,
+		taskRepo,
+		&session,
+		env.userID,
+		&service.SendMessageRequest{Content: "fictional message"},
+	)
+	if failure == nil || failure.status != http.StatusInternalServerError || failure.code != "compaction_state_load_failed" || failure.cause == nil {
+		t.Fatalf("failure = %+v", failure)
+	}
+}
+
 func TestWriteRunTerminalMapsCancellationCauses(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -500,7 +576,7 @@ func TestWriteRunTerminalMapsCancellationCauses(t *testing.T) {
 		wantCode  string
 	}{
 		{name: "user stop", cause: service.RunCancelUserStop, wantEvent: streaming.EventMessageComplete},
-		{name: "deadline", cause: service.RunCancelDeadline, wantEvent: streaming.EventError, wantCode: "run_deadline_exceeded"},
+		{name: "first output timeout", cause: service.RunCancelFirstOutputTimeout, wantEvent: streaming.EventError, wantCode: "first_output_timeout"},
 		{name: "server drain", cause: service.RunCancelServerDrain, wantEvent: streaming.EventError, wantCode: "server_draining"},
 		{name: "account changed", cause: service.RunCancelAccountChanged, wantEvent: streaming.EventError, wantCode: "account_changed"},
 		{name: "session deleted", cause: service.RunCancelSessionDeleted, wantEvent: streaming.EventError, wantCode: "session_deleted"},
@@ -582,7 +658,7 @@ func TestWriteRunTerminalPreservesExplicitPartialCompletionAcrossCancellation(t 
 func TestShouldPersistCanceledPartial(t *testing.T) {
 	for _, cause := range []service.RunCancelCause{
 		service.RunCancelUserStop,
-		service.RunCancelDeadline,
+		service.RunCancelFirstOutputTimeout,
 		service.RunCancelServerDrain,
 		service.RunCancelAccountChanged,
 		service.RunCancelUpstream,

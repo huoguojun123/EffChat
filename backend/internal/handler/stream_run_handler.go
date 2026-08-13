@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/model"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	modelusage "github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/logger"
-	"github.com/huoguojun123/effchat/pkg/streaming"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/modelstream"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	modelusage "github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/logger"
+	"github.com/huoguojun123/EffChat/pkg/streaming"
 )
 
 func agentProducedSuccessfulToolWrite(messages []map[string]interface{}, toolName string, writeActions map[string]bool) bool {
@@ -113,6 +114,9 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 		Reasoning:               modelInfo.Capabilities.Reasoning,
 		ThinkingFormat:          modelInfo.ThinkingFormat,
 		SearchImpl:              modelInfo.Capabilities.SearchImpl,
+		TemperaturePolicy:       modelInfo.TemperaturePolicy,
+		TemperatureValue:        cloneFloat64Pointer(modelInfo.TemperatureValue),
+		OpenAIRequestProfile:    model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile),
 		ThinkingEffort:          thinkingEffort,
 		SearchMode:              resolveSessionSearchMode(session.SearchMode),
 		PreferModelNativeSearch: true,
@@ -137,9 +141,18 @@ func buildAgentRequestFromSession(session *model.Session, user *model.User, mess
 	return req
 }
 
+func cloneFloat64Pointer(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
 const (
-	defaultChatRunTimeout       = 15 * time.Minute
-	defaultCompactionRunTimeout = 5 * time.Minute
+	defaultChatFirstOutputTimeout       = 15 * time.Minute
+	defaultCompactionFirstOutputTimeout = 5 * time.Minute
+	maxRunSetupTimeout                  = 30 * time.Second
 )
 
 type agentRunExecution struct {
@@ -152,6 +165,9 @@ type agentRunExecution struct {
 	titleService   *service.TitleService
 	runHub         *service.RunHub
 	taskRunRepo    *repository.ModelTaskRunRepository
+	runContext     context.Context
+	setupContext   context.Context
+	setupCancel    context.CancelFunc
 	sessionID      int64
 	userID         int64
 	userMessage    *model.Message
@@ -171,39 +187,88 @@ func (w runHubEventWriter) WriteEvent(event string, data interface{}) error {
 	return nil
 }
 
-func effectiveRunTimeout(configured, fallback time.Duration) time.Duration {
+func effectiveFirstOutputTimeout(configured, fallback time.Duration) time.Duration {
 	if configured > 0 {
 		return configured
 	}
 	return fallback
 }
 
-func runAgentStream(c *gin.Context, messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, taskRunRepo *repository.ModelTaskRunRepository, heartbeat time.Duration, sessionID, userID int64, userMessage *model.Message, runSnapshot *service.RunSnapshot, usageKind string) {
-	writer, err := streaming.NewSSEWriter(c)
-	if err != nil {
-		payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "stream_unavailable", "当前连接不支持流式响应", err)
-		c.JSON(http.StatusInternalServerError, payload)
-		return
+// effectiveRunSetupTimeout gives durable setup its own bounded budget while
+// guaranteeing that it expires before the enclosing first-output guard. The
+// outer timeout is already effective (chat/compaction fallback applied) at
+// production call sites. Non-positive values fall back to the setup cap; a
+// one-nanosecond outer guard yields an immediate setup deadline because no
+// smaller positive duration exists.
+func effectiveRunSetupTimeout(firstOutputTimeout time.Duration) time.Duration {
+	if firstOutputTimeout <= 0 {
+		return maxRunSetupTimeout
 	}
-	if !runHub.Record(runSnapshot.RunID, streaming.EventMessageStart, streaming.MessageStartEvent{
-		MessageID:     0,
-		RunID:         runSnapshot.RunID,
-		UserMessageID: userMessage.ID,
-	}) {
-		replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
-		return
+	half := firstOutputTimeout / 2
+	if half < maxRunSetupTimeout {
+		return half
 	}
-	events, ch, cleanup, _, err := runHub.EventsAfter(runSnapshot.RunID, sessionID, userID, 0)
-	if err != nil {
-		failRunWithRequestID(runHub, runSnapshot.RunID, c.GetString("request_id"), "stream_subscription_failed", "任务流建立失败，请重试", true, err)
-		_ = writer.WriteError("无法启动该任务", map[string]interface{}{"code": "run_not_found"})
-		return
+	return maxRunSetupTimeout
+}
+
+func newRunSetupContext(runContext context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if runContext == nil {
+		runContext = context.Background()
 	}
-	if cleanup != nil {
-		defer cleanup()
+	return context.WithTimeout(runContext, timeout)
+}
+
+// transitionRunSetupInterruption keeps semantic RunHub cancellation ahead of
+// the child setup deadline. A setup timeout is a retryable failed run, not a
+// RunCancelCause: user stop, first-output timeout, drain, and invalidation must
+// retain their existing canceled terminal facts and public error mapping.
+func transitionRunSetupInterruption(c *gin.Context, writer *streaming.SSEWriter, runHub *service.RunHub, runID, requestID string, runContext, setupContext context.Context) bool {
+	if transitionCanceledRun(c, writer, runHub, runID, runContext) {
+		return true
+	}
+	if setupContext == nil || !errors.Is(context.Cause(setupContext), context.DeadlineExceeded) {
+		return false
+	}
+	// Close the small race where the parent is canceled after the first check
+	// but before the setup terminal is committed.
+	if transitionCanceledRun(c, writer, runHub, runID, runContext) {
+		return true
 	}
 
-	go executeAgentRun(agentRunExecution{
+	payload := runPublicErrorPayload(requestID, "run_setup_timeout", "任务准备超时，请重试", true)
+	logger.Error("run setup timed out: request_id=%q run_id=%q", requestID, runID)
+	if err := writeRunTerminal(writer, runHub, runID, service.RunTerminal{
+		Status:             service.RunStatusFailed,
+		PublicErrorCode:    "run_setup_timeout",
+		PublicErrorMessage: "任务准备超时，请重试",
+		Event:              streaming.EventError,
+		Data:               payload,
+	}); err != nil {
+		logger.Error("persist run setup timeout failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
+		if writer == nil && c != nil && !c.Writer.Written() {
+			c.JSON(http.StatusInternalServerError, runPublicErrorPayload(requestID, "run_terminal_failed", "任务状态保存失败，请重试", true))
+		}
+		return true
+	}
+	if writer == nil && c != nil && !c.Writer.Written() {
+		c.JSON(http.StatusGatewayTimeout, payload)
+	}
+	return true
+}
+
+// finishRunSetup defines the success side of the setup race. Once the final
+// setup operation returns successfully, canceling the child must not inspect
+// its deadline again: only a semantic cancellation on the durable parent may
+// still prevent the model phase from starting.
+func finishRunSetup(c *gin.Context, writer *streaming.SSEWriter, runHub *service.RunHub, runID string, runContext context.Context, setupCancel context.CancelFunc) bool {
+	if setupCancel != nil {
+		setupCancel()
+	}
+	return transitionCanceledRun(c, writer, runHub, runID, runContext)
+}
+
+func runAgentStream(c *gin.Context, messageService *service.MessageService, sessionService *service.SessionService, authService *service.AuthService, skillService *service.SkillService, einoAgent *agent.EinoAgent, titleService *service.TitleService, runHub *service.RunHub, taskRunRepo *repository.ModelTaskRunRepository, heartbeat, firstOutputTimeout time.Duration, sessionID, userID int64, userMessage *model.Message, runSnapshot *service.RunSnapshot, usageKind string) {
+	exec := agentRunExecution{
 		requestID:      c.GetString("request_id"),
 		messageService: messageService,
 		sessionService: sessionService,
@@ -218,8 +283,60 @@ func runAgentStream(c *gin.Context, messageService *service.MessageService, sess
 		userMessage:    userMessage,
 		runSnapshot:    runSnapshot,
 		usageKind:      usageKind,
-	})
+	}
+	runContext, err := runHub.BeginExecution(runSnapshot.RunID)
+	if err != nil {
+		writer, writerErr := streaming.NewSSEWriter(c)
+		if writerErr == nil && (errors.Is(err, service.ErrRunTerminal) || errors.Is(err, service.ErrRunExecutionOwned)) {
+			replayExistingRun(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, 0)
+			return
+		}
+		payload := failRunWithPublicError(c, runHub, runSnapshot.RunID, "run_execution_unavailable", "任务执行状态异常，请重试", err)
+		c.JSON(http.StatusInternalServerError, payload)
+		return
+	}
+	exec.runContext = runContext
+	exec.setupContext, exec.setupCancel = newRunSetupContext(runContext, effectiveRunSetupTimeout(firstOutputTimeout))
+	// Launch immediately after ownership. The worker records message_start as
+	// its first operation, before any setup or model output, so SSE may attach
+	// later without becoming part of the execution ownership chain.
+	go executeAgentRun(exec)
+
+	writer, err := streaming.NewSSEWriter(c)
+	if err != nil {
+		// The durable worker owns completion now. A transport that cannot open
+		// SSE must not cancel model execution; the client can resume by run_id.
+		writeAcceptedRunStreamUnavailable(c, runSnapshot.RunID, err)
+		return
+	}
+	events, ch, cleanup, _, err := runHub.EventsAfter(runSnapshot.RunID, sessionID, userID, 0)
+	if err != nil {
+		writeRunSubscriptionFailed(c, writer, runSnapshot.RunID, err)
+		return
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
 	forwardRunEvents(c, writer, runHub, heartbeat, sessionID, userID, runSnapshot.RunID, events, ch, 0)
+}
+
+func writeAcceptedRunStreamUnavailable(c *gin.Context, runID string, err error) {
+	requestID := c.GetString("request_id")
+	logger.Error("open accepted run stream failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
+	payload := runPublicErrorPayload(requestID, "stream_unavailable", "当前连接不支持流式响应", true)
+	payload["run_id"] = runID
+	c.JSON(http.StatusInternalServerError, payload)
+}
+
+func writeRunSubscriptionFailed(c *gin.Context, writer *streaming.SSEWriter, runID string, err error) {
+	requestID := c.GetString("request_id")
+	logger.Error("subscribe accepted run failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
+	payload := map[string]any{"code": "stream_subscription_failed", "retryable": true, "run_id": runID}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	_ = writer.WriteError("任务仍在后台执行，请稍后恢复", payload)
 }
 
 func executeAgentRun(exec agentRunExecution) {
@@ -269,36 +386,55 @@ func executeAgentRun(exec agentRunExecution) {
 			logger.Error("finalize incomplete chat run failed: run_id=%q err=%v", runSnapshot.RunID, err)
 		}
 	}()
-	writer := runHubEventWriter{runHub: runHub, runID: runSnapshot.RunID}
-
-	runContext, ok := runHub.Context(runSnapshot.RunID)
-	if !ok {
-		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "run_context_missing", "任务状态异常，请重试", true, errors.New("run context missing"))
+	if !runHub.Record(runSnapshot.RunID, streaming.EventMessageStart, streaming.MessageStartEvent{
+		MessageID:     0,
+		RunID:         runSnapshot.RunID,
+		UserMessageID: userMessage.ID,
+	}) {
 		return
 	}
+	writer := runHubEventWriter{runHub: runHub, runID: runSnapshot.RunID}
+
+	runContext := exec.runContext
+	if runContext == nil {
+		var ok bool
+		runContext, ok = runHub.Context(runSnapshot.RunID)
+		if !ok {
+			failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "run_context_missing", "任务状态异常，请重试", true, errors.New("run context missing"))
+			return
+		}
+	}
+	modelstream.ArmFirstOutputTimeout(runContext)
 	if cause := service.RunCancelCauseFromContext(runContext); cause != "" {
 		transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext)
 		return
 	}
-	session, err := sessionService.GetByIDContext(runContext, sessionID, userID)
+	setupContext := exec.setupContext
+	setupCancel := exec.setupCancel
+	if setupContext == nil || setupCancel == nil {
+		setupContext, setupCancel = newRunSetupContext(runContext, effectiveRunSetupTimeout(defaultChatFirstOutputTimeout))
+	}
+	defer setupCancel()
+
+	session, err := sessionService.GetByIDContext(setupContext, sessionID, userID)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "session_load_failed", "会话加载失败，请重试", true, err)
 		return
 	}
-	user, err := authService.GetProfileContext(runContext, userID)
+	user, err := authService.GetProfileContext(setupContext, userID)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "user_profile_load_failed", "用户信息加载失败，请重试", true, err)
 		return
 	}
-	enabledSkills, err := skillService.EnabledInstructionsForSessionContext(runContext, user, session.Metadata)
+	enabledSkills, err := skillService.EnabledInstructionsForSessionContext(setupContext, user, session.Metadata)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		failRunWithRequestID(runHub, runSnapshot.RunID, requestID, "skill_context_load_failed", "Skill 上下文加载失败，请重试", true, err)
@@ -306,9 +442,9 @@ func executeAgentRun(exec agentRunExecution) {
 	}
 
 	// 重试只发送到原用户消息为止，不能把旧回答当作新答案的上下文。
-	messages, err := loadRunConversationMessages(runContext, messageService, sessionID, userID, runSnapshot, usageKind)
+	messages, err := loadRunConversationMessages(setupContext, messageService, sessionID, userID, runSnapshot, usageKind)
 	if err != nil {
-		if transitionCanceledRun(nil, nil, runHub, runSnapshot.RunID, runContext) {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
 			return
 		}
 		logger.Error("load conversation history failed: request_id=%q run_id=%q session=%d err=%v", requestID, runSnapshot.RunID, sessionID, err)
@@ -325,7 +461,10 @@ func executeAgentRun(exec agentRunExecution) {
 
 	agentReq := buildAgentRequestFromSession(session, user, messages, titleService, enabledSkills, thinkingEffortFromMessage(userMessage))
 	agentReq.SchemaVersion = userMessage.SchemaVersion
-	if err := einoAgent.ValidateAcceptedRuntimeSnapshot(runContext, agentReq, runSnapshot.RuntimeSnapshot); err != nil {
+	if err := einoAgent.ValidateAcceptedRuntimeSnapshot(setupContext, agentReq, runSnapshot.RuntimeSnapshot); err != nil {
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
+			return
+		}
 		payload := gin.H{
 			"error":     runtimeSnapshotPublicMessage(err),
 			"code":      "runtime_dependency_changed",
@@ -337,7 +476,20 @@ func executeAgentRun(exec agentRunExecution) {
 		})
 		return
 	}
-
+	preparedChat, prepareErr := einoAgent.PrepareChat(setupContext, agentReq, writer)
+	if prepareErr != nil {
+		// Setup interruption classification is valid only while PrepareChat owns
+		// the bounded child. Ordinary preparation errors continue through the
+		// existing agent error persistence path below.
+		if transitionRunSetupInterruption(nil, nil, runHub, runSnapshot.RunID, requestID, runContext, setupContext) {
+			return
+		}
+		setupCancel()
+	} else if finishRunSetup(nil, nil, runHub, runSnapshot.RunID, runContext, setupCancel) {
+		return
+	}
+	// Cancel only the setup child. The durable parent remains armed for first
+	// model output and owns RunPreparedChat plus all later persistence.
 	ctx := modelusage.WithMeta(runContext, modelusage.Meta{
 		UserID:    userID,
 		SessionID: sessionID,
@@ -345,7 +497,11 @@ func executeAgentRun(exec agentRunExecution) {
 		RunID:     runSnapshot.RunID,
 		Kind:      usageKind,
 	})
-	resp, err := einoAgent.StreamChat(ctx, agentReq, writer)
+	var resp *agent.ChatResponse
+	err = prepareErr
+	if err == nil {
+		resp, err = einoAgent.RunPreparedChat(ctx, preparedChat)
+	}
 	cancelCause := effectiveRunCancelCause(runHub, runSnapshot.RunID, ctx)
 	if resp != nil && resp.Canceled && cancelCause == "" {
 		cancelCause = service.RunCancelUpstream
@@ -649,7 +805,7 @@ func agentErrorPayload(err error, requestID string) gin.H {
 func replayExistingRun(c *gin.Context, writer *streaming.SSEWriter, runHub *service.RunHub, heartbeat time.Duration, sessionID, userID int64, runID string, cursor int64) {
 	events, ch, cleanup, _, err := runHub.EventsAfter(runID, sessionID, userID, cursor)
 	if err != nil {
-		_ = writer.WriteError("无法恢复该任务", map[string]interface{}{"code": "run_not_found"})
+		writeRunReplayNotFound(c, writer, runID, err)
 		return
 	}
 	if cleanup != nil {
@@ -657,6 +813,16 @@ func replayExistingRun(c *gin.Context, writer *streaming.SSEWriter, runHub *serv
 	}
 
 	forwardRunEvents(c, writer, runHub, heartbeat, sessionID, userID, runID, events, ch, cursor)
+}
+
+func writeRunReplayNotFound(c *gin.Context, writer *streaming.SSEWriter, runID string, err error) {
+	requestID := c.GetString("request_id")
+	logger.Error("replay run failed: request_id=%q run_id=%q err=%v", requestID, runID, err)
+	payload := map[string]any{"code": "run_not_found", "retryable": false, "run_id": runID}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	_ = writer.WriteError("无法恢复该任务", payload)
 }
 
 // resolveSessionSearchMode 将会话存储的搜索模式字符串映射为 modelbank.SearchMode，

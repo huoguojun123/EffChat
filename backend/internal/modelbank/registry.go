@@ -3,7 +3,7 @@ package modelbank
 import (
 	"sync"
 
-	"github.com/huoguojun123/effchat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 // registry 内置模型能力表
@@ -95,6 +95,20 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 128000,
 			},
 		},
+		"claude-opus-5": {
+			ID: "claude-opus-5", DisplayName: "Claude Opus 5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-sonnet-5": {
+			ID: "claude-sonnet-5", DisplayName: "Claude Sonnet 5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-opus-4-8": {
 			ID: "claude-opus-4-8", DisplayName: "Claude Opus 4.8", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -125,6 +139,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Google Gemini ============
+		"gemini-3.6-flash": {
+			ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
 		"gemini-3.5-flash": {
 			ID: "gemini-3.5-flash", DisplayName: "Gemini 3.5 Flash", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -285,11 +306,14 @@ func LoadModels(models []*model.Model) {
 	registry = make(map[string]*ModelInfo, len(models))
 	for _, m := range models {
 		registry[m.ID] = &ModelInfo{
-			ID:             m.ID,
-			DisplayName:    m.DisplayName,
-			Provider:       m.Provider,
-			Enabled:        m.Enabled,
-			ThinkingFormat: m.ThinkingFormat,
+			ID:                   m.ID,
+			DisplayName:          m.DisplayName,
+			Provider:             m.Provider,
+			Enabled:              m.Enabled,
+			ThinkingFormat:       m.ThinkingFormat,
+			TemperaturePolicy:    model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
+			TemperatureValue:     cloneFloat64Pointer(m.TemperatureValue),
+			OpenAIRequestProfile: model.CloneOpenAIRequestProfile(m.OpenAIRequestProfile),
 			Capabilities: ModelCapabilities{
 				Vision:        m.Vision,
 				ToolUse:       m.ToolUse,
@@ -300,6 +324,14 @@ func LoadModels(models []*model.Model) {
 			},
 		}
 	}
+}
+
+func cloneFloat64Pointer(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 // resetRegistryToBuiltins 还原内存表为内置默认（测试用，避免 LoadModels 污染同包其它测试）。

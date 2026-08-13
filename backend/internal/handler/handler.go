@@ -10,16 +10,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/huoguojun123/effchat/internal/agent"
-	"github.com/huoguojun123/effchat/internal/extractor"
-	"github.com/huoguojun123/effchat/internal/filepolicy"
-	"github.com/huoguojun123/effchat/internal/middleware"
-	"github.com/huoguojun123/effchat/internal/modelbank"
-	"github.com/huoguojun123/effchat/internal/repository"
-	"github.com/huoguojun123/effchat/internal/service"
-	"github.com/huoguojun123/effchat/internal/usage"
-	"github.com/huoguojun123/effchat/pkg/config"
-	"github.com/huoguojun123/effchat/pkg/logger"
+	"github.com/huoguojun123/EffChat/internal/agent"
+	"github.com/huoguojun123/EffChat/internal/extractor"
+	"github.com/huoguojun123/EffChat/internal/filepolicy"
+	"github.com/huoguojun123/EffChat/internal/middleware"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"github.com/huoguojun123/EffChat/internal/repository"
+	"github.com/huoguojun123/EffChat/internal/service"
+	"github.com/huoguojun123/EffChat/internal/usage"
+	"github.com/huoguojun123/EffChat/pkg/config"
+	"github.com/huoguojun123/EffChat/pkg/logger"
 )
 
 const diagnosticRetention = 90 * 24 * time.Hour
@@ -67,6 +67,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 	answerAttemptRepo := repository.NewAnswerAttemptRepository(db)
 	modelRepo := repository.NewModelRepository(db)
 	configRepo := repository.NewConfigRepository(db)
+	configRepo.SetUploadMaxSizeMB(uploadDeploymentCeilingMB(cfg.Extractor.MaxUploadBytes))
 	promptRepo := repository.NewPromptRepository(db)
 	fileRepo := repository.NewFileRepository(db)
 	fontRepo := repository.NewFontRepository(db)
@@ -79,6 +80,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 	channelRepo := repository.NewChannelRepository(db)
 	quotaRepo := repository.NewQuotaRepository(db)
 	toolConfigRepo := repository.NewToolConfigRepository(db)
+	governanceRepo := repository.NewGovernanceRepository(db)
 	usageRepo := usage.NewRepository(db)
 
 	// 从数据库加载模型能力表作为运行时唯一事实来源。
@@ -108,10 +110,12 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 	userAdminService.SetRunHub(runHub)
 	userGroupService := service.NewUserGroupService(userGroupRepo)
 	skillService := service.NewSkillService(skillRepo, userRepo, sessionRepo)
+	skillService.SetGovernanceRepository(governanceRepo)
 	usageService := usage.NewService(usageRepo)
 	stopDiagnosticRetention := startDiagnosticRetention(usageRepo, taskRunRepo)
 	quotaService := service.NewQuotaService(quotaRepo)
 	toolConfigService := service.NewToolConfigService(toolConfigRepo)
+	toolConfigService.SetGovernanceRepository(governanceRepo)
 
 	titleService := service.NewTitleService(sessionRepo, messageRepo, configRepo, channelService, usageService)
 	titleService.SetTaskRunRepository(taskRunRepo)
@@ -152,6 +156,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 			// 会话路由
 			sessions := authenticated.Group("/sessions")
 			{
+				sessions.GET("/readiness", SessionCreateReadinessHandler(sessionService))
 				sessions.POST("", CreateSessionHandler(sessionService))
 				sessions.GET("", ListSessionsHandler(sessionService))
 				sessions.GET("/:id", GetSessionHandler(sessionService))
@@ -160,17 +165,18 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				sessions.GET("/:id/export.md", ExportSessionMarkdownHandler(messageService))
 				sessions.GET("/:id/memory", GetSessionMemoryHandler(sessionService, memoryRepo, taskRunRepo, configRepo))
 				sessions.PUT("/:id/memory", SaveSessionMemoryHandler(sessionService, memoryRepo, taskRunRepo, configRepo))
-				sessions.POST("/:id/memory/compact", CompactSessionMemoryHandler(sessionService, authService, memoryRepo, taskRunRepo, configRepo, einoAgent))
-				sessions.POST("/:id/memory/retry", RetrySessionMemoryHandler(sessionService, authService, messageRepo, memoryRepo, taskRunRepo, configRepo, einoAgent))
+				sessions.POST("/:id/memory/compact", MemoryMaintenanceStreamHandler(sessionService, authService, messageRepo, memoryRepo, einoAgent, runHub, quotaService, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout, service.RunOperationMemoryCompact))
+				sessions.POST("/:id/memory/retry", MemoryMaintenanceStreamHandler(sessionService, authService, messageRepo, memoryRepo, einoAgent, runHub, quotaService, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout, service.RunOperationMemoryRetry))
 				sessions.POST("/:id/memory/changes/:change_id/undo", UndoSessionMemoryChangeHandler(sessionService, memoryRepo, taskRunRepo, configRepo))
 				// 消息路由
 				sessions.PUT("/:id/skills", UpdateSessionSkillsHandler(skillService))
 				sessions.POST("/:id/messages/preflight", MessagePreflightHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, taskRunRepo))
-				sessions.POST("/:id/messages/stream", SendMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.MaxTotalDuration))
-				sessions.POST("/:id/messages/:message_id/retry", RetryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.MaxTotalDuration))
-				sessions.POST("/:id/messages/:message_id/edit-retry", EditRetryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.MaxTotalDuration))
+				sessions.POST("/:id/messages/stream", SendMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
+				sessions.POST("/:id/messages/:message_id/retry", RetryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
+				sessions.POST("/:id/messages/:message_id/edit-retry", EditRetryMessageStreamHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
 				sessions.POST("/:id/answer-attempts/:attempt_id/select", SelectAnswerAttemptHandler(messageService, sessionService, authService, einoAgent))
-				sessions.POST("/:id/compact", CompactSessionHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.MaxTotalDuration))
+				sessions.DELETE("/:id/answer-attempts/:attempt_id", DeleteAnswerAttemptHandler(messageService, sessionService, authService, einoAgent))
+				sessions.POST("/:id/compact", CompactSessionHandler(messageService, sessionService, authService, skillService, einoAgent, titleService, runHub, quotaService, taskRunRepo, cfg.Run.HeartbeatInterval, cfg.Run.FirstOutputTimeout))
 				sessions.POST("/:id/compact/undo", UndoCompactionHandler(messageService))
 				sessions.GET("/:id/messages", ListMessagesHandler(messageService))
 				sessions.GET("/:id/turns", ListConversationTurnsHandler(messageService))
@@ -225,11 +231,11 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 			// 文件路由
 			files := authenticated.Group("/files")
 			{
-				files.POST("", UploadFileHandler(fileRepo, configRepo, WithUploadSessionRepo(sessionRepo), WithUploadExtractorClient(extractorClient), WithUploadChannelService(channelService), WithUploadQuotaService(quotaService), WithUploadOCRRecoveryRunner(ocrRecoveryRunner)))
+				files.POST("", UploadFileHandler(fileRepo, configRepo, WithUploadSessionRepo(sessionRepo), WithUploadExtractorClient(extractorClient), WithUploadChannelService(channelService), WithUploadQuotaService(quotaService), WithUploadOCRRecoveryRunner(ocrRecoveryRunner), WithUploadMaxBytes(cfg.Extractor.MaxUploadBytes)))
 				files.GET("", ListFilesHandler(fileRepo))
-				files.GET("/upload-limits", UploadLimitsHandler(configRepo))
+				files.GET("/upload-limits", UploadLimitsHandler(configRepo, cfg.Extractor.MaxUploadBytes))
 				files.POST("/:id/ocr-refresh", RefreshOCRFileHandler(fileRepo, channelService, extractorClient))
-				files.POST("/:id/ocr-retry", RetryOCRFileHandler(fileRepo, channelService, extractorClient, ocrRecoveryRunner))
+				files.POST("/:id/ocr-retry", RetryOCRFileHandler(fileRepo, configRepo, channelService, extractorClient, ocrRecoveryRunner))
 				files.GET("/:id/preview", PreviewFileHandler(fileRepo, channelService, extractorClient))
 				files.GET("/:id", DownloadFileHandler(fileRepo))
 				files.DELETE("/:id", DeleteFileHandler(fileRepo))
@@ -259,6 +265,8 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				admin.DELETE("/external-services/:key", DeleteExternalServiceHandler(channelService))
 				admin.GET("/tools", ListToolConfigsHandler(toolConfigService))
 				admin.POST("/tools", SaveToolConfigHandler(toolConfigService))
+				admin.GET("/tools/:key/history", ListToolConfigHistoryHandler(toolConfigService))
+				admin.POST("/tools/events/:id/rollback", RollbackToolConfigHandler(toolConfigService))
 				admin.POST("/files/cleanup-orphans", CleanupOrphanFilesHandler(fileRepo))
 
 				admin.GET("/users", ListUsersHandler(userAdminService))
@@ -295,6 +303,8 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				admin.GET("/skills/:id/files", ListAdminSkillFilesHandler(skillService))
 				admin.GET("/skills/:id/files/content", ReadAdminSkillFileHandler(skillService))
 				admin.GET("/skills/:id/import-records", ListSkillImportRecordsHandler(skillService))
+				admin.GET("/skills/:id/history", ListSkillHistoryHandler(skillService))
+				admin.POST("/skills/events/:id/rollback", RollbackSkillEventHandler(skillService))
 				admin.POST("/skills/:id/update/git/preview", PreviewSkillGitUpdateHandler(skillService))
 				admin.POST("/skills/:id/update/git", ApplySkillGitUpdateHandler(skillService))
 				admin.POST("/skills/:id/update/zip/preview", PreviewSkillZipUpdateHandler(skillService))
@@ -341,19 +351,14 @@ func RegisterHandler(authService *service.AuthService, limiters ...*AuthRateLimi
 			return
 		}
 		if retryAfter, ok := limiter.Allow(requestClientIP(c), req.Username); !ok {
-			c.Header("Retry-After", retryAfterSeconds(retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+			writeAuthRateLimitError(c, retryAfter)
 			return
 		}
 
-		resp, err := authService.Register(&req)
+		resp, err := authService.RegisterContext(c.Request.Context(), &req)
 		if err != nil {
 			limiter.RecordFailure(requestClientIP(c), req.Username)
-			if errors.Is(err, service.ErrInternal) {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writeAuthError(c, "register", err)
 			return
 		}
 		limiter.Reset(requestClientIP(c), req.Username)
@@ -372,20 +377,14 @@ func LoginHandler(authService *service.AuthService, limiters ...*AuthRateLimiter
 			return
 		}
 		if retryAfter, ok := limiter.Allow(requestClientIP(c), req.Username); !ok {
-			c.Header("Retry-After", retryAfterSeconds(retryAfter))
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many authentication attempts"})
+			writeAuthRateLimitError(c, retryAfter)
 			return
 		}
 
 		resp, err := authService.Login(&req)
 		if err != nil {
-			if errors.Is(err, service.ErrAccountInactive) {
-				limiter.RecordFailure(requestClientIP(c), req.Username)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "账号待审核或已停用"})
-				return
-			}
 			limiter.RecordFailure(requestClientIP(c), req.Username)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			writeAuthError(c, "login", err)
 			return
 		}
 		limiter.Reset(requestClientIP(c), req.Username)
@@ -421,11 +420,22 @@ func CreateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 
 		session, err := sessionService.Create(userID, &req)
 		if err != nil {
-			writeRuntimeModelError(c, err)
+			writeSessionMutationError(c, "create", err)
 			return
 		}
 
 		c.JSON(http.StatusCreated, session)
+	}
+}
+
+func SessionCreateReadinessHandler(sessionService *service.SessionService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		readiness, err := sessionService.CreateReadiness(middleware.GetUserID(c))
+		if err != nil {
+			writeServerError(c, http.StatusInternalServerError, "session_readiness_failed", "failed to load session readiness", err)
+			return
+		}
+		c.JSON(http.StatusOK, readiness)
 	}
 }
 
@@ -434,22 +444,14 @@ func ListSessionsHandler(sessionService *service.SessionService) gin.HandlerFunc
 	return func(c *gin.Context) {
 		userID := middleware.GetUserID(c)
 
-		limit := 100
-		offset := 0
-		if v := c.Query("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-				limit = n
-			}
-		}
-		if v := c.Query("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-				offset = n
-			}
+		limit, offset, ok := parseSessionListPagination(c)
+		if !ok {
+			return
 		}
 
 		filter, err := parseSessionListFilter(c.Query("folder_id"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_list_query_invalid", "folder_id must be all, unfiled, or a positive integer", false)
 			return
 		}
 
@@ -465,6 +467,28 @@ func ListSessionsHandler(sessionService *service.SessionService) gin.HandlerFunc
 			"next_offset": result.NextOffset,
 		})
 	}
+}
+
+func parseSessionListPagination(c *gin.Context) (int, int, bool) {
+	limit := 100
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > 100 {
+			writePublicError(c, http.StatusBadRequest, "session_list_query_invalid", "limit must be between 1 and 100", false)
+			return 0, 0, false
+		}
+		limit = parsed
+	}
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			writePublicError(c, http.StatusBadRequest, "session_list_query_invalid", "offset must be zero or greater", false)
+			return 0, 0, false
+		}
+		offset = parsed
+	}
+	return limit, offset, true
 }
 
 func parseSessionListFilter(raw string) (service.SessionListFilter, error) {
@@ -490,13 +514,13 @@ func GetSessionHandler(sessionService *service.SessionService) gin.HandlerFunc {
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
 		session, err := sessionService.GetByID(uri.ID, userID)
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			writeSessionLookupError(c, "load", err)
 			return
 		}
 
@@ -513,7 +537,7 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
@@ -524,11 +548,18 @@ func UpdateSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 		}
 
 		if err := sessionService.Update(uri.ID, userID, &req); err != nil {
-			writeRuntimeModelError(c, err)
+			writeSessionMutationError(c, "update", err)
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "session updated"})
+		// Return the durable row so optimistic clients can replace timestamps and
+		// normalized fields without issuing a second, race-prone list request.
+		session, err := sessionService.GetByID(uri.ID, userID)
+		if err != nil {
+			writeSessionLookupError(c, "load updated", err)
+			return
+		}
+		c.JSON(http.StatusOK, session)
 	}
 }
 
@@ -541,12 +572,12 @@ func DeleteSessionHandler(sessionService *service.SessionService) gin.HandlerFun
 			ID int64 `uri:"id" binding:"required"`
 		}
 		if err := c.ShouldBindUri(&uri); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
 			return
 		}
 
-		if err := sessionService.Delete(uri.ID, userID); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := sessionService.DeleteContext(c.Request.Context(), uri.ID, userID); err != nil {
+			writeSessionMutationError(c, "delete", err)
 			return
 		}
 

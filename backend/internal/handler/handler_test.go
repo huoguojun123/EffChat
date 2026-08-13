@@ -412,7 +412,7 @@ func TestSelectAnswerAttemptHandlerSwitchesVisibleAnswerAndNavigation(t *testing
 	rejectedPayload := struct {
 		Code string `json:"code"`
 	}{}
-	if err := json.Unmarshal(rejected.Body.Bytes(), &rejectedPayload); err != nil || rejectedPayload.Code != "answer_attempt_not_latest" {
+	if err := json.Unmarshal(rejected.Body.Bytes(), &rejectedPayload); err != nil || rejectedPayload.Code != "answer_attempt_not_selectable" {
 		t.Fatalf("compressed selection payload=%+v err=%v", rejectedPayload, err)
 	}
 }

@@ -205,7 +205,7 @@ func TestFileReadEndpointsExposeStableBusinessCodes(t *testing.T) {
 	}
 
 	previewPath := fmt.Sprintf("./storage/attachments/extracted/%d/preview_contract_%d.txt", env.userID, time.Now().UnixNano())
-	if err := os.MkdirAll(filepath.Dir(previewPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(previewPath), 0o700); err != nil {
 		t.Fatalf("create preview directory: %v", err)
 	}
 	if err := os.WriteFile(previewPath, []byte("fictional preview"), 0o600); err != nil {

@@ -369,6 +369,15 @@ func TestUpload_DoesNotTreatSelectionSizeAsAnUploadLimit(t *testing.T) {
 func TestUploadImageUsesPrivateManagedAttachmentModes(t *testing.T) {
 	env := setupTestEnv(t)
 	sessionID := createUploadTestSession(t, env)
+	// Handler tests bypass the container entrypoint that normalizes the managed
+	// attachment subtree on startup. Establish the same private root precondition
+	// so this test measures upload-created paths instead of leaked package fixtures.
+	if err := os.MkdirAll(filepolicy.AttachmentOriginalsRoot, 0o700); err != nil {
+		t.Fatalf("create private attachment root: %v", err)
+	}
+	if err := os.Chmod(filepolicy.AttachmentOriginalsRoot, 0o700); err != nil {
+		t.Fatalf("normalize private attachment root: %v", err)
+	}
 	t.Cleanup(func() {
 		_, _ = env.db.Exec("DELETE FROM files WHERE user_id = $1", env.userID)
 		_ = os.RemoveAll(filepath.Join(filepolicy.AttachmentOriginalsRoot, fmt.Sprintf("%d", env.userID)))

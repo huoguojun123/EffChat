@@ -480,7 +480,7 @@ func TestFilesHandler_ListsAndDeletesReferencedAttachment(t *testing.T) {
 	}
 
 	filePath := fmt.Sprintf("./storage/attachments/extracted/%d/referenced_%d.txt", env.userID, time.Now().UnixNano())
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filePath, []byte("attachment"), 0o600); err != nil {

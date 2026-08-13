@@ -189,13 +189,19 @@ func TestUploadLimitsClampsLegacyPolicyToDeploymentCeiling(t *testing.T) {
 	env := setupTestEnv(t)
 	var previous []byte
 	_ = env.db.QueryRow("SELECT value FROM system_config WHERE key = 'file_upload_max_size_mb'").Scan(&previous)
-	if _, err := env.db.Exec("UPDATE system_config SET value = '50' WHERE key = 'file_upload_max_size_mb'"); err != nil {
+	if _, err := env.db.Exec(`
+		INSERT INTO system_config (key, value, config_type)
+		VALUES ('file_upload_max_size_mb', '50', 'number')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, config_type = EXCLUDED.config_type
+	`); err != nil {
 		t.Fatalf("seed legacy upload size: %v", err)
 	}
 	t.Cleanup(func() {
-		if previous != nil {
-			_, _ = env.db.Exec("UPDATE system_config SET value = $1 WHERE key = 'file_upload_max_size_mb'", previous)
+		if previous == nil {
+			_, _ = env.db.Exec("DELETE FROM system_config WHERE key = 'file_upload_max_size_mb'")
+			return
 		}
+		_, _ = env.db.Exec("UPDATE system_config SET value = $1 WHERE key = 'file_upload_max_size_mb'", previous)
 	})
 
 	router := gin.New()
@@ -270,11 +276,14 @@ func TestFilePoliciesKeepLastStrictValuesAfterParseFailure(t *testing.T) {
 	defer db.Close()
 	configRepo := repository.NewConfigRepository(db)
 	if _, err := db.Exec(`
-		UPDATE system_config SET value = '1' WHERE key IN ('file_upload_max_size_mb', 'file_upload_max_session_files');
-		UPDATE system_config SET value = '["text/plain"]' WHERE key = 'file_upload_allowed_types';
-		UPDATE system_config SET value = 'false' WHERE key = 'attachment_extract_enabled';
-		UPDATE system_config SET value = '30' WHERE key = 'attachment_extract_timeout_seconds';
-		UPDATE system_config SET value = '1' WHERE key = 'attachment_max_output_mb';
+		INSERT INTO system_config (key, value, config_type) VALUES
+			('file_upload_max_size_mb', '1', 'number'),
+			('file_upload_max_session_files', '1', 'number'),
+			('file_upload_allowed_types', '["text/plain"]', 'json'),
+			('attachment_extract_enabled', 'false', 'boolean'),
+			('attachment_extract_timeout_seconds', '30', 'number'),
+			('attachment_max_output_mb', '1', 'number')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, config_type = EXCLUDED.config_type;
 	`); err != nil {
 		t.Fatalf("seed strict file policies: %v", err)
 	}

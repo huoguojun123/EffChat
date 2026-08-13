@@ -258,10 +258,18 @@ func TestUpdateAdminEditableBatchHonorsContextCancellation(t *testing.T) {
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	repo := NewConfigRepository(db)
-	original, err := repo.Get("system_name")
-	if err != nil {
-		t.Fatalf("read system_name: %v", err)
+	var original []byte
+	_ = db.QueryRow(`SELECT value FROM system_config WHERE key = 'system_name'`).Scan(&original)
+	if err := repo.Update("system_name", json.RawMessage(`"Original Cancellation Config"`)); err != nil {
+		t.Fatalf("seed system_name: %v", err)
 	}
+	t.Cleanup(func() {
+		if original == nil {
+			_, _ = db.Exec(`DELETE FROM system_config WHERE key = 'system_name'`)
+			return
+		}
+		_, _ = db.Exec(`UPDATE system_config SET value = $1 WHERE key = 'system_name'`, original)
+	})
 
 	blocker, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
@@ -282,7 +290,7 @@ func TestUpdateAdminEditableBatchHonorsContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read canceled system_name: %v", err)
 	}
-	if string(stored.Value) != string(original.Value) {
-		t.Fatalf("canceled config update committed %s, want %s", stored.Value, original.Value)
+	if string(stored.Value) != `"Original Cancellation Config"` {
+		t.Fatalf("canceled config update committed %s", stored.Value)
 	}
 }

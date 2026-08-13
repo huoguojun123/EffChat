@@ -24,7 +24,12 @@ cleanup() {
     echo "isolated E2E containers remain for project $PROJECT" >&2
     status=1
   fi
-  rm -rf "$TMP_DIR"
+  # Compose bind mounts are written by root inside Linux containers. Remove
+  # their isolated contents as container root, then let the host own the final
+  # empty-directory removal. The path is always created by mktemp above.
+  docker run --rm --entrypoint sh -v "$TMP_DIR:/cleanup" postgres:17 \
+    -ec 'find /cleanup -mindepth 1 -delete' >/dev/null 2>&1 || status=1
+  rmdir "$TMP_DIR" >/dev/null 2>&1 || status=1
   exit "$status"
 }
 trap cleanup EXIT INT TERM

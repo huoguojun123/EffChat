@@ -8,8 +8,39 @@ import (
 	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
+	"github.com/huoguojun123/EffChat/internal/modelbank"
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
+
+// ModelService writes deliberately replace the process-wide runtime registry.
+// Restore the package fixture after each such test so later service tests do
+// not inherit a database-specific model catalog.
+func preserveModelBank(t *testing.T) {
+	t.Helper()
+	previous := modelbank.List()
+	t.Cleanup(func() {
+		models := make([]*model.Model, 0, len(previous))
+		for _, info := range previous {
+			models = append(models, &model.Model{
+				ID:                   info.ID,
+				DisplayName:          info.DisplayName,
+				Provider:             info.Provider,
+				Vision:               info.Capabilities.Vision,
+				ToolUse:              info.Capabilities.ToolUse,
+				Reasoning:            info.Capabilities.Reasoning,
+				ThinkingFormat:       info.ThinkingFormat,
+				SearchImpl:           string(info.Capabilities.SearchImpl),
+				ContextWindow:        info.Capabilities.ContextWindow,
+				MaxOutput:            info.Capabilities.MaxOutput,
+				Enabled:              info.Enabled,
+				TemperaturePolicy:    info.TemperaturePolicy,
+				TemperatureValue:     info.TemperatureValue,
+				OpenAIRequestProfile: info.OpenAIRequestProfile,
+			})
+		}
+		modelbank.LoadModels(models)
+	})
+}
 
 func TestValidateModelInput(t *testing.T) {
 	valid := func() *model.Model {
@@ -54,6 +85,7 @@ func TestValidateModelInput(t *testing.T) {
 }
 
 func TestModelService_DeleteHardRemovesAndDefaultValidationRequiresRunnablePublicModel(t *testing.T) {
+	preserveModelBank(t)
 	db := setupMessageTestDB(t)
 	defer db.Close()
 	suffix := time.Now().UnixNano()
@@ -112,6 +144,7 @@ func TestValidateDefaultModelPreservesRepositoryFailure(t *testing.T) {
 }
 
 func TestModelServiceManualCatalogOverrideClearsDirectoryCheckTime(t *testing.T) {
+	preserveModelBank(t)
 	db := setupMessageTestDB(t)
 	defer db.Close()
 

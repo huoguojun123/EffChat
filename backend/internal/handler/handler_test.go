@@ -72,6 +72,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	sessionFolderRepo := repository.NewSessionFolderRepository(db)
 	messageRepo := repository.NewMessageRepository(db)
 	configRepo := repository.NewConfigRepository(db)
+	memoryRepo := repository.NewSessionMemoryRepository(db)
 	fileRepo := repository.NewFileRepository(db)
 	channelRepo := repository.NewChannelRepository(db)
 	modelRepo := repository.NewModelRepository(db)
@@ -106,6 +107,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	authService := service.NewAuthService(userRepo, "test-handler-secret")
 	sessionService := service.NewSessionService(sessionRepo, messageRepo, configRepo, sessionFolderRepo)
 	sessionService.SetRuntimeModelDependencies(modelRepo, channelService, userRepo)
+	modelService := service.NewModelService(modelRepo, channelService)
 	messageService := service.NewMessageService(messageRepo, sessionRepo, fileRepo, repository.NewAnswerAttemptRepository(db))
 	sessionFolderService := service.NewSessionFolderService(sessionFolderRepo)
 
@@ -126,6 +128,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		auth.PATCH("/sessions/:id", UpdateSessionHandler(sessionService))
 		auth.DELETE("/sessions/:id", DeleteSessionHandler(sessionService))
 		auth.GET("/sessions/:id/export.md", ExportSessionMarkdownHandler(messageService))
+		auth.PUT("/sessions/:id/memory", SaveSessionMemoryHandler(sessionService, memoryRepo, nil, configRepo))
 		auth.GET("/sessions/:id/messages", ListMessagesHandler(messageService))
 		auth.POST("/sessions/:id/answer-attempts/:attempt_id/select", SelectAnswerAttemptHandler(messageService, sessionService, authService, nil))
 		auth.GET("/session-folders", ListSessionFoldersHandler(sessionFolderService))
@@ -137,6 +140,10 @@ func setupTestEnv(t *testing.T) *testEnv {
 		auth.DELETE("/files/:id", DeleteFileHandler(fileRepo))
 		auth.GET("/files/upload-limits", UploadLimitsHandler(configRepo, defaultDeploymentUploadMaxBytes))
 		auth.POST("/files/:id/ocr-refresh", RefreshOCRFileHandler(fileRepo, nil, nil))
+
+		admin := auth.Group("/admin")
+		admin.Use(middleware.AdminMiddleware())
+		admin.PATCH("/config", UpdateConfigBatchHandler(configRepo, modelService))
 	}
 
 	// Register a test user and get token
@@ -177,6 +184,9 @@ func setupTestEnv(t *testing.T) *testEnv {
 		regResp.Approved = true
 		regResp.Token = loginResp.Token
 		regResp.User = loginResp.User
+	}
+	if regResp.User.Role != "admin" {
+		t.Fatalf("isolated handler fixture role=%q, want admin", regResp.User.Role)
 	}
 
 	t.Cleanup(func() {

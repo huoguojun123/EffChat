@@ -163,6 +163,8 @@ jobs:
         run: scripts/test-build-ref-inputs.sh
       - name: Test release ref gate
         run: scripts/test-release-ref-gate.sh
+      - name: Test release image registry contract
+        run: scripts/test-release-image-contract.sh
       - name: Verify Nginx security headers
         run: node frontend/scripts/check-nginx-security-headers.mjs
       - name: Test third-party license archive

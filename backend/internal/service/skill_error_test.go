@@ -175,11 +175,13 @@ func TestSkillBatchImportRollsBackAndRetriesWithoutDuplicateHistory(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	first.PackageChecksum = skillparser.PackageChecksum(first.Files)
 	second, err := skillparser.ParseTextSkill("upstream/second/SKILL.md", []byte("---\nname: Batch Second\n---\n\nCreated."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	second.ID = secondID
+	second.PackageChecksum = skillparser.PackageChecksum(second.Files)
 
 	triggerName := fmt.Sprintf("reject_skill_batch_%d", userID)
 	quotedSecondID := "'" + strings.ReplaceAll(secondID, "'", "''") + "'"

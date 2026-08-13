@@ -152,7 +152,7 @@ func TestChannelServiceClassifiesInvalidExternalServiceOrder(t *testing.T) {
 
 	svc := NewChannelService(repository.NewChannelRepository(db))
 	if _, err := svc.SaveExternalService(&ExternalServiceInput{
-		Key: "search_one", DisplayName: "Search One", Kind: ServiceKindSearch, BaseURL: "https://search.example.com",
+		Key: "tavily_search", DisplayName: "Tavily", Kind: ServiceKindSearch, APIKey: "fixture-key",
 	}); err != nil {
 		t.Fatalf("create external service: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestChannelServiceExternalServiceReorderHonorsRowCancellation(t *testing.T)
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	svc := NewChannelService(repository.NewChannelRepository(db))
-	key := fmt.Sprintf("context_reorder_%d", time.Now().UnixNano())
+	key := "tavily_search"
 	if _, err := svc.SaveExternalServiceContext(context.Background(), &ExternalServiceInput{Key: key, DisplayName: "Context Reorder", Kind: ServiceKindSearch, APIKey: "fixture-key"}); err != nil {
 		t.Fatalf("seed external service: %v", err)
 	}

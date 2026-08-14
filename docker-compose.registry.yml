@@ -1,0 +1,127 @@
+name: ${COMPOSE_PROJECT_NAME:-effchat}
+
+x-default-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+    max-file: ${DOCKER_LOG_MAX_FILE:-5}
+
+# Registry deployment template. It deliberately keeps the existing data,
+# environment and service contracts; only application image sources change
+# from local builds to the published Docker Hub beta manifests.
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-effchat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      POSTGRES_DB: ${POSTGRES_DB:-effchat}
+    volumes:
+      - ${DATA_DIR:-../data}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: postgres:17
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-effchat}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      PGDATABASE: ${POSTGRES_DB:-effchat}
+    volumes:
+      - ${MIGRATIONS_DIR:-./backend/migrations}:/migrations:ro
+    command:
+      - sh
+      - -ec
+      - |
+        /migrations/build_migration_script.sh > /tmp/apply-migrations.sql
+        psql -v ON_ERROR_STOP=1 -f /tmp/apply-migrations.sql
+
+  py-extractor:
+    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-py-extractor:${EFFCHAT_VERSION:-v0.3.4-beta.2}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${PY_EXTRACTOR_MEM_LIMIT:-512m}
+    environment:
+      EXTRACTOR_HOST: 0.0.0.0
+      EXTRACTOR_PORT: 8090
+      EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
+      EXTRACTOR_MAX_OUTPUT_BYTES: ${PY_EXTRACTOR_MAX_OUTPUT_BYTES:-5242880}
+      MINERU_UPLOAD_TIMEOUT_SECONDS: ${MINERU_UPLOAD_TIMEOUT_SECONDS:-300}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2).read()\""]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  backend:
+    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-backend:${EFFCHAT_VERSION:-v0.3.4-beta.2}
+    restart: unless-stopped
+    stop_grace_period: 70s
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      py-extractor:
+        condition: service_healthy
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      SERVER_MODE: ${SERVER_MODE:-release}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER:-effchat}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set DB password in .env.docker}
+      DB_NAME: ${POSTGRES_DB:-effchat}
+      DB_SSLMODE: disable
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
+      CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
+      AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-600}
+      AUTH_RATE_LIMIT_BLOCK_SECONDS: ${AUTH_RATE_LIMIT_BLOCK_SECONDS:-900}
+      RUN_FIRST_OUTPUT_TIMEOUT: ${RUN_FIRST_OUTPUT_TIMEOUT:-0}
+      SSE_HEARTBEAT_INTERVAL: ${SSE_HEARTBEAT_INTERVAL:-12s}
+      COMPRESSION_MAX_TOKENS: ${COMPRESSION_MAX_TOKENS:-32000}
+      PY_EXTRACTOR_ENABLED: ${PY_EXTRACTOR_ENABLED:-true}
+      PY_EXTRACTOR_URL: ${PY_EXTRACTOR_URL:-http://py-extractor:8090}
+      PY_EXTRACTOR_TIMEOUT_SECONDS: ${PY_EXTRACTOR_TIMEOUT_SECONDS:-60}
+      PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+      no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+    volumes:
+      - ${DATA_DIR:-../data}/storage:/app/storage
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-18080}:8080"
+
+  web:
+    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-web:${EFFCHAT_VERSION:-v0.3.4-beta.2}
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
+      NGINX_ENVSUBST_FILTER: ^EFFCHAT_
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8088}:80"
+
+networks:
+  default:
+    name: ${DOCKER_NETWORK:-effchat_net}

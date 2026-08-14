@@ -165,6 +165,8 @@ jobs:
         run: scripts/test-release-ref-gate.sh
       - name: Test release image registry contract
         run: scripts/test-release-image-contract.sh
+      - name: Test registry Compose contract
+        run: scripts/test-registry-compose-contract.sh
       - name: Verify Nginx security headers
         run: node frontend/scripts/check-nginx-security-headers.mjs
       - name: Test third-party license archive

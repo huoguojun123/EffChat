@@ -20,10 +20,10 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/openai/openai-go/v3 v3.35.0
 	github.com/townsendmerino/aikit v1.16.0
-	github.com/xuri/excelize/v2 v2.10.1
-	golang.org/x/crypto v0.51.0
+	github.com/xuri/excelize/v2 v2.11.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/image v0.43.0
-	golang.org/x/net v0.55.0
+	golang.org/x/net v0.56.0
 	google.golang.org/genai v1.65.0
 )
 
@@ -97,7 +97,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
-	github.com/richardlehane/mscfb v1.0.6 // indirect
+	github.com/richardlehane/mscfb v1.0.7 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect

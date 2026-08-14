@@ -12,7 +12,7 @@
 - [x] README 明确当前为 beta/pre-release。
 - [x] `SECURITY.md` 提供 GitHub 私密漏洞报告入口。
 - [x] `CONTRIBUTING.md` 说明环境、测试、数据安全和 PR 规则。
-- [x] 已配置 Issue、PR 模板和 Dependabot。
+- [x] 已配置 Issue、PR 模板和 Dependabot；自动 PR 仅保留安全更新，常规版本更新在维护者主动批处理前暂停。
 - [ ] 默认提示词、图标、图片和其他素材的来源允许公开。
 - [x] 第三方依赖许可证没有已知冲突。
 - [x] 三个应用镜像从实际分发依赖生成第三方许可正文/版权归档，依赖缺少许可材料或精确版本 fallback 时构建失败。

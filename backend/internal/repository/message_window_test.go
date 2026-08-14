@@ -2,8 +2,8 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/huoguojun123/EffChat/internal/model"
@@ -442,7 +442,12 @@ func containsMessageID(messages []*model.Message, messageID int64) bool {
 func countCompactionSummaries(messages []*model.Message) int {
 	count := 0
 	for _, message := range messages {
-		if strings.Contains(string(message.MessageData), `"compaction_summary":true`) {
+		var data struct {
+			Metadata struct {
+				CompactionSummary bool `json:"compaction_summary"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal(message.MessageData, &data); err == nil && data.Metadata.CompactionSummary {
 			count++
 		}
 	}

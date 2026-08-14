@@ -26,7 +26,7 @@ if EFFCHAT_HOME="$TMP_DIR/occupied" bash "$SCRIPT" >/dev/null 2>&1; then
     exit 1
 fi
 
-fixture="$TMP_DIR/fixture/EffChat-v0.3.4-beta.3"
+fixture="$TMP_DIR/fixture/EffChat-v0.4.0-beta.1"
 mkdir -p "$fixture/backend"
 cp "$ROOT/docker-compose.registry.yml" "$fixture/docker-compose.registry.yml"
 cp -R "$ROOT/backend/migrations" "$fixture/backend/migrations"
@@ -114,7 +114,7 @@ grep -Fxq 'DATA_DIR=../data' "$update_root/.env.docker"
 grep -Fxq 'WEB_PORT=8188' "$update_root/.env.docker"
 grep -Fxq 'POSTGRES_PASSWORD=keep-existing-password' "$update_root/.env.docker"
 grep -Fxq 'JWT_SECRET=keep-existing-jwt' "$update_root/.env.docker"
-grep -Fxq 'EFFCHAT_VERSION=v0.3.4-beta.3' "$update_root/.env.docker"
+grep -Fxq 'EFFCHAT_VERSION=v0.4.0-beta.1' "$update_root/.env.docker"
 grep -Fxq 'keep data' "$update_root/data/sentinel.txt"
 test -f "$update_dir/backend/migrations/production/001_schema.sql"
 test ! -e "$update_dir/backend/migrations/old-marker.txt"
@@ -149,7 +149,7 @@ if PATH="$TMP_DIR/bin:$PATH" \
 fi
 grep -Fxq 'keep unknown data' "$unknown_dir/data/sentinel.txt"
 
-grep -Fq 'DEFAULT_VERSION="v0.3.4-beta.3"' "$SCRIPT"
+grep -Fq 'DEFAULT_VERSION="v0.4.0-beta.1"' "$SCRIPT"
 ! grep -Fq 'POSTGRES_PASSWORD=change-this-postgres-password' "$SCRIPT"
 ! grep -Fq 'JWT_SECRET=your-secret-key-change-this-in-production' "$SCRIPT"
 grep -Fq 'curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash' "$ROOT/README.md"

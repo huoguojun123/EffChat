@@ -23,6 +23,13 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Updated the public deployment guide and CI contract checks for the registry
   Compose path.
 
+### Security
+
+- Updated the Go 1.26 patch toolchain to 1.26.6 for the current standard-library
+  security fixes and refreshed the pinned Alpine builder manifest.
+- Updated the existing transitive Nano ID override to 3.3.18 after the
+  production dependency audit began rejecting 3.3.17.
+
 ## [0.3.4-beta.1] - 2026-08-13
 
 > Released after pull-request, `main`, Gitleaks, and release-image workflows

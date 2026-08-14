@@ -5,9 +5,9 @@ EffChat 是一个面向小团队自托管的 AI agent workbench。目标是比�
 [GitHub 仓库](https://github.com/huoguojun123/EffChat)
 
 > [!WARNING]
-> `v0.3.4-beta.1` 已作为测试版发布。它仍处于 beta 阶段，数据迁移、配置兼容性和公开 API 仍可能变化；升级前请使用 [Docker Compose 部署文档](docs/03-实施计划/Docker-Compose-部署.md#备份与隔离恢复) 中的一致备份入口，不要复制运行中的 PostgreSQL 数据目录。
+> `v0.3.4-beta.2` 是当前测试版。它仍处于 beta 阶段，数据迁移、配置兼容性和公开 API 仍可能变化；升级前请使用 [Docker Compose 部署文档](docs/03-实施计划/Docker-Compose-部署.md#备份与隔离恢复) 中的一致备份入口，不要复制运行中的 PostgreSQL 数据目录。
 
-## v0.3.4-beta.1 定位
+## v0.3.4-beta.2 定位
 
 当前预发布版按“小团队自托管 agent workbench”收口：
 

@@ -7,7 +7,7 @@
 需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用
 `docker-compose.registry.yml`。该模板保留本文件中的环境变量、端口、网络、
 PostgreSQL 和 storage 挂载；只把三个应用服务的 `build`/`:local` 替换为
-`${DOCKERHUB_NAMESPACE:-gjhuo}` 下的 `${EFFCHAT_VERSION:-v0.3.4-beta.1}` 镜像。
+`${DOCKERHUB_NAMESPACE:-gjhuo}` 下的 `${EFFCHAT_VERSION:-v0.3.4-beta.2}` 镜像。
 
 应用镜像不携带迁移 SQL。部署目录必须同时保留由同一 public release 导出的
 `backend/migrations/`（包含 `build_migration_script.sh`、`init.sql`、`legacy-checksums.txt` 和

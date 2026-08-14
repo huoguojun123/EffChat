@@ -49,7 +49,7 @@ services:
         psql -v ON_ERROR_STOP=1 -f /tmp/apply-migrations.sql
 
   py-extractor:
-    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-py-extractor:${EFFCHAT_VERSION:-v0.3.4-beta.2}
+    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-py-extractor:${EFFCHAT_VERSION:-v0.3.4-beta.3}
     restart: unless-stopped
     logging: *default-logging
     mem_limit: ${PY_EXTRACTOR_MEM_LIMIT:-512m}
@@ -68,7 +68,7 @@ services:
       retries: 3
 
   backend:
-    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-backend:${EFFCHAT_VERSION:-v0.3.4-beta.2}
+    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-backend:${EFFCHAT_VERSION:-v0.3.4-beta.3}
     restart: unless-stopped
     stop_grace_period: 70s
     logging: *default-logging
@@ -110,7 +110,7 @@ services:
       - "127.0.0.1:${BACKEND_PORT:-18080}:8080"
 
   web:
-    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-web:${EFFCHAT_VERSION:-v0.3.4-beta.2}
+    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-web:${EFFCHAT_VERSION:-v0.3.4-beta.3}
     restart: unless-stopped
     logging: *default-logging
     environment:

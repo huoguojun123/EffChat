@@ -16,7 +16,11 @@ curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/i
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
 ```
 
-安装器只接受不存在或完全为空的目标目录。发现已有 `.env.docker`、`data/` 或其他内容时会停止，不覆盖配置、数据库、受管文件或 Docker volume。安装完成后，模型渠道、API key、搜索服务和网页提取 provider 在管理员后台配置，不写入安装命令或公开文件。
+首次安装只接受不存在或完全为空的目标目录。已有部署再次运行同一脚本时，输入原目录并确认 `update`；脚本识别 `compose.yml`、`docker-compose.registry.yml` 或兼容的 `docker-compose.yml`，也会查找部署目录或父目录中的 `.env.docker`。它只更新镜像、Compose、migration 和环境文件中的 `EFFCHAT_VERSION`，把旧 Compose/migration 放入带时间戳的 `deployment-backups/`；端口、数据库/JWT secret、数据路径和所有 data/storage/backups 保持不变。无法确认是 EffChat registry Compose 的目录会停止，不覆盖任意自定义部署。
+
+“Compose 在 `src/`、环境文件在上级目录”的服务器布局也属于兼容范围；只需在提示中填写 Compose 目录，并在环境文件提示中填写上级 `.env.docker`。
+
+安装完成后，模型渠道、API key、搜索服务和网页提取 provider 在管理员后台配置，不写入安装命令或公开文件。
 
 个人用户日常只需在安装目录执行：
 

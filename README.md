@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/i
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
 ```
 
-已有配置或数据的目录会被保护，不会覆盖。
+首次安装只接受空目录；如果目录里已经有 EffChat registry Compose，重新运行同一脚本并输入 `update`，脚本会保留环境文件和 data/storage/backups，只更新镜像、Compose 与 migration，并把旧部署文件放进 `deployment-backups/`。
 
 ### 标准 Docker Compose 部署
 

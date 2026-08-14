@@ -63,6 +63,7 @@ backend/storage/
 data/
 backend/data/
 frontend/data/
+deployment-backups/
 
 # Backend
 backend/.env

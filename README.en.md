@@ -109,7 +109,7 @@ Open `http://127.0.0.1:8088`. You can also set `EFFCHAT_HOME` or `EFFCHAT_WEB_PO
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
 ```
 
-Existing configuration or data directories are never overwritten.
+Fresh installation only accepts an empty directory. To update an existing EffChat registry deployment, run the same script, enter the existing directory, and type `update`; it preserves the environment file and data/storage/backups, updates images, Compose, and migrations, and archives the previous deployment files under `deployment-backups/`.
 
 ### Standard Docker Compose
 

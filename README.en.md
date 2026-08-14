@@ -5,7 +5,7 @@
 <h1 align="center">EffChat</h1>
 
 <p align="center">
-  A lightweight, self-hosted AI agent workbench built for real workflows.
+  A self-hosted agent workbench that keeps models, data, and runtime under your control.
 </p>
 
 <p align="center">
@@ -20,10 +20,38 @@
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111">
 </p>
 
-EffChat is designed for individuals and small teams that want control over their models, data, and runtime. It stays simple to deploy and quiet to use without pretending that an agent is only a chat box: streams recover after disconnects, answer versions remain selectable, long conversations can be compacted without erasing history, and files, memory, and web tools all have explicit lifecycle and failure semantics.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#interface-preview">Preview</a> ·
+  <a href="#why-effchat">Highlights</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+EffChat is designed for individuals and small teams that want control over their models, data, and runtime. It stays simple to deploy and quiet to use while treating the difficult parts behind a chat box as first-class product behavior: run recovery after disconnects, selectable answer attempts, context compaction that preserves history, and explicit lifecycles for files, memory, web tools, and quotas.
 
 > [!WARNING]
-> The current release is `v0.3.4-beta.3`. EffChat is still beta software. Create a consistent backup before upgrading; migrations, configuration compatibility, and public APIs may change in later prereleases.
+> EffChat is still beta software. Create a consistent backup before upgrading; migrations, configuration compatibility, and public APIs may change in later prereleases.
+
+## Interface preview
+
+The README reserves three screenshot slots. Add sanitized images with the expected filenames under `docs/assets/screenshots/`; they will appear here without another README edit.
+
+<p align="center">
+  <img src="docs/assets/screenshots/chat-workspace.webp" alt="Chat workspace" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/assets/screenshots/file-and-tools.webp" alt="Files and tools" width="100%"><br>
+      <sub>Files, extraction, and tool runs</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/assets/screenshots/admin-settings.webp" alt="Administration" width="100%"><br>
+      <sub>Models, channels, and governance</sub>
+    </td>
+  </tr>
+</table>
 
 ## Why EffChat
 
@@ -79,19 +107,6 @@ flowchart LR
 - **Deployment:** Docker Compose
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete design and runtime invariants.
-
-<!--
-Screenshot slots: place real, sanitized images in docs/assets/screenshots/ and
-uncomment this block. Suggested names are
-chat-workspace.webp, file-and-tools.webp, and admin-settings.webp.
-Never commit real users, production URLs, credentials, or private data.
-
-## Screenshots
-
-![Chat workspace](docs/assets/screenshots/chat-workspace.webp)
-![Files and tools](docs/assets/screenshots/file-and-tools.webp)
-![Administration](docs/assets/screenshots/admin-settings.webp)
--->
 
 ## Quick start
 

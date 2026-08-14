@@ -5,7 +5,7 @@
 <h1 align="center">EffChat</h1>
 
 <p align="center">
-  一个为真实工作链路而生的轻量、自托管 AI Agent 工作台。
+  把模型、数据与 Agent 运行掌握在自己手里的自托管工作台。
 </p>
 
 <p align="center">
@@ -20,7 +20,38 @@
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111">
 </p>
 
-EffChat 面向希望掌控模型、数据和运行边界的个人与小团队。它保持部署简单、界面安静，但没有把复杂问题藏在一个聊天输入框后面：流式运行可以在断线后恢复，回答版本可以切换，长对话可以压缩而不抹去历史，文件、记忆和联网工具都拥有明确的生命周期与失败语义。
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#界面预览">界面预览</a> ·
+  <a href="#为什么是-effchat">核心能力</a> ·
+  <a href="#文档">文档</a>
+</p>
+
+EffChat 面向希望掌控模型、数据和运行边界的个人与小团队。它保持部署简单、界面安静，也认真处理聊天框背后的复杂问题：断线后的运行恢复、可切换的回答版本、保留历史的上下文压缩，以及文件、记忆、联网工具和配额治理的完整生命周期。
+
+> [!WARNING]
+> EffChat 目前仍处于测试阶段。升级前请先按部署文档完成一致备份；后续预发布版本仍可能调整 migration、配置兼容性和公开 API。
+
+## 界面预览
+
+README 固定预留以下三个截图位。把脱敏后的图片按对应文件名放入 `docs/assets/screenshots/`，这里会自动显示，无需再修改 README。
+
+<p align="center">
+  <img src="docs/assets/screenshots/chat-workspace.webp" alt="对话工作台" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="docs/assets/screenshots/file-and-tools.webp" alt="文件与工具链" width="100%"><br>
+      <sub>文件、提取与工具运行</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="docs/assets/screenshots/admin-settings.webp" alt="管理后台" width="100%"><br>
+      <sub>模型、渠道与系统治理</sub>
+    </td>
+  </tr>
+</table>
 
 ## 为什么是 EffChat
 
@@ -54,18 +85,6 @@ EffChat 面向希望掌控模型、数据和运行边界的个人与小团队。
 - 支持 OpenAI-compatible Chat Completions、OpenAI Responses、Anthropic native 和 Google native 适配。
 - 模型、渠道、Tools、Skills、联网服务、用户组、配额、字体和系统配置均由管理后台治理。
 - 消息、模型 Token、工具、搜索、网页提取和 OCR 用量拥有统一统计口径，但不伪装成商业计费系统。
-
-<!--
-截图占位：把真实的、脱敏后的图片放入 docs/assets/screenshots/ 后，取消对应注释。
-建议文件名：chat-workspace.webp、file-and-tools.webp、admin-settings.webp。
-不要提交真实用户、真实 URL、密钥或生产数据截图。
-
-## 界面预览
-
-![对话工作台](docs/assets/screenshots/chat-workspace.webp)
-![文件与工具链](docs/assets/screenshots/file-and-tools.webp)
-![管理后台](docs/assets/screenshots/admin-settings.webp)
--->
 
 ## 架构一览
 

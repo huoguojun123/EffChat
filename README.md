@@ -93,13 +93,13 @@ flowchart LR
 
 ### 一条命令部署
 
-适合个人部署：自动下载同一测试版的 Compose 与 migration，生成本地随机密钥，拉取镜像并启动。
+适合个人部署：跟随提示选择安装目录和 Web 端口，其他配置使用安全默认值；脚本自动下载同一测试版的 Compose 与 migration，生成本地随机密钥，拉取镜像并启动。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
 ```
 
-默认访问 `http://127.0.0.1:8088`。想换安装目录：
+默认访问 `http://127.0.0.1:8088`。安装时直接按提示填写即可；也可以预先设置 `EFFCHAT_HOME` 或 `EFFCHAT_WEB_PORT` 跳过对应询问：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash

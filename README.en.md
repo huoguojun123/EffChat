@@ -97,13 +97,13 @@ Never commit real users, production URLs, credentials, or private data.
 
 ### One-command personal install
 
-The installer downloads the matching Compose template and migrations, creates local random secrets, pulls the published images, and starts EffChat.
+Follow the prompts for an installation directory and web port; safe defaults handle the rest. The installer downloads the matching Compose template and migrations, creates local random secrets, pulls the published images, and starts EffChat.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
 ```
 
-Open `http://127.0.0.1:8088`. To choose another installation directory:
+Open `http://127.0.0.1:8088`. You can also set `EFFCHAT_HOME` or `EFFCHAT_WEB_PORT` in advance to skip the corresponding prompt:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash

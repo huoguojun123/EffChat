@@ -10,7 +10,7 @@
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
 ```
 
-安装器会从同一测试版 tag 下载 `compose.yml` 和 migration，生成随机的 PostgreSQL/JWT secret，拉取 Docker Hub 镜像并等待服务健康。默认安装到当前目录的 `effchat/`，访问 `http://127.0.0.1:8088`。指定其他目录时运行：
+安装器会提示安装目录和 Web 端口；其他配置使用安全默认值。随后从同一测试版 tag 下载 `compose.yml` 和 migration，生成随机的 PostgreSQL/JWT secret，拉取 Docker Hub 镜像并等待服务健康。默认安装到当前目录的 `effchat/`，访问 `http://127.0.0.1:8088`。指定其他目录时运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash

@@ -11,6 +11,7 @@ REPO="${EFFCHAT_REPOSITORY:-huoguojun123/EffChat}"
 DEFAULT_VERSION="v0.3.4-beta.3"
 VERSION="${EFFCHAT_VERSION:-$DEFAULT_VERSION}"
 INSTALL_DIR="${EFFCHAT_HOME:-$PWD/effchat}"
+WEB_PORT="${EFFCHAT_WEB_PORT:-8088}"
 ARCHIVE_URL="https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.gz"
 
 die() {
@@ -22,6 +23,34 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v tar >/dev/null 2>&1 || die "tar is required"
 command -v docker >/dev/null 2>&1 || die "Docker is required"
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 is required"
+
+tty_fd=""
+if [ "${EFFCHAT_NONINTERACTIVE:-0}" != "1" ] && [ -r /dev/tty ]; then
+    exec 3</dev/tty
+    tty_fd=3
+fi
+
+prompt() {
+    local message="$1"
+    local default="$2"
+    local answer=""
+    if [ -n "$tty_fd" ]; then
+        read -r -u "$tty_fd" -p "$message [$default]: " answer
+        printf '\n' >&2
+    fi
+    printf '%s' "${answer:-$default}"
+}
+
+if [ -z "${EFFCHAT_HOME:-}" ]; then
+    INSTALL_DIR="$(prompt "Install directory" "$INSTALL_DIR")"
+fi
+if [ -z "${EFFCHAT_WEB_PORT:-}" ]; then
+    WEB_PORT="$(prompt "Web port" "$WEB_PORT")"
+fi
+case "$WEB_PORT" in
+    ''|*[!0-9]*) die "Web port must be a number between 1 and 65535" ;;
+esac
+[ "$WEB_PORT" -ge 1 ] && [ "$WEB_PORT" -le 65535 ] || die "Web port must be a number between 1 and 65535"
 
 case "$INSTALL_DIR" in
     ""|/|.|..|*/..|*/.) die "EFFCHAT_HOME must be a dedicated installation directory" ;;
@@ -62,7 +91,7 @@ cat > "$INSTALL_DIR/.env.docker" <<EOF
 COMPOSE_PROJECT_NAME=effchat
 DOCKER_NETWORK=effchat_net
 DATA_DIR=./data
-WEB_PORT=8088
+WEB_PORT=$WEB_PORT
 BACKEND_PORT=18080
 MIGRATIONS_DIR=./migrations
 POSTGRES_USER=effchat

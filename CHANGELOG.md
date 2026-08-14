@@ -26,6 +26,9 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Preserved existing environment values, ports, project names, data, storage,
   and backups during installer updates while archiving replaced deployment
   files under `deployment-backups/`.
+- Refreshed the compatible Go, frontend, Python extractor, and GitHub Actions
+  dependency batches without changing product APIs, migrations, or deployment
+  configuration contracts.
 
 ### Security
 

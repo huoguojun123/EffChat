@@ -17,7 +17,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.12.3
 	github.com/openai/openai-go/v3 v3.35.0
 	github.com/townsendmerino/aikit v1.16.0
 	github.com/xuri/excelize/v2 v2.10.1

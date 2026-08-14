@@ -1,37 +1,34 @@
-# Contributing to EffChat
+# 贡献指南
 
-EffChat is a small self-hosted project in active pre-release development.
-Focused bug fixes, tests, documentation corrections, and scoped improvements
-are welcome.
+EffChat 是一个仍在积极迭代的轻量自托管项目。欢迎提交边界清晰的 Bug 修复、测试、文档纠正和功能改进。
 
-## Before Opening a Change
+## 开始之前
 
-- Search existing issues and pull requests.
-- Open an issue before a large feature or architecture change.
-- Do not add real credentials, user data, private hosts, absolute local paths,
-  database dumps, generated reports, or deployment backups.
-- Keep one pull request focused on one problem.
-- Follow the existing Go backend and TypeScript/React frontend boundaries.
+- 先搜索已有 Issue 和 Pull Request，避免重复工作。
+- 大型功能或架构变化应先创建 Issue，确认问题、边界和维护成本。
+- 不得提交真实凭据、用户数据、私有主机、本机绝对路径、数据库 dump、生成报告或部署备份。
+- 一个 Pull Request 只解决一个明确问题；同一根因涉及的前后端、测试和文档可以放在一起。
+- 遵循现有 Go backend 与 TypeScript/React frontend 的职责边界。
 
-## Local Setup
+## 本地环境
 
-Requirements:
+需要安装：
 
-- Go version declared in `backend/go.mod`
-- Node.js 22 or newer and npm
-- Docker with Docker Compose
+- `backend/go.mod` 声明的 Go 版本；
+- Node.js 22 或更高版本与 npm；
+- Docker 与 Docker Compose。
 
-Start the complete stack:
+启动完整环境：
 
 ```bash
 cp .env.docker.example .env.docker
-# Replace POSTGRES_PASSWORD and JWT_SECRET before starting.
+# 启动前替换 POSTGRES_PASSWORD 和 JWT_SECRET
 scripts/docker-build.sh up
 ```
 
-## Verification
+## 验证
 
-Run the checks relevant to your change:
+根据改动范围执行对应检查：
 
 ```bash
 cd backend
@@ -49,22 +46,19 @@ docker compose --env-file .env.docker.example config
 git diff --check
 ```
 
-Database or migration changes must also pass:
+数据库或 migration 变更还必须执行：
 
 ```bash
 scripts/test-postgres.sh
 ```
 
-## Pull Requests
+## Pull Request
 
-- Use an English title and commit messages.
-- Explain behavior, motivation, data or compatibility impact, and verification.
-- Add or update focused tests for non-trivial behavior.
-- Update `README.md`, `ARCHITECTURE.md`, or public deployment documentation
-  when behavior or operational requirements change.
-- Include screenshots for visible UI changes on desktop and mobile.
-- Confirm that the change contains only synthetic fixtures and public-safe
-  documentation.
+- 标题和 Git commit 使用英文。
+- 正文说明行为变化、修改原因、数据或兼容性影响以及验证结果。
+- 非平凡行为必须补充能够复现根因并防止回归的测试。
+- 行为、架构或部署要求变化时，同步更新 `README.md`、`ARCHITECTURE.md` 或对应公开文档。
+- 可见 UI 变化应提供桌面端与移动端截图。
+- 确认测试只使用虚构数据，公开文档不含私有部署信息。
 
-By contributing, you agree that your contribution is licensed under the
-project license.
+提交贡献即表示你同意该贡献按照本项目许可证发布。

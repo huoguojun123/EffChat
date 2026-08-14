@@ -9,7 +9,7 @@
 ### 法律与治理
 
 - [x] 项目所有者已确定 Apache-2.0，根目录包含完整 `LICENSE`、`NOTICE` 和第三方声明。
-- [x] README 明确当前为 alpha/pre-release。
+- [x] README 明确当前为 beta/pre-release。
 - [x] `SECURITY.md` 提供 GitHub 私密漏洞报告入口。
 - [x] `CONTRIBUTING.md` 说明环境、测试、数据安全和 PR 规则。
 - [x] 已配置 Issue、PR 模板和 Dependabot。

@@ -1,6 +1,6 @@
 # 管理员配置指南
 
-适用版本：0.3.4-beta.1 release candidate
+本文描述当前 `main` 与最新测试版的管理员配置入口；版本差异见 [CHANGELOG](../CHANGELOG.md)。
 
 本项目的业务运行时配置都在管理员后台完成。`.env.docker` 只放数据库、JWT、端口、存储路径、Python extractor 内部地址等基础设施配置；模型渠道、API key、搜索和网页提取服务不写进 env。
 

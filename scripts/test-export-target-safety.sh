@@ -27,10 +27,14 @@ assert_hash() {
   [ "$(hash_file "$file")" = "$expected" ] || { echo "sentinel changed: $file" >&2; exit 1; }
 }
 
-mkdir -p "$TMP_DIR/public/scripts" "$TMP_DIR/runtime/data" "$TMP_DIR/runtime/src" "$TMP_DIR/internal"
+mkdir -p "$TMP_DIR/public/scripts" "$TMP_DIR/public/docs" "$TMP_DIR/runtime/data" "$TMP_DIR/runtime/src" "$TMP_DIR/internal"
 cp "$SCRIPT_DIR/export-public-source.sh" "$TMP_DIR/public/scripts/export-public-source.sh"
 chmod +x "$TMP_DIR/public/scripts/export-public-source.sh"
 printf 'source-only\n' > "$TMP_DIR/public/README.md"
+printf 'english-source-only\n' > "$TMP_DIR/public/README.en.md"
+printf 'deployment\n' > "$TMP_DIR/public/docs/deployment.md"
+printf 'administration\n' > "$TMP_DIR/public/docs/administration.md"
+printf 'release-checklist\n' > "$TMP_DIR/public/docs/release-checklist.md"
 
 printf 'parent-sentinel\n' > "$TMP_DIR/runtime/data/sentinel.txt"
 PARENT_HASH="$(hash_file "$TMP_DIR/runtime/data/sentinel.txt")"
@@ -52,6 +56,10 @@ assert_hash "$EXTERNAL_HASH" "$EXTERNAL_DIR/sentinel.txt"
 
 (cd "$TMP_DIR/public" && ./scripts/export-public-source.sh ../effchat-public-source)
 [ -f "$TMP_DIR/effchat-public-source/.effchat-public-source.marker" ]
+[ -f "$TMP_DIR/effchat-public-source/README.en.md" ]
+[ -f "$TMP_DIR/effchat-public-source/docs/deployment.md" ]
+[ -f "$TMP_DIR/effchat-public-source/docs/administration.md" ]
+[ -f "$TMP_DIR/effchat-public-source/docs/release-checklist.md" ]
 printf 'stale\n' > "$TMP_DIR/effchat-public-source/stale.txt"
 (cd "$TMP_DIR/public" && ./scripts/export-public-source.sh ../effchat-public-source)
 [ ! -e "$TMP_DIR/effchat-public-source/stale.txt" ]

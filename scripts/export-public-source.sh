@@ -127,11 +127,6 @@ rsync -a --delete --delete-excluded \
   --exclude='.env.local' \
   --exclude='.env.*.local' \
   --exclude='*.env' \
-  --exclude='docs/05-排障/' \
-  --exclude='docs/06-项目全量审查/' \
-  --exclude='docs/archive/' \
-  --exclude='docs/superpowers/' \
-  --exclude='docs/03-实施计划/开源初版功能取舍选择表.md' \
   "${ROOT_DIR}/" "${TARGET_REAL}/"
 
 rm -f \
@@ -139,18 +134,6 @@ rm -f \
   "${TARGET_REAL}/backend/PROGRESS.md" \
   "${TARGET_REAL}/backend/test_api.sh" \
   "${TARGET_REAL}/backend/test_stream.sh"
-
-if [[ -d "${TARGET_REAL}/docs" ]]; then
-  find "${TARGET_REAL}/docs" -mindepth 1 -maxdepth 1 ! -name '03-实施计划' -exec rm -rf {} +
-  if [[ -d "${TARGET_REAL}/docs/03-实施计划" ]]; then
-    find "${TARGET_REAL}/docs/03-实施计划" -type f \
-      ! -name 'Docker-Compose-部署.md' \
-      ! -name '管理员配置指南.md' \
-      ! -name '开源发布检查清单.md' \
-      -delete
-    find "${TARGET_REAL}/docs/03-实施计划" -type d -empty -delete
-  fi
-fi
 
 printf '%s\n' "$MARKER_VALUE" > "$MARKER_PATH"
 

@@ -1,88 +1,135 @@
-# EffChat
+<p align="center">
+  <img src="frontend/public/pwa-512x512.png" width="112" alt="EffChat logo">
+</p>
 
-EffChat 是一个面向小团队自托管的 AI agent workbench。目标是比重型聊天平台更轻、更快、更可控，同时保留多模型切换、Eino Agent、工具调用、文件工作区、Skills、流式输出和代码块工作区。
+<h1 align="center">EffChat</h1>
 
-[GitHub 仓库](https://github.com/huoguojun123/EffChat)
+<p align="center">
+  一个为真实工作链路而生的轻量、自托管 AI Agent 工作台。
+</p>
+
+<p align="center">
+  <strong>中文</strong> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/huoguojun123/EffChat/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/huoguojun123/EffChat/ci.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/huoguojun123/EffChat/releases"><img alt="Release" src="https://img.shields.io/github/v/release/huoguojun123/EffChat?include_prereleases&sort=semver"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111">
+</p>
+
+EffChat 面向希望掌控模型、数据和运行边界的个人与小团队。它保持部署简单、界面安静，但没有把复杂问题藏在一个聊天输入框后面：流式运行可以在断线后恢复，回答版本可以切换，长对话可以压缩而不抹去历史，文件、记忆和联网工具都拥有明确的生命周期与失败语义。
 
 > [!WARNING]
-> `v0.3.4-beta.3` 是当前测试版。它仍处于 beta 阶段，数据迁移、配置兼容性和公开 API 仍可能变化；升级前请使用 [Docker Compose 部署文档](docs/03-实施计划/Docker-Compose-部署.md#备份与隔离恢复) 中的一致备份入口，不要复制运行中的 PostgreSQL 数据目录。
+> 当前版本为 `v0.3.4-beta.3`。EffChat 仍处于测试阶段，升级前请先完成一致备份；数据迁移、配置兼容性和公开 API 仍可能在后续测试版中调整。
 
-## v0.3.4-beta.3 定位
+## 为什么是 EffChat
 
-当前预发布版按“小团队自托管 agent workbench”收口：
+### 对话不是一次 HTTP 请求
 
-- 管理员网页配置模型渠道、API key、搜索、网页提取服务和 MinerU 精准 OCR；OpenAI 渠道可明确选择 Chat Completions 兼容协议或 Responses 协议。
-- Docker 部署继续使用 `.env.docker`；环境变量文件只保留数据库凭据、JWT secret、端口、存储路径、Python extractor 内部地址和构建/网络等基础设施项。模型渠道、服务 API key 等业务配置由管理员页面保存。
-- 聊天运行、回答重试和断线恢复使用持久化 run/attempt 事实；浏览器连接中断后，后端仍可继续生成并在恢复时对账同一轮回答。
-- 现有工具支持后台启停、超时控制和上下文预算；错误作为结构化结果回传，降级单独计入管理统计；工具调用过程在消息内展示；Beta 保留必要治理审计，但不把完整工具调用正文复制成独立持久化日志。
-- 文件工作区按需读取解析文本，PDF 可优先走 MinerU 精准 OCR 并由本地解析兜底，支持磁盘删除、管理员手动清理遗留文件和大文件多窗口搜索。
-- 用户组支持每日消息数、每日模型 token 近似上限、并发 run、每日工具调用、每日搜索、每日网页提取和 OCR 限额。
+- **断线仍继续**：浏览器断开后，后端运行继续完成并落库；刷新或重新连接后通过 RunHub 与数据库恢复。
+- **回答可以比较**：同一轮的多个回答 attempt 会被持久化，可以左右切换和删除；发送给下一轮的始终是当前选中的版本。
+- **重试不制造重复事实**：零输出故障可以安全重试，已经产生正文、思考或工具输出后不会偷偷重放 provider 调用。
+- **压缩不等于删除历史**：checkpoint 只改变模型看到的上下文，用户仍能回看压缩前的完整消息。
 
-## 暂不包含
+### 文件真正进入 Agent 工作流
 
-Beta 不包含代码执行沙盒、Shell 工具、浏览器自动化、完整 RBAC、成本账单和 Skills marketplace。这些能力会显著扩大安全与部署边界，后续会作为可选 sidecar 或路线图能力重新设计。
+- 上传、暂存认领、解析文本、会话文件区、预览和鉴权下载共享同一套所有权边界。
+- 本地 Python sidecar 处理常见文档和表格；PDF 可选 MinerU 精准 OCR，并保留本地解析兜底。
+- 大文件按窗口读取，提取、OCR、删除和清理都有明确状态，不把半成品内容交给 Agent。
 
-## 技术栈
+### 记忆保持克制
 
-- Backend: Go + Gin + Eino
-- Frontend: Vite + React 19 + TypeScript + Tailwind CSS v4
-- Database: PostgreSQL
-- Extractor: Python sidecar
-- Deploy: Docker Compose
+- 记忆限定在单个会话内，不建立跨会话用户画像、向量库或隐式 RAG。
+- 支持自动维护、手动整理、失败重试、变更记录和撤销。
+- 密码、Token、Authorization、私钥等敏感内容在写入和再次上送模型前受到统一保护。
+
+### 联网能力可以拆开治理
+
+- 搜索与网页提取是两条独立工具链，可以分别启停、排序和限额。
+- Firecrawl、Jina、Tavily Extract、Exa Extract 等 provider 按管理员顺序执行，Basic 作为无需凭据的本地末级兜底。
+- 长正文先做本地相关内容选择；模型提炼可以关闭，失败时回退相关原文，而不是简单截取页面开头。
+
+### 从模型到配额都可见、可控
+
+- 支持 OpenAI-compatible Chat Completions、OpenAI Responses、Anthropic native 和 Google native 适配。
+- 模型、渠道、Tools、Skills、联网服务、用户组、配额、字体和系统配置均由管理后台治理。
+- 消息、模型 Token、工具、搜索、网页提取和 OCR 用量拥有统一统计口径，但不伪装成商业计费系统。
+
+## 架构一览
+
+```mermaid
+flowchart LR
+    Browser["浏览器 / PWA"] --> Web["React Web"]
+    Web --> API["Go API"]
+    API --> Agent["Eino ReAct Agent"]
+    Agent --> Models["模型渠道"]
+    Agent --> Tools["Tools / Skills"]
+    API --> DB[(PostgreSQL)]
+    API --> Storage["受管本地存储"]
+    API --> Extractor["Python Extractor / OCR"]
+```
+
+- **Backend**：Go、Gin、Eino
+- **Frontend**：React 19、TypeScript、Vite、Tailwind CSS v4
+- **Database**：PostgreSQL
+- **Extractor**：隔离的 Python sidecar
+- **Deployment**：Docker Compose
+
+完整设计与运行不变量见 [架构文档](ARCHITECTURE.md)。
 
 ## 快速开始
+
+### 使用已发布镜像
+
+适合希望直接运行 EffChat、无需在部署机编译前后端的用户：
 
 ```bash
 git clone https://github.com/huoguojun123/EffChat.git
 cd EffChat
 cp .env.docker.example .env.docker
-# 编辑 .env.docker，至少替换 POSTGRES_PASSWORD 和 JWT_SECRET
-scripts/docker-build.sh up
-```
-
-首次启动后，首个注册用户会自动成为管理员。进入管理后台配置渠道、模型、联网服务、工具、用户组限额、字体和文件清理。
-
-详细部署步骤见 [Docker-Compose-部署.md](docs/03-实施计划/Docker-Compose-部署.md)。
-管理员使用步骤见 [管理员配置指南.md](docs/03-实施计划/管理员配置指南.md)。
-
-已有 `.env.docker` 和数据目录、只希望从 Docker Hub 拉取测试版镜像时，可使用
-registry 部署模板：
-
-```bash
+# 至少替换 POSTGRES_PASSWORD 和 JWT_SECRET
 docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
 
-该模板不在部署机编译应用，但仍需要保留同一版本源码中的
-`backend/migrations/` 作为迁移输入；具体目录结构和升级边界见部署文档。
+### 从源码构建
+
+```bash
+git clone https://github.com/huoguojun123/EffChat.git
+cd EffChat
+cp .env.docker.example .env.docker
+# 至少替换 POSTGRES_PASSWORD 和 JWT_SECRET
+scripts/docker-build.sh up
+```
+
+启动后访问 `http://localhost:8088`。新实例注册的首个用户会自动成为管理员，然后可在管理后台配置模型渠道、联网服务、工具、用户组和文件策略。
+
+升级、备份、恢复、数据目录和反向代理配置见 [Docker Compose 部署](docs/deployment.md)。
+
+## 文档
+
+- [管理员配置](docs/administration.md)：模型、渠道、联网服务、记忆容量、配额、字体与文件治理。
+- [Docker Compose 部署](docs/deployment.md)：镜像部署、源码构建、升级、备份与隔离恢复。
+- [架构文档](ARCHITECTURE.md)：核心数据流、恢复契约、文件、记忆、Agent 与治理边界。
+- [贡献指南](CONTRIBUTING.md)：开发环境、验证命令和 Pull Request 规则。
+- [数据库迁移](backend/migrations/README.md)：migration runner、升级规则与故障处理。
+- [版本记录](CHANGELOG.md)：测试版变化与兼容性说明。
+
+## 当前边界
+
+EffChat 当前专注于自托管 Agent 工作台，不包含代码执行沙盒、Shell 工具、浏览器自动化、完整 RBAC、商业账单或 Skills marketplace。这些能力会显著扩大安全和部署边界，不会以未经治理的开关形式塞进主进程。
 
 ## 安全与贡献
 
-- 安全漏洞请按 [SECURITY.md](SECURITY.md) 私下报告，不要公开创建 Issue。
-- 开发环境、验证命令和 PR 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-- 当前版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+- 安全漏洞请通过 [GitHub Private Vulnerability Reporting](https://github.com/huoguojun123/EffChat/security/advisories/new) 私下报告，不要公开创建 Issue。
+- Bug 报告、功能建议和代码贡献请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 示例、测试和 Issue 中不得包含真实凭据、生产日志、用户数据或私有部署信息。
 
 ## 许可证
 
-EffChat 自有源码采用 [Apache License 2.0](LICENSE)。第三方依赖与素材继续
-遵循各自许可证，主要依赖及非代码素材的声明见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 和 [NOTICE](NOTICE)。三个应用
-镜像还会在构建时从实际分发依赖生成可离线校验的组件级许可归档。
+EffChat 自有源码采用 [Apache License 2.0](LICENSE)。第三方依赖、提示词和素材继续遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [NOTICE](NOTICE)。发布镜像同时携带从实际分发依赖生成的组件级许可归档。
 
-## 开源发布
-
-公开源码导出使用：
-
-```bash
-bash scripts/export-public-source.sh /path/to/public-export
-```
-
-导出目标会写入 `.effchat-public-source.marker`，后续 `rsync --delete` 只接受空目录或带有效 marker 的既有目录。在三线工作区首次接管已有的 `runtime/src` 时，必须显式执行一次：
-
-```bash
-EFFCHAT_EXPORT_INITIALIZE=1 bash scripts/export-public-source.sh ../runtime/src
-```
-
-该初始化仅允许规范化后的工作区 `runtime/src`；源码目录、其祖先/子目录、符号链接别名、其他工作区目录以及无 marker 的任意非空目录都会在创建或删除文件前失败。
-
-发布前请按 [开源发布检查清单.md](docs/03-实施计划/开源发布检查清单.md) 做泄密和产物扫描。
+面向维护者的发布门禁见 [发布检查清单](docs/release-checklist.md)。

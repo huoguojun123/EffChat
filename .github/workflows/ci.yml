@@ -141,6 +141,8 @@ jobs:
         run: scripts/test-python-audit-contract.sh
       - name: Test export target fencing
         run: scripts/test-export-target-safety.sh
+      - name: Test one-command install contract
+        run: scripts/test-install-contract.sh
       - name: Test Compose environment contract
         run: scripts/test-compose-env-contract.sh
       - name: Test upload limit contract

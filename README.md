@@ -22,9 +22,6 @@
 
 EffChat 面向希望掌控模型、数据和运行边界的个人与小团队。它保持部署简单、界面安静，但没有把复杂问题藏在一个聊天输入框后面：流式运行可以在断线后恢复，回答版本可以切换，长对话可以压缩而不抹去历史，文件、记忆和联网工具都拥有明确的生命周期与失败语义。
 
-> [!WARNING]
-> 当前版本为 `v0.3.4-beta.3`。EffChat 仍处于测试阶段，升级前请先完成一致备份；数据迁移、配置兼容性和公开 API 仍可能在后续测试版中调整。
-
 ## 为什么是 EffChat
 
 ### 对话不是一次 HTTP 请求
@@ -58,6 +55,18 @@ EffChat 面向希望掌控模型、数据和运行边界的个人与小团队。
 - 模型、渠道、Tools、Skills、联网服务、用户组、配额、字体和系统配置均由管理后台治理。
 - 消息、模型 Token、工具、搜索、网页提取和 OCR 用量拥有统一统计口径，但不伪装成商业计费系统。
 
+<!--
+截图占位：把真实的、脱敏后的图片放入 docs/assets/screenshots/ 后，取消对应注释。
+建议文件名：chat-workspace.webp、file-and-tools.webp、admin-settings.webp。
+不要提交真实用户、真实 URL、密钥或生产数据截图。
+
+## 界面预览
+
+![对话工作台](docs/assets/screenshots/chat-workspace.webp)
+![文件与工具链](docs/assets/screenshots/file-and-tools.webp)
+![管理后台](docs/assets/screenshots/admin-settings.webp)
+-->
+
 ## 架构一览
 
 ```mermaid
@@ -82,9 +91,27 @@ flowchart LR
 
 ## 快速开始
 
-### 使用已发布镜像
+### 一条命令部署
 
-适合希望直接运行 EffChat、无需在部署机编译前后端的用户：
+适合个人部署：自动下载同一测试版的 Compose 与 migration，生成本地随机密钥，拉取镜像并启动。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
+```
+
+默认访问 `http://127.0.0.1:8088`。想换安装目录：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
+```
+
+已有配置或数据的目录会被保护，不会覆盖。
+
+### 标准 Docker Compose 部署
+
+适合需要自己管理目录、环境变量、端口、升级和备份的用户。先克隆仓库，再选择已发布镜像或源码构建：
+
+#### 使用已发布镜像
 
 ```bash
 git clone https://github.com/huoguojun123/EffChat.git
@@ -95,7 +122,7 @@ docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
 
-### 从源码构建
+#### 从源码构建
 
 ```bash
 git clone https://github.com/huoguojun123/EffChat.git

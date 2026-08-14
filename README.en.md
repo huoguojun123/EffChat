@@ -80,11 +80,40 @@ flowchart LR
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete design and runtime invariants.
 
+<!--
+Screenshot slots: place real, sanitized images in docs/assets/screenshots/ and
+uncomment this block. Suggested names are
+chat-workspace.webp, file-and-tools.webp, and admin-settings.webp.
+Never commit real users, production URLs, credentials, or private data.
+
+## Screenshots
+
+![Chat workspace](docs/assets/screenshots/chat-workspace.webp)
+![Files and tools](docs/assets/screenshots/file-and-tools.webp)
+![Administration](docs/assets/screenshots/admin-settings.webp)
+-->
+
 ## Quick start
 
-### Run published images
+### One-command personal install
 
-Recommended when you want to run EffChat without compiling the applications on the deployment host:
+The installer downloads the matching Compose template and migrations, creates local random secrets, pulls the published images, and starts EffChat.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
+```
+
+Open `http://127.0.0.1:8088`. To choose another installation directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
+```
+
+Existing configuration or data directories are never overwritten.
+
+### Standard Docker Compose
+
+For users who want to manage directories, environment variables, ports, upgrades, and backups themselves:
 
 ```bash
 git clone https://github.com/huoguojun123/EffChat.git
@@ -95,15 +124,7 @@ docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
 
-### Build from source
-
-```bash
-git clone https://github.com/huoguojun123/EffChat.git
-cd EffChat
-cp .env.docker.example .env.docker
-# Replace at least POSTGRES_PASSWORD and JWT_SECRET
-scripts/docker-build.sh up
-```
+To build locally instead, run `scripts/docker-build.sh up` after copying the environment template.
 
 Open `http://localhost:8088`. The first account registered on a fresh instance becomes the administrator and can configure model channels, web services, tools, user groups, and file policies.
 

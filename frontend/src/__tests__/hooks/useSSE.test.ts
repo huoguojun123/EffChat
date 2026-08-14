@@ -95,7 +95,7 @@ const mocks = vi.hoisted(() => {
     getActiveRun: vi.fn(),
     getRunStatus: vi.fn(),
     cancelRun: vi.fn(),
-    listMessages: vi.fn(),
+    listMessageWindow: vi.fn(),
     preflightSessionMessage: vi.fn(),
     handleAuthExpired: vi.fn(),
   }
@@ -117,7 +117,7 @@ vi.mock("@/api/runs", () => ({
 }))
 
 vi.mock("@/api/messages", () => ({
-  listMessages: mocks.listMessages,
+  listMessageWindow: mocks.listMessageWindow,
 }))
 
 vi.mock("@/api/sessions", () => ({
@@ -160,8 +160,8 @@ describe("useSSE", () => {
     mocks.getRunStatus.mockReset()
     mocks.cancelRun.mockReset()
     mocks.cancelRun.mockResolvedValue(undefined)
-    mocks.listMessages.mockReset()
-    mocks.listMessages.mockResolvedValue({ messages: [], has_more: false })
+    mocks.listMessageWindow.mockReset()
+    mocks.listMessageWindow.mockResolvedValue({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     const loadMessages = mocks.store.loadMessages as ReturnType<typeof vi.fn>
     loadMessages.mockReset()
     mocks.preflightSessionMessage.mockReset()
@@ -239,7 +239,7 @@ describe("useSSE", () => {
 
     expect(mocks.getActiveRun).toHaveBeenCalledWith(1)
     expect(mocks.store.beginCompaction).toHaveBeenCalledWith(1, "compact-resume", "正在整理会话上下文")
-    expect(mocks.listMessages).toHaveBeenCalledWith(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 })
     expect(mocks.store.setMessages).not.toHaveBeenCalled()
     expect(mocks.store.syncMessages).toHaveBeenCalledWith([], 0)
   })
@@ -404,7 +404,7 @@ describe("useSSE", () => {
         content: "",
       },
     })
-    mocks.listMessages.mockResolvedValue({ messages: [acceptedUserMessage], has_more: false })
+    mocks.listMessageWindow.mockResolvedValue({ messages: [acceptedUserMessage], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       'event: message_complete\ndata: {"finish_reason":"stop"}\n\n',
       { status: 200, headers: { "Content-Type": "text/event-stream" } }
@@ -533,7 +533,7 @@ describe("useSSE", () => {
         content: "initial snapshot",
       },
     })
-    mocks.listMessages.mockResolvedValue({ messages: [], has_more: false })
+    mocks.listMessageWindow.mockResolvedValue({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     let controller!: ReadableStreamDefaultController<Uint8Array>
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(new ReadableStream({
       start(nextController) {
@@ -607,7 +607,7 @@ describe("useSSE", () => {
     const { resumeActiveRun } = useSSE()
     await resumeActiveRun(1)
 
-    expect(mocks.listMessages).toHaveBeenCalledTimes(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledTimes(1)
     expect(mocks.store.updateStreaming).toHaveBeenCalledWith(expect.objectContaining({ status: "syncing" }))
     expect(mocks.store.updateStreaming).not.toHaveBeenCalledWith(expect.objectContaining({ status: "failed_local" }))
   })
@@ -675,7 +675,7 @@ describe("useSSE", () => {
     await vi.waitFor(() => expect((mocks.store.streaming as { status: string }).status).toBe("idle"))
     expect(onAccepted).toHaveBeenCalledTimes(1)
     expect(mocks.store.addMessage).toHaveBeenCalledTimes(1)
-    expect(mocks.listMessages).toHaveBeenCalledWith(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 })
   })
 
   it("waits through an initial missing run before accepting an uncertain delivery", async () => {
@@ -832,12 +832,12 @@ describe("useSSE", () => {
   })
 
   it("protects the original user turn when retry requires compaction", async () => {
-    mocks.listMessages.mockResolvedValue({
+    mocks.listMessageWindow.mockResolvedValue({
       messages: [
         { id: 9, session_id: 1, role: "user", message_data: { role: "user", content: "retry user" } },
         { id: 10, session_id: 1, role: "assistant", message_data: { role: "assistant", content: "old answer" } },
       ],
-      has_more: false,
+      first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false,
     })
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce({
@@ -880,9 +880,9 @@ describe("useSSE", () => {
       has_reasoning: false,
       message_data: { role: "user", content: "original" },
     }
-    mocks.listMessages
-      .mockResolvedValueOnce({ messages: [original], has_more: false })
-      .mockResolvedValueOnce({ messages: [{ ...original, id: 42, message_data: { role: "user", content: "edited" } }], has_more: false })
+    mocks.listMessageWindow
+      .mockResolvedValueOnce({ messages: [original], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
+      .mockResolvedValueOnce({ messages: [{ ...original, id: 42, message_data: { role: "user", content: "edited" } }], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       [
         'event: message_start\ndata: {"user_message_id":42}\n\n',
@@ -913,7 +913,7 @@ describe("useSSE", () => {
       has_reasoning: false,
       message_data: { role: "user", content: "original" },
     }
-    mocks.listMessages.mockResolvedValue({ messages: [original], has_more: false })
+    mocks.listMessageWindow.mockResolvedValue({ messages: [original], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       JSON.stringify({
         error: "助手已开始输出，不能再修改这条消息",
@@ -958,9 +958,9 @@ describe("useSSE", () => {
       { id: 9, session_id: 1, role: "user", message_data: { role: "user", content: "retry user" } },
       { id: 10, session_id: 1, role: "assistant", message_data: { role: "assistant", content: "previous answer" } },
     ]
-    mocks.listMessages
-      .mockResolvedValueOnce({ messages: selectedMessages, has_more: false })
-      .mockResolvedValueOnce({ messages: selectedMessages, has_more: false })
+    mocks.listMessageWindow
+      .mockResolvedValueOnce({ messages: selectedMessages, first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
+      .mockResolvedValueOnce({ messages: selectedMessages, first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       'event: error\ndata: {"error":"模型服务暂时不可用，请稍后重试","code":"model_upstream_unavailable","message_id":99}\n\n',
       { status: 200, headers: { "Content-Type": "text/event-stream" } }
@@ -974,12 +974,12 @@ describe("useSSE", () => {
   })
 
   it("does not retry after protected compaction cannot shrink the context", async () => {
-    mocks.listMessages.mockResolvedValue({
+    mocks.listMessageWindow.mockResolvedValue({
       messages: [
         { id: 9, session_id: 1, role: "user", message_data: { role: "user", content: "retry user" } },
         { id: 10, session_id: 1, role: "assistant", message_data: { role: "assistant", content: "old answer" } },
       ],
-      has_more: false,
+      first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false,
     })
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce({
@@ -1130,8 +1130,8 @@ describe("useSSE", () => {
         firstBodyController = controller
       },
     })
-    const currentReconciliation = deferred<{ messages: never[]; has_more: boolean }>()
-    mocks.listMessages.mockReturnValueOnce(currentReconciliation.promise)
+    const currentReconciliation = deferred<{ messages: never[]; first_turn_id: number; last_turn_id: number; has_older: boolean; has_newer: boolean }>()
+    mocks.listMessageWindow.mockReturnValueOnce(currentReconciliation.promise)
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce(new Response(firstBody, {
         status: 200,
@@ -1147,18 +1147,67 @@ describe("useSSE", () => {
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1))
 
     const current = sendMessage(1, "replacement draft")
-    await vi.waitFor(() => expect(mocks.listMessages).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(mocks.listMessageWindow).toHaveBeenCalledTimes(1))
 
     firstBodyController.enqueue(new TextEncoder().encode(
       'event: message_complete\\ndata: {"finish_reason":"stop"}\\n\\n'
     ))
     firstBodyController.close()
 
-    currentReconciliation.resolve({ messages: [], has_more: false })
+    currentReconciliation.resolve({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     await Promise.all([first, current])
 
-    expect(mocks.listMessages).toHaveBeenCalledTimes(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledTimes(1)
     expect(mocks.store.syncMessages).toHaveBeenCalledWith([], 0)
+  })
+
+  it("reconciles terminal messages from the latest window while preserving loaded older pages", async () => {
+    const loadedOlder = {
+      id: 1,
+      session_id: 1,
+      role: "user",
+      message_data: { role: "user", content: "older turn" },
+    }
+    const activeCheckpoint = {
+      id: 50,
+      session_id: 1,
+      role: "user",
+      message_data: { role: "user", content: "checkpoint", metadata: { compaction_summary: true } },
+    }
+    const latestUser = {
+      id: 60,
+      session_id: 1,
+      role: "user",
+      message_data: { role: "user", content: "latest turn" },
+    }
+    const latestAssistant = {
+      id: 61,
+      session_id: 1,
+      role: "assistant",
+      message_data: { role: "assistant", content: "latest answer" },
+    }
+    const latestWindow = [activeCheckpoint, latestUser, latestAssistant]
+    mocks.store.messages = [loadedOlder]
+    mocks.store.hasMoreMessages = true
+    mocks.listMessageWindow.mockResolvedValue({
+      messages: latestWindow,
+      first_turn_id: 60,
+      last_turn_id: 60,
+      has_older: false,
+      has_newer: false,
+    })
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
+      'event: message_complete\ndata: {"finish_reason":"stop"}\n\n',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } }
+    ))
+
+    const { sendMessage } = useSSE()
+    await sendMessage(1, "continue")
+
+    expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 })
+    expect(mocks.store.syncMessages).toHaveBeenCalledWith(latestWindow, 0)
+    expect(mocks.store.hasMoreMessages).toBe(true)
+    expect(mocks.store.hasNewerMessages).toBe(false)
   })
 
   it("does not abort a newer session stream while cleaning up the previous session", async () => {
@@ -1207,8 +1256,8 @@ describe("useSSE", () => {
   })
 
   it("does not apply an old reconciliation after returning to the same session", async () => {
-    const reconciliation = deferred<{ messages: never[]; has_more: boolean }>()
-    mocks.listMessages.mockReturnValue(reconciliation.promise)
+    const reconciliation = deferred<{ messages: never[]; first_turn_id: number; last_turn_id: number; has_older: boolean; has_newer: boolean }>()
+    mocks.listMessageWindow.mockReturnValue(reconciliation.promise)
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       'event: message_complete\ndata: {"finish_reason":"stop"}\n\n',
       { status: 200, headers: { "Content-Type": "text/event-stream" } }
@@ -1216,21 +1265,21 @@ describe("useSSE", () => {
 
     const { sendMessage } = useSSE()
     const pending = sendMessage(1, "reconcile me")
-    await vi.waitFor(() => expect(mocks.listMessages).toHaveBeenCalledWith(1))
+    await vi.waitFor(() => expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 }))
 
     mocks.store.activeSessionId = 2
     mocks.store.activeSessionGeneration = 1
     mocks.store.activeSessionId = 1
     mocks.store.activeSessionGeneration = 2
-    reconciliation.resolve({ messages: [], has_more: false })
+    reconciliation.resolve({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     await pending
 
     expect(mocks.store.syncMessages).not.toHaveBeenCalled()
   })
 
   it("does not apply terminal reconciliation after the message window changes", async () => {
-    const reconciliation = deferred<{ messages: never[]; has_more: boolean }>()
-    mocks.listMessages.mockReturnValue(reconciliation.promise)
+    const reconciliation = deferred<{ messages: never[]; first_turn_id: number; last_turn_id: number; has_older: boolean; has_newer: boolean }>()
+    mocks.listMessageWindow.mockReturnValue(reconciliation.promise)
     vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
       'event: message_complete\ndata: {"finish_reason":"stop"}\n\n',
       { status: 200, headers: { "Content-Type": "text/event-stream" } }
@@ -1238,10 +1287,10 @@ describe("useSSE", () => {
 
     const { sendMessage } = useSSE()
     const pending = sendMessage(1, "reconcile current window")
-    await vi.waitFor(() => expect(mocks.listMessages).toHaveBeenCalledWith(1))
+    await vi.waitFor(() => expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 }))
 
     mocks.store.messageWindowGeneration = 1
-    reconciliation.resolve({ messages: [], has_more: false })
+    reconciliation.resolve({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
     await pending
 
     expect(mocks.store.syncMessages).not.toHaveBeenCalled()
@@ -1424,7 +1473,7 @@ describe("useSSE", () => {
     await vi.advanceTimersByTimeAsync(400)
 
     expect(mocks.getRunStatus).toHaveBeenCalledTimes(2)
-    expect(mocks.listMessages).toHaveBeenCalledWith(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 })
     expect((mocks.store.streaming as { status: string }).status).toBe("idle")
   })
 
@@ -1511,7 +1560,7 @@ describe("useSSE", () => {
 
     expect(mocks.cancelRun).toHaveBeenCalledWith(1, "run-stop")
     expect(mocks.getRunStatus).toHaveBeenCalledTimes(11)
-    expect(mocks.listMessages).toHaveBeenCalledWith(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 })
     expect(mocks.store.commitStreamingMessage).toHaveBeenCalledWith(expect.objectContaining({
       content: "already visible",
       metadata: expect.objectContaining({ incomplete: true }),
@@ -1544,7 +1593,7 @@ describe("useSSE", () => {
     await vi.advanceTimersByTimeAsync(7200)
     await pending
 
-    expect(mocks.listMessages).not.toHaveBeenCalled()
+    expect(mocks.listMessageWindow).not.toHaveBeenCalled()
     expect(mocks.store.updateStreaming).toHaveBeenCalledWith(expect.objectContaining({
       status: "recovering",
       requestId: "run-still-stopping",
@@ -1609,7 +1658,7 @@ describe("useSSE", () => {
     try {
       await vi.advanceTimersByTimeAsync(0)
       expect(mocks.getRunStatus).toHaveBeenCalledWith(1, "run-terminal-failed", expect.any(Number))
-      expect(mocks.listMessages).toHaveBeenCalledWith(1)
+      expect(mocks.listMessageWindow).toHaveBeenCalledWith(1, { latest: true, turnLimit: 16 })
       expect(mocks.store.updateMessagesByRequest).toHaveBeenCalledWith("run-terminal-failed", expect.objectContaining({
         local_state: "failed_local",
         local_error: "回复已生成但保存失败，请重试最后一条消息",

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -219,6 +220,246 @@ func TestMessageRepositoryWindowUsesActiveCompactionCheckpoint(t *testing.T) {
 	if total != 20 || hasMore || len(turns) != 20 || turns[0].ID != preCheckpointTurns[0] {
 		t.Fatalf("post-checkpoint turn index = len:%d total:%d hasMore:%v first:%d", len(turns), total, hasMore, turns[0].ID)
 	}
+}
+
+func TestMessageRepositorySupersedesLogicallyOlderCheckpoint(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "checkpoint_supersession")
+	session := &model.Session{UserID: userID, Title: "checkpoint supersession", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM messages WHERE session_id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+
+	repo := NewMessageRepository(db)
+	userMessages := make([]*model.Message, 0, 4)
+	for i := 0; i < 4; i++ {
+		message := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: fmt.Appendf(nil, `{"role":"user","content":"turn %d"}`, i+1)}
+		if err := repo.Create(message); err != nil {
+			t.Fatal(err)
+		}
+		userMessages = append(userMessages, message)
+	}
+
+	firstBoundary := userMessages[2].ID
+	first := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData: fmt.Appendf(nil,
+			`{"role":"user","content":"first checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"auto","compaction_before_message_id":%d}}`,
+			firstBoundary,
+		),
+	}
+	if err := repo.PersistCheckpoint(first, firstBoundary); err != nil {
+		t.Fatal(err)
+	}
+
+	// The checkpoint is physically newer than the preserved tail but logically
+	// belongs at its metadata boundary. A later checkpoint must supersede it by
+	// that logical position even when the old physical id equals the new boundary.
+	secondBoundary := first.ID
+	second := &model.Message{
+		SessionID:     session.ID,
+		SchemaVersion: "v1",
+		MessageData: fmt.Appendf(nil,
+			`{"role":"user","content":"second checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"manual","compaction_before_message_id":%d}}`,
+			secondBoundary,
+		),
+	}
+	if err := repo.PersistCheckpoint(second, secondBoundary); err != nil {
+		t.Fatal(err)
+	}
+
+	var activeCount int
+	var activeID int64
+	if err := db.QueryRow(`
+		SELECT COUNT(*), COALESCE(MAX(id), 0)
+		FROM messages
+		WHERE session_id = $1
+		  AND deleted_at IS NULL
+		  AND compressed_at IS NULL
+		  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
+	`, session.ID).Scan(&activeCount, &activeID); err != nil {
+		t.Fatal(err)
+	}
+	if activeCount != 1 || activeID != second.ID {
+		t.Fatalf("active checkpoints = count:%d id:%d, want only %d", activeCount, activeID, second.ID)
+	}
+
+	var firstCompressedAt sql.NullTime
+	var firstOwner sql.NullInt64
+	if err := db.QueryRow("SELECT compressed_at, compression_summary_id FROM messages WHERE id = $1", first.ID).Scan(&firstCompressedAt, &firstOwner); err != nil {
+		t.Fatal(err)
+	}
+	if !firstCompressedAt.Valid || !firstOwner.Valid || firstOwner.Int64 != second.ID {
+		t.Fatalf("first checkpoint owner = compressed:%v summary:%v, want summary %d", firstCompressedAt.Valid, firstOwner, second.ID)
+	}
+
+	agentMessages, err := repo.ListBySessionContext(t.Context(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsMessageID(agentMessages, first.ID) || !containsMessageID(agentMessages, second.ID) {
+		t.Fatalf("agent checkpoint projection contains first:%v second:%v", containsMessageID(agentMessages, first.ID), containsMessageID(agentMessages, second.ID))
+	}
+}
+
+func TestMessageRepositoryWindowAnchorsNestedAndLegacyCheckpoints(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	repo := NewMessageRepository(db)
+
+	createSession := func(username string) (*model.Session, int64) {
+		t.Helper()
+		userID := createRepositoryTestUser(t, db, username)
+		session := &model.Session{UserID: userID, Title: username, ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+		if err := NewSessionRepository(db).Create(session); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = db.Exec("DELETE FROM messages WHERE session_id = $1", session.ID)
+			_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+			_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+		})
+		return session, userID
+	}
+	createUsers := func(sessionID int64, count int) []int64 {
+		t.Helper()
+		ids := make([]int64, 0, count)
+		for i := 0; i < count; i++ {
+			message := &model.Message{SessionID: sessionID, SchemaVersion: "v1", MessageData: fmt.Appendf(nil, `{"role":"user","content":"turn %d"}`, i+1)}
+			if err := repo.Create(message); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, message.ID)
+		}
+		return ids
+	}
+
+	t.Run("metadata boundary anchors a summary-only checkpoint", func(t *testing.T) {
+		session, _ := createSession("nested_checkpoint_anchor")
+		turnIDs := createUsers(session.ID, 5)
+		firstBoundary := turnIDs[len(turnIDs)-1] + 1
+		first := &model.Message{
+			SessionID:     session.ID,
+			SchemaVersion: "v1",
+			MessageData: fmt.Appendf(nil,
+				`{"role":"user","content":"first checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"auto","compaction_before_message_id":%d}}`,
+				firstBoundary,
+			),
+		}
+		if err := repo.PersistCheckpoint(first, firstBoundary); err != nil {
+			t.Fatal(err)
+		}
+
+		secondBoundary := first.ID + 1
+		second := &model.Message{
+			SessionID:     session.ID,
+			SchemaVersion: "v1",
+			MessageData: fmt.Appendf(nil,
+				`{"role":"user","content":"nested checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"auto","compaction_before_message_id":%d}}`,
+				secondBoundary,
+			),
+		}
+		if err := repo.PersistCheckpoint(second, secondBoundary); err != nil {
+			t.Fatal(err)
+		}
+
+		var directUserChildren int
+		if err := db.QueryRow(`
+			SELECT COUNT(*)
+			FROM messages
+			WHERE compression_summary_id = $1
+			  AND role = 'user'
+			  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') <> 'true'
+		`, second.ID).Scan(&directUserChildren); err != nil {
+			t.Fatal(err)
+		}
+		if directUserChildren != 0 {
+			t.Fatalf("nested checkpoint has %d direct ordinary user children, want 0", directUserChildren)
+		}
+
+		latest, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !windowContainsMessage(latest, second.ID) || windowContainsMessage(latest, first.ID) || countCompactionSummaries(latest.Messages) != 1 {
+			t.Fatalf("latest nested checkpoint projection = %+v", messageIDs(latest.Messages))
+		}
+
+		older, err := repo.ListMessageWindow(session.ID, MessageWindowBefore, latest.FirstTurnID, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if countCompactionSummaries(older.Messages) != 0 {
+			t.Fatalf("checkpoint leaked into older page: %+v", messageIDs(older.Messages))
+		}
+
+		around, err := repo.ListMessageWindow(session.ID, MessageWindowAround, turnIDs[len(turnIDs)-1], 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !windowContainsMessage(around, second.ID) || countCompactionSummaries(around.Messages) != 1 {
+			t.Fatalf("around anchor projection = %+v", messageIDs(around.Messages))
+		}
+	})
+
+	t.Run("legacy checkpoint falls back to direct children", func(t *testing.T) {
+		session, _ := createSession("legacy_checkpoint_anchor")
+		turnIDs := createUsers(session.ID, 2)
+		legacy := &model.Message{
+			SessionID:     session.ID,
+			SchemaVersion: "v1",
+			MessageData:   []byte(`{"role":"user","content":"legacy checkpoint","metadata":{"compaction_summary":true,"compaction_kind":"manual"}}`),
+		}
+		if err := repo.PersistCheckpoint(legacy, turnIDs[len(turnIDs)-1]+1); err != nil {
+			t.Fatal(err)
+		}
+		window, err := repo.ListMessageWindow(session.ID, MessageWindowLatest, 0, 16)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !windowContainsMessage(window, legacy.ID) || countCompactionSummaries(window.Messages) != 1 {
+			t.Fatalf("legacy checkpoint projection = %+v", messageIDs(window.Messages))
+		}
+	})
+}
+
+func containsMessageID(messages []*model.Message, messageID int64) bool {
+	for _, message := range messages {
+		if message.ID == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+func countCompactionSummaries(messages []*model.Message) int {
+	count := 0
+	for _, message := range messages {
+		var data struct {
+			Metadata struct {
+				CompactionSummary bool `json:"compaction_summary"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal(message.MessageData, &data); err == nil && data.Metadata.CompactionSummary {
+			count++
+		}
+	}
+	return count
+}
+
+func messageIDs(messages []*model.Message) []int64 {
+	ids := make([]int64, 0, len(messages))
+	for _, message := range messages {
+		ids = append(ids, message.ID)
+	}
+	return ids
 }
 
 func windowContainsMessage(window *MessageWindow, messageID int64) bool {

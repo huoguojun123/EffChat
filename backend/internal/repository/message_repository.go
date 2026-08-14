@@ -874,18 +874,42 @@ func (r *MessageRepository) ListMessageWindow(sessionID int64, mode MessageWindo
 		// without replacing old messages or appearing on multiple pages.
 		var checkpointAnchor sql.NullInt64
 		if err := r.db.QueryRow(`
-			SELECT MAX(history.id)
-			FROM messages checkpoint
-			JOIN messages history
-			  ON history.compression_summary_id = checkpoint.id
-			 AND history.id <> checkpoint.id
-			WHERE checkpoint.session_id = $1
-			  AND checkpoint.deleted_at IS NULL
-			  AND checkpoint.compressed_at IS NULL
-			  AND COALESCE(checkpoint.message_data->'metadata'->>'compaction_summary', '') = 'true'
-			  AND history.deleted_at IS NULL
-			  AND history.role = 'user'
-			  AND COALESCE(history.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+			WITH active_checkpoint AS (
+				SELECT id,
+				       CASE
+					 WHEN COALESCE(message_data->'metadata'->>'compaction_before_message_id', '') ~ '^[1-9][0-9]*$'
+					 THEN (message_data->'metadata'->>'compaction_before_message_id')::BIGINT
+					 ELSE NULL
+				       END AS boundary
+				FROM messages
+				WHERE session_id = $1
+				  AND deleted_at IS NULL
+				  AND compressed_at IS NULL
+				  AND COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
+				ORDER BY id DESC
+				LIMIT 1
+			)
+			SELECT CASE
+				WHEN (SELECT boundary FROM active_checkpoint) IS NOT NULL THEN (
+					SELECT MAX(history.id)
+					FROM messages history
+					WHERE history.session_id = $1
+					  AND history.deleted_at IS NULL
+					  AND history.role = 'user'
+					  AND COALESCE(history.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+					  AND history.id < (SELECT boundary FROM active_checkpoint)
+				)
+				ELSE (
+					SELECT MAX(history.id)
+					FROM active_checkpoint checkpoint
+					JOIN messages history
+					  ON history.compression_summary_id = checkpoint.id
+					 AND history.id <> checkpoint.id
+					WHERE history.deleted_at IS NULL
+					  AND history.role = 'user'
+					  AND COALESCE(history.message_data->'metadata'->>'compaction_summary', '') <> 'true'
+				)
+			END
 		`, sessionID).Scan(&checkpointAnchor); err != nil {
 			return nil, fmt.Errorf("locate active checkpoint anchor: %w", err)
 		}
@@ -1077,13 +1101,25 @@ func (r *MessageRepository) MarkAsCompressed(sessionID int64, beforeMessageID, s
 }
 
 func markAsCompressed(ctx context.Context, exec dbExecutor, sessionID int64, beforeMessageID, summaryMessageID int64) error {
+	// A checkpoint is stored after the messages it summarizes but is ordered at
+	// compaction_before_message_id. Supersession must therefore compare that
+	// logical boundary as well as the physical row id, or a checkpoint that sits
+	// at/after the new physical boundary can remain active beside its successor.
 	query := `
 		UPDATE messages
 		SET compressed_at = NOW(), compression_summary_id = $1
 		WHERE session_id = $2
-		  AND id < $3
 		  AND deleted_at IS NULL
 		  AND (compressed_at IS NULL OR id = compression_summary_id)
+		  AND (
+			id < $3
+			OR (
+				compressed_at IS NULL
+				AND COALESCE(message_data->'metadata'->>'compaction_summary', '') = 'true'
+				AND COALESCE(message_data->'metadata'->>'compaction_before_message_id', '') ~ '^[1-9][0-9]*$'
+				AND (message_data->'metadata'->>'compaction_before_message_id')::BIGINT < $3
+			)
+		  )
 	`
 
 	_, err := exec.ExecContext(ctx, query, summaryMessageID, sessionID, beforeMessageID)

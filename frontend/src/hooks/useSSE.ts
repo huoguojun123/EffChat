@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react"
 import { useChatStore } from "@/stores/chat"
 import type { ActiveRunSnapshot, AttachmentMeta, Message, MessageData, StreamingSegment, ToolCall } from "@/types"
-import { listMessages } from "@/api/messages"
+import { listMessageWindow } from "@/api/messages"
 import { getActiveRun, getRunStatus } from "@/api/runs"
 import { compactSessionUrl, cancelRun, preflightSessionMessage } from "@/api/sessions"
 import { handleAuthExpired } from "@/api/client"
@@ -112,7 +112,7 @@ export function useSSE() {
     const initialState = useChatStore.getState()
     const activeSessionGeneration = initialState.activeSessionGeneration
     const messageWindowGeneration = initialState.messageWindowGeneration
-    const res = await listMessages(sessionId)
+    const res = await listMessageWindow(sessionId, { latest: true, turnLimit: 16 })
     const state = useChatStore.getState()
     if (
       state.activeSessionId !== sessionId
@@ -132,7 +132,8 @@ export function useSSE() {
     const current = useChatStore.getState()
     if (current.messageWindowGeneration !== messageWindowGeneration) return false
     useChatStore.setState({
-      hasMoreMessages: hasLoadedOlderPage ? state.hasMoreMessages : !!res.has_more,
+      hasMoreMessages: hasLoadedOlderPage ? state.hasMoreMessages : !!res.has_older,
+      hasNewerMessages: !!res.has_newer,
       isLoadingOlder: false,
     })
     return true

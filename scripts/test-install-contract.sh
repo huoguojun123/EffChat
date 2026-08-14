@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SCRIPT="$ROOT/scripts/install.sh"
 test -x "$SCRIPT"
 
+grep -Fq 'umask 077' "$SCRIPT"
 grep -Fq 'archive/refs/tags/${VERSION}.tar.gz' "$SCRIPT"
 grep -Fq 'docker-compose.registry.yml' "$SCRIPT"
 grep -Fq 'MIGRATIONS_DIR=./migrations' "$SCRIPT"

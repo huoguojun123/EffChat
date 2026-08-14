@@ -5,6 +5,7 @@ set -euo pipefail
 # compose template and migrations from one immutable release, then lets Docker
 # pull the already-built images. Existing configuration and data are never
 # replaced.
+umask 077
 
 REPO="${EFFCHAT_REPOSITORY:-huoguojun123/EffChat}"
 DEFAULT_VERSION="v0.3.4-beta.3"

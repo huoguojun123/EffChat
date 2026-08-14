@@ -7,6 +7,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.4-beta.3] - 2026-08-14
+
+### Fixed
+
+- Kept a single active conversation-compaction checkpoint when later
+  checkpoints compress earlier summaries.
+- Anchored checkpoint dividers by their logical conversation boundary while
+  retaining compatibility with legacy direct-message pointers.
+- Reconciled completed SSE and RunHub activity through the same canonical
+  message-window projection used by initial load, refresh, and pagination.
+
 ## [0.3.4-beta.2] - 2026-08-14
 
 ### Added
@@ -57,6 +68,7 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.3.4-beta.2...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.3.4-beta.3...HEAD
+[0.3.4-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.3
 [0.3.4-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.2
 [0.3.4-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.1

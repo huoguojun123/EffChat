@@ -7,6 +7,38 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0-beta.1] - 2026-08-14
+
+### Added
+
+- Added a one-command personal installer that guides first-time setup, creates
+  local random secrets, downloads release-matched Compose and migrations, and
+  starts published images.
+- Added a guarded in-place update path for recognized EffChat registry
+  deployments, including layouts where Compose and the environment file live
+  in separate parent/child directories.
+
+### Changed
+
+- Reworked the public documentation around a Chinese-first bilingual README,
+  richer product and architecture details, readable product screenshots, and
+  clearer personal, registry Compose, and local source deployment paths.
+- Clarified contribution requirements and the licensing boundary for
+  dependencies, prompts, fonts, icons, screenshots, and interoperability names.
+- Preserved existing environment values, ports, project names, data, storage,
+  and backups during installer updates while archiving replaced deployment
+  files under `deployment-backups/`.
+- Refreshed the compatible Go, frontend, Python extractor, and GitHub Actions
+  dependency batches without changing product APIs, migrations, or deployment
+  configuration contracts.
+
+### Security
+
+- Generate installer-managed secrets with restrictive file permissions and
+  refuse unknown, customized, or ambiguous existing deployment directories.
+- Updated `golang.org/x/image` to `v0.45.0` to fix the reachable VP8L
+  excessive-memory-allocation vulnerability reported as GO-2026-6222.
+
 ## [0.3.4-beta.3] - 2026-08-14
 
 ### Fixed
@@ -68,7 +100,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.3.4-beta.3...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.0-beta.1...HEAD
+[0.4.0-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.1
 [0.3.4-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.3
 [0.3.4-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.2
 [0.3.4-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.1

@@ -2,18 +2,18 @@
 
 > 本清单用于公开仓库的首次开放与后续版本发布。
 >
-> 当前 beta 版本线：`v0.3.4-beta.3`；源码仓库仍为 private，稳定版与 `latest` 尚未发布。
+> 当前 beta 版本线：`v0.4.0-beta.1`；源码仓库仍为 private，稳定版与 `latest` 尚未发布。
 
 ## 首次公开
 
 ### 法律与治理
 
 - [x] 项目所有者已确定 Apache-2.0，根目录包含完整 `LICENSE`、`NOTICE` 和第三方声明。
-- [x] README 明确当前为 alpha/pre-release。
+- [x] README 明确当前为 beta/pre-release。
 - [x] `SECURITY.md` 提供 GitHub 私密漏洞报告入口。
 - [x] `CONTRIBUTING.md` 说明环境、测试、数据安全和 PR 规则。
-- [x] 已配置 Issue、PR 模板和 Dependabot。
-- [ ] 默认提示词、图标、图片和其他素材的来源允许公开。
+- [x] 已配置 Issue、PR 模板和 Dependabot；自动 PR 仅保留安全更新，常规版本更新在维护者主动批处理前暂停。
+- [x] 默认提示词、图标、字体、产品截图和其他公开素材已有来源与许可边界；README 截图由项目所有者提供并完成配置脱敏，截图中的第三方名称仅用于说明互操作性。
 - [x] 第三方依赖许可证没有已知冲突。
 - [x] 三个应用镜像从实际分发依赖生成第三方许可正文/版权归档，依赖缺少许可材料或精确版本 fallback 时构建失败。
 

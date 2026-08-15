@@ -1,13 +1,46 @@
 # Docker Compose 部署
 
-本文档描述全量 Docker 部署路径：PostgreSQL 17 开新库，`migrate` 按 `backend/migrations/production/` 记录并执行生产迁移，后端和前端分别构建为镜像。Compose 会把 `web`、`backend`、`postgres` 放在同一个 Docker 网络里；浏览器访问前端容器，前端 Nginx 在内部网络把 `/api/` 转发给 `backend:8080`。数据库和受管存储都位于 `DATA_DIR`，但运行中的 PostgreSQL 数据目录不能用普通目录复制充当备份。
+本文档提供两条入口：个人用户优先使用一条命令安装；需要自己管理目录、环境变量、升级和备份时使用标准 Docker Compose。两条路径使用同一组发布镜像、migration 和数据生命周期规则。
+
+## 一条命令部署
+
+在已经安装 Docker Engine 和 Docker Compose v2 的 Linux/macOS 主机上运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
+```
+
+安装器会提示安装目录和 Web 端口；其他配置使用安全默认值。随后从同一测试版 tag 下载 `compose.yml` 和 migration，生成随机的 PostgreSQL/JWT secret，拉取 Docker Hub 镜像并等待服务健康。默认安装到当前目录的 `effchat/`，访问 `http://127.0.0.1:8088`。指定其他目录时运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
+```
+
+首次安装只接受不存在或完全为空的目标目录。已有部署再次运行同一脚本时，输入原目录并确认 `update`；脚本识别 `compose.yml`、`docker-compose.registry.yml` 或兼容的 `docker-compose.yml`，也会查找部署目录或父目录中的 `.env.docker`。它只更新镜像、Compose、migration 和环境文件中的 `EFFCHAT_VERSION`，把旧 Compose/migration 放入带时间戳的 `deployment-backups/`；端口、数据库/JWT secret、数据路径和所有 data/storage/backups 保持不变。无法确认是 EffChat registry Compose 的目录会停止，不覆盖任意自定义部署。
+
+“Compose 在 `src/`、环境文件在上级目录”的服务器布局也属于兼容范围；只需在提示中填写 Compose 目录，并在环境文件提示中填写上级 `.env.docker`。
+
+安装完成后，模型渠道、API key、搜索服务和网页提取 provider 在管理员后台配置，不写入安装命令或公开文件。
+
+个人用户日常只需在安装目录执行：
+
+```bash
+docker compose --env-file .env.docker -f compose.yml ps
+docker compose --env-file .env.docker -f compose.yml logs -f
+```
+
+升级前请先按“备份与隔离恢复”完成备份；不要用 `docker compose down -v`。
+
+## 标准 Docker Compose 部署
+
+标准部署适合希望保留完整源码、自己选择版本、调整端口或接入现有运维流程的用户。下面的 registry 模板运行已发布镜像；源码构建仍使用 `scripts/docker-build.sh`。
 
 ## Registry 镜像部署
 
 需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用
 `docker-compose.registry.yml`。该模板保留本文件中的环境变量、端口、网络、
 PostgreSQL 和 storage 挂载；只把三个应用服务的 `build`/`:local` 替换为
-`${DOCKERHUB_NAMESPACE:-gjhuo}` 下的 `${EFFCHAT_VERSION:-v0.3.4-beta.3}` 镜像。
+`${DOCKERHUB_NAMESPACE:-gjhuo}` 下的 `${EFFCHAT_VERSION:-v0.4.0-beta.1}` 镜像。
 
 应用镜像不携带迁移 SQL。部署目录必须同时保留由同一 public release 导出的
 `backend/migrations/`（包含 `build_migration_script.sh`、`init.sql`、`legacy-checksums.txt` 和
@@ -67,7 +100,7 @@ cp .env.docker.example .env.docker
 
 因此，使用本地代理的 Docker/OrbStack 网络如果把外部域名解析成 synthetic `198.18.0.0/15`，Git Skill 自定义来源会被拒绝；不要通过放宽地址策略或恢复任意代理来“修复”。应为部署容器提供真实公网 DNS 与 HTTPS 直连，或在受信网络边界单独配置经过审计的出站方案。GitHub、GitLab、Bitbucket、Codeberg 四个精确主机名保留 CDN 轮转例外，但仍不允许重定向、凭据、交互认证和 Git 配置注入。
 
-### 朋友拿源码后的最短启动流程
+## 源码构建部署（完整流程）
 
 1. 复制环境模板：
 
@@ -142,7 +175,7 @@ http://127.0.0.1:18080
 
 可通过 `.env.docker` 的 `BACKEND_PORT` 修改宿主机端口。
 
-### 只想先把系统跑起来
+### 仅启动基础服务
 
 如果朋友只是想确认“前后端 + 数据库 + 迁移”能否启动，不需要先配模型 key。此时服务可以起来，但聊天请求会因为没有可用模型渠道而失败。
 如果想完整体验对话，至少要在管理员后台配置一个渠道和一个模型。
@@ -169,7 +202,7 @@ backend/migrations/production/*.sql
 
 Compose 默认由内置 Nginx 覆盖并传递 `X-Real-IP`，因此模板将 `TRUST_PROXY_HEADERS` 设为 `true`，认证限流可按浏览器真实地址区分。后端端口只绑定回环地址；如果其他部署方式允许流量绕过可信代理，应将该变量设为 `false`，或确保唯一入口代理会清洗客户端提供的转发头。
 
-模型渠道、API key、搜索服务、网页提取服务和 MinerU OCR 不在 `.env.docker` 中填写；启动后由管理员在网页后台配置。后台使用步骤见 [管理员配置指南.md](管理员配置指南.md)。
+模型渠道、API key、搜索服务、网页提取服务和 MinerU OCR 不在 `.env.docker` 中填写；启动后由管理员在网页后台配置。后台使用步骤见 [管理员配置](administration.md)。
 
 如果需要彻底重建新库：
 

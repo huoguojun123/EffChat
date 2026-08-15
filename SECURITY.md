@@ -1,46 +1,29 @@
-# Security Policy
+# 安全策略
 
-## Supported Versions
+## 支持版本
 
-EffChat is currently pre-release software. Security fixes are provided only for
-the latest commit on the public `main` branch and the latest published
-pre-release.
+EffChat 当前仍是预发布软件。安全修复只提供给公开 `main` 分支的最新 commit 与最新发布的测试版。
 
-## Reporting a Vulnerability
+## 报告安全问题
 
-Do not report security vulnerabilities through a public GitHub issue.
+请勿通过公开 GitHub Issue 报告安全漏洞。
 
-Use [GitHub private vulnerability reporting](https://github.com/huoguojun123/EffChat/security/advisories/new)
-and include:
+请使用 [GitHub Private Vulnerability Reporting](https://github.com/huoguojun123/EffChat/security/advisories/new) 私下报告，并尽量包含：
 
-- the affected version or commit;
-- deployment details relevant to the issue;
-- reproduction steps or a minimal proof of concept;
-- the expected impact;
-- any suggested mitigation.
+- 受影响的版本或 commit；
+- 与问题有关的部署条件；
+- 使用虚构数据编写的复现步骤或最小概念验证；
+- 预期影响；
+- 已知的缓解方式。
 
-Do not include real credentials, personal data, database dumps, or production
-files. Use synthetic examples and redact request logs.
+不要提交真实凭据、个人数据、数据库 dump 或生产文件。示例必须使用虚构数据，请求日志必须完成脱敏。
 
-You should receive an acknowledgement within 7 days. The maintainer will
-validate the report, coordinate a fix and disclosure date, and credit the
-reporter unless anonymity is requested.
+维护者会尽量在 7 天内确认收到报告，随后验证问题、协调修复与披露时间；除非报告者要求匿名，发布时会致谢报告者。
 
-## Deployment Responsibility
+## 部署责任
 
-EffChat is self-hosted. Operators are responsible for strong database and JWT
-secrets, TLS termination, backups, access control, and keeping the host,
-containers, dependencies, and EffChat release current.
+EffChat 是自托管软件。实例运营者负责使用强数据库与 JWT secret、配置 TLS、维护备份与访问控制，并及时更新宿主机、容器、依赖和 EffChat 版本。
 
-Do not copy a running PostgreSQL data directory as a backup. Use the documented
-`scripts/backup-restore.sh backup` artifact workflow, then protect the resulting
-directory with restrictive permissions, encryption at rest, off-host copies,
-retention limits, and secure deletion. Backup artifacts intentionally exclude
-`.env.docker` and deployment secrets.
+不要把运行中的 PostgreSQL 数据目录直接复制为备份。请使用文档中的 `scripts/backup-restore.sh backup` 工件流程，并通过严格目录权限、静态加密、异地副本、保留期限和安全删除保护备份目录。备份工件不会包含 `.env.docker` 与部署 secret。
 
-Test recovery with `scripts/backup-restore.sh restore` only in a dedicated empty
-directory. The command creates an isolated Compose project, network, data root,
-and loopback ports; it never restores over the active deployment or removes
-volumes. Treat the restored database and files as sensitive production data,
-and stop the isolated stack with `scripts/backup-restore.sh stop-restore` after
-acceptance.
+恢复测试只能在独立空目录中执行 `scripts/backup-restore.sh restore`。该命令会建立隔离的 Compose project、网络、数据目录和 loopback 端口，不会覆盖活动部署或删除 volume。恢复后的数据库和文件仍属于敏感生产数据，验收后请使用 `scripts/backup-restore.sh stop-restore` 停止隔离环境。

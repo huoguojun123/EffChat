@@ -1,6 +1,6 @@
 # EffChat 架构文档
 
-适用版本：0.3.4-beta.1 release candidate
+本文描述当前 `main` 与最新测试版的架构边界；版本差异见 [CHANGELOG.md](CHANGELOG.md)。
 
 EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主线是 Web-first：React 前端、Go API、PostgreSQL、Python extractor sidecar，以及基于 Eino 的统一 Agent。
 
@@ -275,7 +275,7 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 ## 发布入口
 
-- 快速部署见 [Docker Compose 部署](docs/03-实施计划/Docker-Compose-部署.md)。
+- 快速部署见 [Docker Compose 部署](docs/deployment.md)。
 - 部署脚本不自行解析或执行 `.env.docker`；secret、数据库身份和 `DATA_DIR` 均消费 `docker compose config --environment` 的最终插值结果，使引号、注释、转义及 shell/`--env-file` 优先级与实际容器环境和 bind mount 保持一致。
 - storage layout marker 是显式生命周期状态：旧 marker 兼容解释为 `migrated`，成功清理 legacy uploads 后原子记录为 `finalized`；rollback 只允许 `migrated` 且 legacy/restore 工件仍存在的状态，并在停止服务或执行 SQL 前拒绝 finalized、未知或缺失工件。
 - `docker-build.sh up` 和 `reset-db` 均先完成镜像构建，再进入服务、migration 和 storage 切换；最终服务使用 `up --no-build --wait`，构建失败不会先停止现有服务或删除 reset 目标。
@@ -284,6 +284,6 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 - CI job 均有有限 wall-clock timeout；PostgreSQL integration 的启动与稳定性 readiness 使用有限次数并在超时时输出容器日志。Compose/container job 直接执行 export、dotenv、storage finalization、部署顺序、backup/restore、Docker context、BUILD_REF、release gate 与 Nginx 契约，并用固定 digest 的 ShellCheck 拒绝 warning 级 shell 缺陷；Python extractor 的 34 包 hash lock 由独立、同样 hash 锁定的 pip-audit 环境执行漏洞扫描，scanner 非零退出原样阻断 job。独立 Playwright job 使用临时 bind-mounted PostgreSQL/storage、虚构首用户管理员和复用 extractor 镜像的确定性 OpenAI-compatible 流式 stub，验证真实 DOCX 提取/预览/下载、首包后停止并刷新恢复、手动压缩/撤销；readiness/登录失败直接报错，失败上传 trace 与 Compose 日志，退出时不删除 volume 并断言无 Compose 容器遗留。这些门禁不依赖真实用户数据或外部模型。
 - 备份入口不会复制在线 PGDATA：它优雅停止当前正在运行的 Web/backend/提取器，避免把跨数据库与文件系统的在途事务冻结在中间状态；随后在同一静止窗口生成 PostgreSQL custom-format dump 与 storage tar，并在版本、build ref、schema、PostgreSQL major、Compose checksum、migration 账本、工件 SHA-256 和逐文件清单齐全且自验证通过后原子发布，最后只恢复原先运行的服务；`.env.docker` 和 secret 不进入备份。
 - restore 只接受与活动 `DATA_DIR` 无重叠的空目录，并用原子目录锁独占该目标，强制生成独立 Compose project、显式网络和 Docker 动态 loopback 端口。它先验证并安全解包 storage，再恢复到空 PostgreSQL、核对备份 migration 账本并运行当前统一 runner，检查数据库受管路径与磁盘文件，最后等待四个服务健康并输出隔离 URL；失败只对该隔离 project 执行不带 volume 删除的 `down` 并清理脚本创建的目标内容。
-- 管理配置见 [管理员配置指南](docs/03-实施计划/管理员配置指南.md)。
-- 公开导出见 [开源发布检查清单](docs/03-实施计划/开源发布检查清单.md)。
+- 管理配置见 [管理员配置指南](docs/administration.md)。
+- 发布门禁见 [发布检查清单](docs/release-checklist.md)。
 - 三个应用镜像在构建阶段分别从实际 Go 编译图、前端生产依赖树和 Python 锁定安装集生成第三方许可归档；缺少许可正文且没有精确版本 fallback 时构建失败。最终镜像只携带对应组件归档，基础镜像 OS/runtime 包继续以其上游镜像声明为边界。`scripts/check-image-licenses.sh` 会从最终镜像离线复制归档并校验 manifest、文件完整性和 SHA-256。

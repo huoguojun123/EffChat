@@ -36,6 +36,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Generate installer-managed secrets with restrictive file permissions and
   refuse unknown, customized, or ambiguous existing deployment directories.
+- Updated `golang.org/x/image` to `v0.45.0` to fix the reachable VP8L
+  excessive-memory-allocation vulnerability reported as GO-2026-6222.
 
 ## [0.3.4-beta.3] - 2026-08-14
 

@@ -21,8 +21,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Reworked the public documentation around a Chinese-first bilingual README,
-  clearer product highlights, fixed screenshot slots, and simpler personal and
-  standard Docker Compose deployment paths.
+  richer product and architecture details, readable product screenshots, and
+  clearer personal, registry Compose, and local source deployment paths.
+- Clarified contribution requirements and the licensing boundary for
+  dependencies, prompts, fonts, icons, screenshots, and interoperability names.
 - Preserved existing environment values, ports, project names, data, storage,
   and backups during installer updates while archiving replaced deployment
   files under `deployment-backups/`.

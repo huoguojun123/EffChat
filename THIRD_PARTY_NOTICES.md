@@ -139,3 +139,13 @@ referenced repository. It does not assert that EffChat authored all referenced
 material, that Anthropic licensed or endorsed EffChat, or that Anthropic has
 made an infringement claim against this project. Third-party prompt material
 does not become Apache-2.0 merely through inclusion in EffChat.
+
+## Documentation Screenshots and Interoperability Names
+
+Product screenshots under `docs/assets/screenshots/` are EffChat documentation
+assets and use demonstration content or sanitized configuration. Third-party
+model, protocol, service, paper, and project names visible in those screenshots
+identify interoperability or example inputs only. Their trademarks, names, and
+underlying content remain the property of their respective owners; appearance
+in a screenshot does not imply endorsement or relicense third-party material
+under Apache-2.0.

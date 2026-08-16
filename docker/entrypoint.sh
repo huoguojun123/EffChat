@@ -50,7 +50,7 @@ case "$role" in
     exec gosu app /app/effchat-server "$@"
     ;;
   extractor)
-    exec gosu app python -m uvicorn extractor.app.main:app \
+    exec gosu app python -m uvicorn app.main:app \
       --host "${EXTRACTOR_HOST:-0.0.0.0}" \
       --port "${EXTRACTOR_PORT:-8090}" \
       --workers 1 "$@"

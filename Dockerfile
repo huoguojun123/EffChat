@@ -78,7 +78,7 @@ WORKDIR /app
 COPY py-extractor/requirements.lock ./requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
-COPY py-extractor/app ./extractor/app
+COPY py-extractor/app ./app
 COPY backend/migrations ./migrations
 COPY frontend/nginx.conf ./web/default.conf.template
 COPY frontend/nginx-security-headers.conf /etc/nginx/conf.d/security-headers.conf
@@ -103,7 +103,7 @@ RUN python /tmp/license-tools/collect-third-party-licenses.py collect python \
     /app/storage/avatars \
     /app/storage/fonts \
     /app/storage/skills \
-  && chown -R app:app /app/storage /app/extractor \
+  && chown -R app:app /app/storage /app/app \
   && nginx -t
 
 EXPOSE 80 8080 8090

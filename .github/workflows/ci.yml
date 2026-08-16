@@ -186,7 +186,7 @@ jobs:
             test -f /app/migrations/build_migration_script.sh
             test -f /usr/share/nginx/html/index.html
             test "$(id -u app):$(id -g app)" = 10001:10001
-            python -c "from extractor.app.main import app; assert app"
+            python -c "from app.main import app; assert app"
             psql --version
             git help --config | grep -qx http.curloptResolve
             nginx -t

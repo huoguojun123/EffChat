@@ -123,7 +123,7 @@ export function ComposerBox({
           onCompositionEnd={onCompositionEnd}
           aria-label="消息输入"
           placeholder="输入消息…"
-          className="block box-border h-[54px] w-full resize-none overflow-y-hidden bg-transparent py-[15px] pr-[5.6rem] text-[14px] leading-6 outline-none [font-family:var(--chat-font-family,var(--font-serif))] placeholder:text-muted-foreground/40"
+          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[5.6rem] text-sm leading-6 outline-none [font-family:var(--chat-font-family,var(--font-serif))] placeholder:text-muted-foreground/40"
           data-testid="chat-input"
         />
 

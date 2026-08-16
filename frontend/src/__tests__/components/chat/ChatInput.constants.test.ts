@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest"
 import {
   COMPOSER_TEXTAREA_DESKTOP_MAX_HEIGHT,
-  COMPOSER_TEXTAREA_MIN_HEIGHT,
   COMPOSER_TEXTAREA_MOBILE_MAX_HEIGHT,
+  getComposerTextareaMinHeight,
   getComposerTextareaMaxHeight,
 } from "@/components/chat/ChatInput.constants"
 
 describe("getComposerTextareaMaxHeight", () => {
-  it("starts with a compact two-line writing area", () => {
-    expect(COMPOSER_TEXTAREA_MIN_HEIGHT).toBe(54)
+  it("uses the responsive composer token with a safe fallback", () => {
+    const ownerDocument = {
+      documentElement: {},
+      defaultView: {
+        getComputedStyle: () => ({ getPropertyValue: () => "50px" }),
+      },
+    } as unknown as Document
+
+    expect(getComposerTextareaMinHeight(ownerDocument)).toBe(50)
+    expect(getComposerTextareaMinHeight()).toBe(54)
   })
 
   it("keeps the desktop limit stable", () => {

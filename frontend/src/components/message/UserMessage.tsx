@@ -9,7 +9,7 @@ import { AttachmentCard } from "@/components/message/AttachmentCard"
 import { isStreamingInteractionBusy } from "@/lib/streamingStatus"
 import { prefersReducedMotion } from "@/lib/motionPreference"
 import { editableTailUserMessageId } from "@/lib/chatMessages"
-import { COMPOSER_TEXTAREA_MIN_HEIGHT, getComposerTextareaMaxHeight } from "@/components/chat/ChatInput.constants"
+import { getComposerTextareaMinHeight, getComposerTextareaMaxHeight } from "@/components/chat/ChatInput.constants"
 
 interface Props {
   message: Message
@@ -60,8 +60,9 @@ export function UserMessage({
     if (!element) return
     element.style.height = "0px"
     const contentHeight = element.scrollHeight
+    const minHeight = getComposerTextareaMinHeight(element.ownerDocument)
     const maxHeight = getComposerTextareaMaxHeight(window.innerWidth)
-    element.style.height = `${Math.min(Math.max(contentHeight, COMPOSER_TEXTAREA_MIN_HEIGHT), maxHeight)}px`
+    element.style.height = `${Math.min(Math.max(contentHeight, minHeight), maxHeight)}px`
     element.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden"
   }, [])
 

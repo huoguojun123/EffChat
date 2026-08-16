@@ -33,6 +33,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
+	URL      string
 	Host     string
 	Port     int
 	User     string
@@ -90,6 +91,7 @@ func Load() *Config {
 			Mode: getEnv("SERVER_MODE", "debug"),
 		},
 		Database: DatabaseConfig{
+			URL:      strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
 			User:     getEnv("DB_USER", "effchat"),

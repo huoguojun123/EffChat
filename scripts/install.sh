@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-command installer and updater. It downloads the Compose template and
-# migrations from one immutable release, then lets Docker pull the already-built
-# images. Updates preserve the existing environment and data mounts.
+# One-command installer and updater for the registry deployment. The deployed
+# directory has one active .env and one compose.yml; application migrations are
+# embedded in the EffChat image, while PostgreSQL remains a separate service.
 umask 077
 
 REPO="${EFFCHAT_REPOSITORY:-huoguojun123/EffChat}"
-DEFAULT_VERSION="v0.4.0-beta.1"
+DEFAULT_VERSION="v0.5.0-beta.1"
 VERSION="${EFFCHAT_VERSION:-$DEFAULT_VERSION}"
 INSTALL_DIR="${EFFCHAT_HOME:-$PWD/effchat}"
 WEB_PORT="${EFFCHAT_WEB_PORT:-8088}"
@@ -30,9 +30,7 @@ if [ "${EFFCHAT_NONINTERACTIVE:-0}" != "1" ] && [ -r /dev/tty ]; then
 fi
 
 prompt() {
-    local message="$1"
-    local default="$2"
-    local answer=""
+    local message="$1" default="$2" answer=""
     if [ -n "$tty_fd" ]; then
         read -r -u "$tty_fd" -p "$message [$default]: " answer
         printf '\n' >&2
@@ -40,31 +38,82 @@ prompt() {
     printf '%s' "${answer:-$default}"
 }
 
+prompt_secret() {
+    local message="$1" answer=""
+    if [ -n "$tty_fd" ]; then
+        read -r -s -u "$tty_fd" -p "$message: " answer
+        printf '\n' >&2
+    fi
+    printf '%s' "$answer"
+}
+
+random_hex() {
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+}
+
 case "$INSTALL_DIR" in
     ""|/|.|..|*/..|*/.) die "EFFCHAT_HOME must be a dedicated installation directory" ;;
 esac
 
 env_value() {
-    local key="$1"
-    local file="$2"
-    awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$file" | tr -d "\"'"
+    local key="$1" file="$2" value
+    value="$(awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$file")"
+    case "$value" in
+        \'*\')
+            value="${value:1:${#value}-2}"
+            printf '%s' "$value" | sed "s/\\\\'/'/g"
+            ;;
+        \"*\")
+            value="${value:1:${#value}-2}"
+            printf '%s' "$value" | sed 's/\\"/"/g; s/\\\\/\\/g'
+            ;;
+        *) printf '%s' "$value" ;;
+    esac
 }
 
-file_mode() {
-    if stat -f '%Lp' "$1" >/dev/null 2>&1; then
-        stat -f '%Lp' "$1"
-    else
-        stat -c '%a' "$1"
+env_line() {
+    local key="$1" value="$2" escaped quote_escape
+    case "$value" in
+        *$'\n'*|*$'\r'*) die "$key cannot contain a newline" ;;
+    esac
+    escaped="$value"
+    quote_escape="\\'"
+    escaped="${escaped//\'/$quote_escape}"
+    printf "%s='%s'" "$key" "$escaped"
+}
+
+set_env_value() {
+    local file="$1" key="$2" value="$3" replacement tmp found=0 line
+    replacement="$(env_line "$key" "$value")"
+    tmp="$(mktemp "$(dirname "$file")/.effchat-env.XXXXXX")"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$key="*)
+                if [ "$found" -eq 0 ]; then
+                    printf '%s\n' "$replacement" >> "$tmp"
+                    found=1
+                fi
+                ;;
+            *) printf '%s\n' "$line" >> "$tmp" ;;
+        esac
+    done < "$file"
+    if [ "$found" -eq 0 ]; then
+        printf '%s\n' "$replacement" >> "$tmp"
     fi
+    chmod 600 "$tmp"
+    mv "$tmp" "$file"
 }
 
 MODE="install"
-COMPOSE_FILE=""
-ENV_FILE="${EFFCHAT_ENV_FILE:-}"
-MIGRATIONS_DIR_TARGET=""
+OLD_COMPOSE=""
+OLD_ENV=""
+TARGET_ENV="$INSTALL_DIR/.env"
+TARGET_COMPOSE="$INSTALL_DIR/compose.yml"
 
 if [ -z "${EFFCHAT_HOME:-}" ]; then
     INSTALL_DIR="$(prompt "Install or update directory" "$INSTALL_DIR")"
+    TARGET_ENV="$INSTALL_DIR/.env"
+    TARGET_COMPOSE="$INSTALL_DIR/compose.yml"
 fi
 
 if [ -e "$INSTALL_DIR" ]; then
@@ -78,53 +127,32 @@ if [ -e "$INSTALL_DIR" ]; then
 
         for candidate in "$INSTALL_DIR/compose.yml" "$INSTALL_DIR/docker-compose.registry.yml" "$INSTALL_DIR/docker-compose.yml"; do
             if [ -f "$candidate" ]; then
-                COMPOSE_FILE="$candidate"
+                OLD_COMPOSE="$candidate"
                 break
             fi
         done
-        [ -n "$COMPOSE_FILE" ] || die "no supported Compose file found; refusing to update an unknown directory"
-        grep -Fq 'effchat-backend' "$COMPOSE_FILE" || die "Compose file is not an EffChat registry deployment"
-        grep -Fq 'MIGRATIONS_DIR' "$COMPOSE_FILE" || die "Compose file has no migration mount contract"
+        [ -n "$OLD_COMPOSE" ] || die "no supported Compose file found; refusing to update an unknown directory"
+        grep -Eq 'effchat-(backend|web|py-extractor)|/effchat:' "$OLD_COMPOSE" \
+            || die "Compose file is not a recognized EffChat deployment"
 
-        if [ -z "$ENV_FILE" ]; then
-            for candidate in "$INSTALL_DIR/.env.docker" "$INSTALL_DIR/../.env.docker"; do
-                if [ -f "$candidate" ]; then
-                    ENV_FILE="$candidate"
-                    break
-                fi
-            done
-        fi
-        if [ -z "$ENV_FILE" ]; then
-            ENV_FILE="$(prompt "Environment file" "$INSTALL_DIR/.env.docker")"
-        fi
-        [ -f "$ENV_FILE" ] || die "environment file not found: $ENV_FILE"
-        [ ! -L "$ENV_FILE" ] || die "environment file must not be a symlink"
-
-        WEB_PORT="$(env_value WEB_PORT "$ENV_FILE")"
+        for candidate in "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.docker" "$INSTALL_DIR/../.env.docker"; do
+            if [ -f "$candidate" ]; then
+                OLD_ENV="$candidate"
+                break
+            fi
+        done
+        [ -n "$OLD_ENV" ] || die "no supported environment file found"
+        [ ! -L "$OLD_ENV" ] || die "environment file must not be a symlink"
+        WEB_PORT="$(env_value WEB_PORT "$OLD_ENV")"
         WEB_PORT="${WEB_PORT:-8088}"
-    else
-        MODE="install"
     fi
 else
     mkdir -p "$INSTALL_DIR"
 fi
 
-if [ "$MODE" = "install" ]; then
-    if [ -z "${EFFCHAT_WEB_PORT:-}" ]; then
-        WEB_PORT="$(prompt "Web port" "$WEB_PORT")"
-    fi
-    COMPOSE_FILE="$INSTALL_DIR/compose.yml"
-    ENV_FILE="$INSTALL_DIR/.env.docker"
-else
-    migration_value="$(env_value MIGRATIONS_DIR "$ENV_FILE")"
-    migration_value="${migration_value:-./backend/migrations}"
-    case "$migration_value" in
-        *..*|*[[:space:]]*) die "MIGRATIONS_DIR must be a simple path inside the deployment layout" ;;
-        /*) MIGRATIONS_DIR_TARGET="$migration_value" ;;
-        *) MIGRATIONS_DIR_TARGET="$INSTALL_DIR/${migration_value#./}" ;;
-    esac
+if [ "$MODE" = install ] && [ -z "${EFFCHAT_WEB_PORT:-}" ]; then
+    WEB_PORT="$(prompt "Web port" "$WEB_PORT")"
 fi
-
 case "$WEB_PORT" in
     ''|*[!0-9]*) die "Web port must be a number between 1 and 65535" ;;
 esac
@@ -140,80 +168,143 @@ curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
 tar -xzf "$archive" -C "$tmp_dir"
 source_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'EffChat-*' -print -quit)"
 [ -n "$source_dir" ] || die "release archive did not contain an EffChat source directory"
-
-for required in docker-compose.registry.yml backend/migrations/build_migration_script.sh backend/migrations/init.sql backend/migrations/production; do
-    [ -e "$source_dir/$required" ] || die "release archive is missing $required"
-done
-
-if [ "$MODE" = "install" ]; then
-    MIGRATIONS_DIR_TARGET="$INSTALL_DIR/migrations"
-else
-    mkdir -p "$INSTALL_DIR/deployment-backups"
-    backup_dir="$(mktemp -d "$INSTALL_DIR/deployment-backups/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
-    cp -p "$COMPOSE_FILE" "$backup_dir/$(basename "$COMPOSE_FILE")"
-fi
-
-mkdir -p "$(dirname "$MIGRATIONS_DIR_TARGET")"
-if [ -e "$MIGRATIONS_DIR_TARGET" ]; then
-    [ -d "$MIGRATIONS_DIR_TARGET" ] || die "migration path is not a directory: $MIGRATIONS_DIR_TARGET"
-    [ ! -L "$MIGRATIONS_DIR_TARGET" ] || die "migration path must not be a symlink"
-    [ "$MODE" = "update" ] || die "new installation unexpectedly contains migrations"
-    mv "$MIGRATIONS_DIR_TARGET" "$backup_dir/migrations"
-fi
-mkdir -p "$MIGRATIONS_DIR_TARGET"
-cp -R "$source_dir/backend/migrations/." "$MIGRATIONS_DIR_TARGET/"
-
-compose_tmp="$COMPOSE_FILE.effchat-new"
-cp "$source_dir/docker-compose.registry.yml" "$compose_tmp"
-mv "$compose_tmp" "$COMPOSE_FILE"
-
-random_hex() {
-    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
-}
-
-if [ "$MODE" = "install" ]; then
-    cat > "$ENV_FILE" <<EOF
-COMPOSE_PROJECT_NAME=effchat
-DOCKER_NETWORK=effchat_net
-DATA_DIR=./data
-WEB_PORT=$WEB_PORT
-BACKEND_PORT=18080
-MIGRATIONS_DIR=./migrations
-POSTGRES_USER=effchat
-POSTGRES_DB=effchat
-POSTGRES_PASSWORD=$(random_hex)
-JWT_SECRET=$(random_hex)
-EFFCHAT_VERSION=$VERSION
-EOF
-else
-    env_tmp="$(mktemp "$(dirname "$ENV_FILE")/.effchat-env.XXXXXX")"
-    awk -v version="$VERSION" '
-        BEGIN { found = 0 }
-        /^EFFCHAT_VERSION[[:space:]]*=/ {
-            print "EFFCHAT_VERSION=" version
-            found = 1
-            next
-        }
-        { print }
-        END {
-            if (!found) print "EFFCHAT_VERSION=" version
-        }
-    ' "$ENV_FILE" > "$env_tmp"
-    chmod "$(file_mode "$ENV_FILE")" "$env_tmp"
-    mv "$env_tmp" "$ENV_FILE"
-fi
+[ -f "$source_dir/docker-compose.registry.yml" ] || die "release archive is missing docker-compose.registry.yml"
 
 if [ "$MODE" = "update" ]; then
-    echo "Updating EffChat to ${VERSION}; existing environment and data are preserved."
+    mkdir -p "$INSTALL_DIR/deployment-backups"
+    backup_dir="$(mktemp -d "$INSTALL_DIR/deployment-backups/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+    cp -p "$OLD_COMPOSE" "$backup_dir/$(basename "$OLD_COMPOSE")"
+    cp -p "$OLD_ENV" "$backup_dir/$(basename "$OLD_ENV")"
+    if [ "$OLD_ENV" != "$TARGET_ENV" ]; then
+        cp -p "$OLD_ENV" "$TARGET_ENV"
+    fi
+    chmod 600 "$TARGET_ENV"
+
+    if [ -d "$INSTALL_DIR/migrations" ] && [ ! -L "$INSTALL_DIR/migrations" ]; then
+        mv "$INSTALL_DIR/migrations" "$backup_dir/migrations"
+    fi
+    if [ -d "$INSTALL_DIR/backend/migrations" ] && [ ! -L "$INSTALL_DIR/backend/migrations" ]; then
+        mv "$INSTALL_DIR/backend/migrations" "$backup_dir/backend-migrations"
+    fi
+    if [ "$OLD_ENV" != "$TARGET_ENV" ] && [ "$(dirname "$OLD_ENV")" = "$INSTALL_DIR" ]; then
+        mv "$OLD_ENV" "$backup_dir/active-$(basename "$OLD_ENV")"
+    fi
+    if [ "$OLD_COMPOSE" != "$TARGET_COMPOSE" ] && [ "$(dirname "$OLD_COMPOSE")" = "$INSTALL_DIR" ]; then
+        mv "$OLD_COMPOSE" "$backup_dir/active-$(basename "$OLD_COMPOSE")"
+    fi
 else
-    echo "Pulling EffChat ${VERSION} images..."
+    : > "$TARGET_ENV"
+    chmod 600 "$TARGET_ENV"
 fi
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull
-echo "Starting EffChat..."
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --wait
+
+compose_tmp="$TARGET_COMPOSE.effchat-new"
+cp "$source_dir/docker-compose.registry.yml" "$compose_tmp"
+mv "$compose_tmp" "$TARGET_COMPOSE"
+
+compose_project="$(env_value COMPOSE_PROJECT_NAME "$TARGET_ENV" || true)"
+set_env_value "$TARGET_ENV" COMPOSE_PROJECT_NAME "${compose_project:-effchat}"
+data_dir="${EFFCHAT_DATA_DIR:-$(env_value DATA_DIR "$TARGET_ENV" || true)}"
+set_env_value "$TARGET_ENV" DATA_DIR "${data_dir:-./data}"
+set_env_value "$TARGET_ENV" WEB_PORT "$WEB_PORT"
+set_env_value "$TARGET_ENV" BACKEND_PORT "${EFFCHAT_BACKEND_PORT:-$(env_value BACKEND_PORT "$TARGET_ENV" || true)}"
+if [ -z "$(env_value BACKEND_PORT "$TARGET_ENV")" ]; then
+    set_env_value "$TARGET_ENV" BACKEND_PORT 18080
+fi
+set_env_value "$TARGET_ENV" EFFCHAT_VERSION "$VERSION"
+
+database_mode="${EFFCHAT_DATABASE_MODE:-}"
+if [ -z "$database_mode" ] && [ "$MODE" = "update" ]; then
+    existing_url="$(env_value DATABASE_URL "$TARGET_ENV" || true)"
+    existing_host="$(env_value DB_HOST "$TARGET_ENV" || true)"
+    if [ -n "$existing_url" ] || { [ -n "$existing_host" ] && [ "$existing_host" != postgres ]; }; then
+        database_mode=external
+    else
+        database_mode=bundled
+    fi
+fi
+if [ -z "$database_mode" ]; then
+    database_mode="$(prompt "Database mode (bundled/external)" "bundled")"
+fi
+case "$database_mode" in
+    bundled|external) ;;
+    *) die "database mode must be bundled or external" ;;
+esac
+
+if [ "$database_mode" = bundled ]; then
+    postgres_user="${EFFCHAT_DB_USER:-$(env_value POSTGRES_USER "$TARGET_ENV" || true)}"
+    postgres_user="${postgres_user:-effchat}"
+    postgres_db="${EFFCHAT_DB_NAME:-$(env_value POSTGRES_DB "$TARGET_ENV" || true)}"
+    postgres_db="${postgres_db:-effchat}"
+    postgres_password="${EFFCHAT_DB_PASSWORD:-$(env_value POSTGRES_PASSWORD "$TARGET_ENV" || true)}"
+    postgres_password="${postgres_password:-$(random_hex)}"
+
+    set_env_value "$TARGET_ENV" COMPOSE_PROFILES bundled-db
+    set_env_value "$TARGET_ENV" DATABASE_URL ""
+    set_env_value "$TARGET_ENV" POSTGRES_USER "$postgres_user"
+    set_env_value "$TARGET_ENV" POSTGRES_DB "$postgres_db"
+    set_env_value "$TARGET_ENV" POSTGRES_PASSWORD "$postgres_password"
+    set_env_value "$TARGET_ENV" DB_HOST postgres
+    set_env_value "$TARGET_ENV" DB_PORT 5432
+    set_env_value "$TARGET_ENV" DB_USER "$postgres_user"
+    set_env_value "$TARGET_ENV" DB_NAME "$postgres_db"
+    set_env_value "$TARGET_ENV" DB_PASSWORD "$postgres_password"
+    set_env_value "$TARGET_ENV" DB_SSLMODE disable
+else
+    database_url="${DATABASE_URL:-$(env_value DATABASE_URL "$TARGET_ENV" || true)}"
+    set_env_value "$TARGET_ENV" COMPOSE_PROFILES ""
+    if [ -n "$database_url" ]; then
+        set_env_value "$TARGET_ENV" DATABASE_URL "$database_url"
+    else
+        db_host="${EFFCHAT_DB_HOST:-$(env_value DB_HOST "$TARGET_ENV" || true)}"
+        db_port="${EFFCHAT_DB_PORT:-$(env_value DB_PORT "$TARGET_ENV" || true)}"
+        db_name="${EFFCHAT_DB_NAME:-$(env_value DB_NAME "$TARGET_ENV" || true)}"
+        db_user="${EFFCHAT_DB_USER:-$(env_value DB_USER "$TARGET_ENV" || true)}"
+        db_password="${EFFCHAT_DB_PASSWORD:-$(env_value DB_PASSWORD "$TARGET_ENV" || true)}"
+        db_sslmode="${EFFCHAT_DB_SSLMODE:-$(env_value DB_SSLMODE "$TARGET_ENV" || true)}"
+
+        if [ -n "$tty_fd" ]; then
+            db_host="$(prompt "PostgreSQL host" "${db_host:-127.0.0.1}")"
+            db_port="$(prompt "PostgreSQL port" "${db_port:-5432}")"
+            db_name="$(prompt "PostgreSQL database" "${db_name:-effchat}")"
+            db_user="$(prompt "PostgreSQL user" "${db_user:-effchat}")"
+            if [ -z "$db_password" ]; then
+                db_password="$(prompt_secret "PostgreSQL password")"
+            fi
+            db_sslmode="$(prompt "PostgreSQL SSL mode" "${db_sslmode:-require}")"
+        fi
+        [ -n "$db_host" ] || die "external PostgreSQL host is required"
+        case "$db_port" in ''|*[!0-9]*) die "external PostgreSQL port must be numeric" ;; esac
+        [ -n "$db_name" ] || die "external PostgreSQL database is required"
+        [ -n "$db_user" ] || die "external PostgreSQL user is required"
+        [ -n "$db_password" ] || die "external PostgreSQL password is required"
+        [ -n "$db_sslmode" ] || die "external PostgreSQL SSL mode is required"
+
+        set_env_value "$TARGET_ENV" DATABASE_URL ""
+        set_env_value "$TARGET_ENV" DB_HOST "$db_host"
+        set_env_value "$TARGET_ENV" DB_PORT "$db_port"
+        set_env_value "$TARGET_ENV" DB_NAME "$db_name"
+        set_env_value "$TARGET_ENV" DB_USER "$db_user"
+        set_env_value "$TARGET_ENV" DB_PASSWORD "$db_password"
+        set_env_value "$TARGET_ENV" DB_SSLMODE "$db_sslmode"
+    fi
+fi
+
+jwt_secret="${EFFCHAT_JWT_SECRET:-$(env_value JWT_SECRET "$TARGET_ENV" || true)}"
+jwt_secret="${jwt_secret:-$(random_hex)}"
+set_env_value "$TARGET_ENV" JWT_SECRET "$jwt_secret"
+
+if [ "$MODE" = update ]; then
+    echo "Updating EffChat to ${VERSION}; existing settings and data are preserved."
+else
+    echo "Pulling EffChat ${VERSION}..."
+fi
+(
+    cd "$INSTALL_DIR"
+    docker compose pull
+    docker compose up -d --wait
+)
 
 echo
 echo "EffChat is ready: http://127.0.0.1:${WEB_PORT}"
 echo "Installation directory: $INSTALL_DIR"
-echo "Compose file: $COMPOSE_FILE"
-echo "Environment file: $ENV_FILE (secrets and data settings preserved)"
+echo "Daily commands: cd $INSTALL_DIR && docker compose pull && docker compose up -d"

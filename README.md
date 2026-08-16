@@ -122,7 +122,7 @@ flowchart LR
 - **Frontend**：React 19、TypeScript、Vite、Tailwind CSS v4
 - **Database**：PostgreSQL
 - **Extractor**：隔离的 Python sidecar
-- **Deployment**：Docker Compose
+- **Deployment**：一个 EffChat 应用镜像按 `web`、`backend`、`extractor`、`migrate` 角色运行；PostgreSQL 使用官方独立镜像
 
 完整数据流、目录职责和运行不变量见 [架构文档](ARCHITECTURE.md)。
 
@@ -130,7 +130,7 @@ flowchart LR
 
 ### 一条命令部署
 
-适合个人实例。脚本会提示选择安装目录和 Web 端口，生成本地随机密钥，下载同一测试版的 Compose 与 migration，拉取镜像并启动：
+适合个人实例。脚本会提示选择安装目录、Web 端口和数据库来源，生成本地随机密钥，下载同一测试版的 Compose，拉取一个 EffChat 应用镜像并启动。默认一并启动专用 PostgreSQL，也可连接已有 PostgreSQL：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
@@ -142,7 +142,7 @@ curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/i
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat EFFCHAT_WEB_PORT=8088 bash
 ```
 
-首次安装只接受空目录。更新已有的 EffChat registry 部署时，重新运行同一脚本并输入 `update`；脚本会保留环境文件、端口、项目名以及 data/storage/backups，只替换受控部署文件，并把旧文件归档到 `deployment-backups/`。
+安装目录最终只有一个活动 `.env`、一个 `compose.yml` 和运行数据。更新已有 EffChat 部署时，重新运行同一脚本并输入 `update`；脚本会保留端口、项目名、未知配置、JWT、数据库凭据及 data/storage/backups，只替换受控部署文件，并把旧 Compose、环境入口和宿主机 migration 归档到 `deployment-backups/`。应用 migration 已随镜像发布，不再要求部署目录长期保留 SQL 文件。
 
 ### 使用 Docker Compose 与已发布镜像
 
@@ -157,9 +157,11 @@ docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
 
+该模板的 `web`、`backend`、`py-extractor` 和一次性 `migrate` 服务共用同一个 `gjhuo/effchat` 镜像，但仍是职责隔离的独立容器。默认 `COMPOSE_PROFILES=bundled-db` 启动官方 `postgres:17`；接入外部 PostgreSQL 时关闭该 profile，并填写 `DATABASE_URL` 或 `DB_*`。
+
 ### 从本地源码构建完整栈
 
-源码方式仍使用相同的数据和 migration 契约，只把三个应用镜像改为本机构建：
+源码方式仍使用相同的数据和 migration 契约，只把统一 EffChat 应用镜像改为本机构建：
 
 ```bash
 git clone https://github.com/huoguojun123/EffChat.git
@@ -173,7 +175,7 @@ scripts/docker-build.sh up
 
 ```bash
 scripts/docker-build.sh config  # 检查最终 Compose
-scripts/docker-build.sh build   # 只构建应用镜像
+scripts/docker-build.sh build   # 只构建统一应用镜像
 scripts/docker-build.sh logs    # 查看服务日志
 scripts/docker-build.sh down    # 停止服务，不删除数据卷
 ```

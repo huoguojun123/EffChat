@@ -23,7 +23,7 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 
 ## 当前边界
 
-- `.env.docker` 只保存基础设施配置：数据库、JWT、端口、数据目录、反代来源、内部服务地址和日志轮转。
+- 一键部署的 `.env` 与源码部署的 `.env.docker` 只保存基础设施配置：数据库、JWT、端口、数据目录、反代来源、内部服务地址和日志轮转。
 - 模型渠道、模型 API key、搜索服务、网页提取服务和 MinerU OCR 都在管理员网页持久化配置。
 - 不包含代码执行沙盒、Shell 工具、浏览器自动化、完整 RBAC、成本账单和 Skills marketplace。
 - `message_format` / `schema_version` 仍保留兼容字段，但 0.3.4 运行时按当前 Eino `schema.Message` 主线处理，不提供 `/api/v2` 双协议运行时。
@@ -276,7 +276,10 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 ## 发布入口
 
 - 快速部署见 [Docker Compose 部署](docs/deployment.md)。
-- 部署脚本不自行解析或执行 `.env.docker`；secret、数据库身份和 `DATA_DIR` 均消费 `docker compose config --environment` 的最终插值结果，使引号、注释、转义及 shell/`--env-file` 优先级与实际容器环境和 bind mount 保持一致。
+- 发布只构建一个 EffChat 应用 manifest；Compose 以 `web`、`backend`、`py-extractor` 和一次性 `migrate` 四个独立角色复用它。角色仍保留各自 command、权限、资源、日志、依赖和健康检查，PostgreSQL 继续使用官方独立镜像，不引入单容器 supervisor。
+- 一键安装将活动部署收敛为 `.env + compose.yml`：默认通过 `bundled-db` profile 启动专用 PostgreSQL，也可关闭 profile 后使用 `DATABASE_URL` 或 `DB_*` 连接外部 PostgreSQL。backend 与 migrate 共享同一选择，`DATABASE_URL` 非空时优先；PostgreSQL 仍是唯一数据库实现。
+- migration runner 与 SQL 嵌入统一应用镜像，registry 部署不再从宿主机挂载 migration。更新器只归档被替换的 Compose、环境入口和旧 migration，保留未知配置、secret、端口、数据路径、活动数据库与 storage。
+- 源码部署脚本不自行解析或执行 `.env.docker`；secret、数据库身份和 `DATA_DIR` 均消费 `docker compose config --environment` 的最终插值结果，使引号、注释、转义及 shell/`--env-file` 优先级与实际容器环境和 bind mount 保持一致。一键安装器只对自己管理的单行 `.env` 键做保留式读写，不执行其中内容，并以 Compose 解析后的特殊字符回归测试约束兼容性。
 - storage layout marker 是显式生命周期状态：旧 marker 兼容解释为 `migrated`，成功清理 legacy uploads 后原子记录为 `finalized`；rollback 只允许 `migrated` 且 legacy/restore 工件仍存在的状态，并在停止服务或执行 SQL 前拒绝 finalized、未知或缺失工件。
 - `docker-build.sh up` 和 `reset-db` 均先完成镜像构建，再进入服务、migration 和 storage 切换；最终服务使用 `up --no-build --wait`，构建失败不会先停止现有服务或删除 reset 目标。
 - 根 Docker build context 通过 `.dockerignore` 同时排除根级与嵌套的 data、storage、uploads、backups、logs、数据库导出、测试报告和本地审查/控制目录；源码、lockfile、公开 env example 与许可证材料仍是显式构建输入。该边界只减少发送给本地或远程 builder 的内容，不能替代 Git/Gitleaks 扫描。
@@ -286,4 +289,4 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 - restore 只接受与活动 `DATA_DIR` 无重叠的空目录，并用原子目录锁独占该目标，强制生成独立 Compose project、显式网络和 Docker 动态 loopback 端口。它先验证并安全解包 storage，再恢复到空 PostgreSQL、核对备份 migration 账本并运行当前统一 runner，检查数据库受管路径与磁盘文件，最后等待四个服务健康并输出隔离 URL；失败只对该隔离 project 执行不带 volume 删除的 `down` 并清理脚本创建的目标内容。
 - 管理配置见 [管理员配置指南](docs/administration.md)。
 - 发布门禁见 [发布检查清单](docs/release-checklist.md)。
-- 三个应用镜像在构建阶段分别从实际 Go 编译图、前端生产依赖树和 Python 锁定安装集生成第三方许可归档；缺少许可正文且没有精确版本 fallback 时构建失败。最终镜像只携带对应组件归档，基础镜像 OS/runtime 包继续以其上游镜像声明为边界。`scripts/check-image-licenses.sh` 会从最终镜像离线复制归档并校验 manifest、文件完整性和 SHA-256。
+- 统一应用镜像在构建阶段分别从实际 Go 编译图、前端生产依赖树和 Python 锁定安装集生成三类第三方许可归档；缺少许可正文且没有精确版本 fallback 时构建失败。最终镜像同时携带三类组件归档，基础镜像 OS/runtime 包继续以其上游镜像声明为边界。`scripts/check-image-licenses.sh` 会从最终镜像离线复制并逐类校验 manifest、文件完整性和 SHA-256。

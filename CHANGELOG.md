@@ -7,6 +7,31 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0-beta.1] - 2026-08-16
+
+### Added
+
+- Added a single EffChat application image that serves the independent web,
+  backend, Python extractor, and one-shot migration container roles.
+- Added installer and runtime support for either a dedicated PostgreSQL service
+  or an external PostgreSQL connection through fields or `DATABASE_URL`.
+
+### Changed
+
+- Reduced the personal deployment input to one active `.env`, one `compose.yml`,
+  and runtime data while embedding application migrations in the image.
+- Updated CI and release publishing to build one multi-architecture EffChat
+  manifest with backend, frontend, and Python license archives.
+- Preserved existing deployment settings, secrets, ports, database selection,
+  data, storage, and backups when upgrading older three-image layouts.
+
+### Security
+
+- Kept PostgreSQL outside the application image and preserved per-role process,
+  health, permission, resource, and failure isolation.
+- Added guarded dotenv round trips for special-character secrets and continued
+  to reject unknown deployment directories or destructive volume operations.
+
 ## [0.4.0-beta.1] - 2026-08-14
 
 ### Added
@@ -100,7 +125,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.0-beta.1...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.5.0-beta.1...HEAD
+[0.5.0-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.5.0-beta.1
 [0.4.0-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.1
 [0.3.4-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.3
 [0.3.4-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.2

@@ -5,10 +5,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 DOCKERFILE="$ROOT/Dockerfile"
 ENTRYPOINT="$ROOT/docker/entrypoint.sh"
 E2E_COMPOSE="$ROOT/frontend/e2e/docker-compose.e2e.yml"
+E2E_RUNNER="$ROOT/scripts/run-isolated-playwright.sh"
 
 test -f "$DOCKERFILE"
 test -x "$ENTRYPOINT"
 test -f "$E2E_COMPOSE"
+test -x "$E2E_RUNNER"
 
 for role in backend web extractor migrate; do
   grep -Eq "^[[:space:]]*${role}\)" "$ENTRYPOINT"
@@ -25,6 +27,7 @@ if grep -Fq 'extractor.app.main' "$DOCKERFILE" "$ENTRYPOINT" "$ROOT/.github/work
 fi
 grep -Fq 'ENTRYPOINT ["/usr/local/bin/effchat-entrypoint"]' "$DOCKERFILE"
 grep -Fq 'image: effchat:local' "$E2E_COMPOSE"
+grep -Fq 'COMPOSE_PROFILES=bundled-db' "$E2E_RUNNER"
 
 if grep -Fq 'effchat-py-extractor:local' "$E2E_COMPOSE"; then
   echo "isolated Playwright must reuse the unified application image" >&2

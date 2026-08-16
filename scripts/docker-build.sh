@@ -20,6 +20,8 @@ BUILD_REF_PATHS=(
   backend
   frontend
   py-extractor
+  Dockerfile
+  docker
   scripts
   docker-compose.yml
   .dockerignore
@@ -31,7 +33,7 @@ BUILD_REF_PATHS=(
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/docker-build.sh build      Build backend and web images
+  scripts/docker-build.sh build      Build the unified EffChat image
   scripts/docker-build.sh up         Build and start the full stack
   scripts/docker-build.sh config     Validate and render docker-compose.yml
   scripts/docker-build.sh build-ref  Print the build identifier for this source tree

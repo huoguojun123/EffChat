@@ -1,4 +1,4 @@
-name: Release container images
+name: Release container image
 
 on:
   push:
@@ -34,22 +34,9 @@ jobs:
           scripts/verify-release-ref.sh
 
   build:
-    name: Build ${{ matrix.component.name }}
+    name: Build unified EffChat image
     needs: verify
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: true
-      matrix:
-        component:
-          - name: backend
-            dockerfile: backend/Dockerfile
-            image: effchat-backend
-          - name: web
-            dockerfile: frontend/Dockerfile
-            image: effchat-web
-          - name: py-extractor
-            dockerfile: py-extractor/Dockerfile
-            image: effchat-py-extractor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -67,14 +54,14 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: |
-            ghcr.io/huoguojun123/${{ matrix.component.image }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component.image }}
+            ghcr.io/huoguojun123/effchat
+            ${{ secrets.DOCKERHUB_USERNAME }}/effchat
           tags: type=raw,value=staging-${{ github.sha }}
           flavor: latest=false
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: ${{ matrix.component.dockerfile }}
+          file: Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.metadata.outputs.tags }}
@@ -84,7 +71,7 @@ jobs:
           sbom: true
 
   promote:
-    name: Promote release manifests
+    name: Promote release manifest
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -99,22 +86,20 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Promote all images after successful builds
+      - name: Promote image after successful build
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           RELEASE_TAG: ${{ github.ref_name }}
           SOURCE_TAG: staging-${{ github.sha }}
         run: |
           set -euo pipefail
-          for image in effchat-backend effchat-web effchat-py-extractor; do
-            ghcr_source="ghcr.io/huoguojun123/${image}:${SOURCE_TAG}"
-            dockerhub_source="${DOCKERHUB_USERNAME}/${image}:${SOURCE_TAG}"
-            docker buildx imagetools create \
-              --tag "ghcr.io/huoguojun123/${image}:${RELEASE_TAG}" \
-              --tag "ghcr.io/huoguojun123/${image}:sha-${GITHUB_SHA}" \
-              "${ghcr_source}"
-            docker buildx imagetools create \
-              --tag "${DOCKERHUB_USERNAME}/${image}:${RELEASE_TAG}" \
-              --tag "${DOCKERHUB_USERNAME}/${image}:sha-${GITHUB_SHA}" \
-              "${dockerhub_source}"
-          done
+          ghcr_source="ghcr.io/huoguojun123/effchat:${SOURCE_TAG}"
+          dockerhub_source="${DOCKERHUB_USERNAME}/effchat:${SOURCE_TAG}"
+          docker buildx imagetools create \
+            --tag "ghcr.io/huoguojun123/effchat:${RELEASE_TAG}" \
+            --tag "ghcr.io/huoguojun123/effchat:sha-${GITHUB_SHA}" \
+            "${ghcr_source}"
+          docker buildx imagetools create \
+            --tag "${DOCKERHUB_USERNAME}/effchat:${RELEASE_TAG}" \
+            --tag "${DOCKERHUB_USERNAME}/effchat:sha-${GITHUB_SHA}" \
+            "${dockerhub_source}"

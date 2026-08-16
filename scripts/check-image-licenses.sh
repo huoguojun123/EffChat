@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 3 ]; then
-  echo "usage: $0 <backend-image> <frontend-image> <python-image>" >&2
+if [ "$#" -ne 1 ]; then
+  echo "usage: $0 <effchat-image>" >&2
   exit 2
 fi
 
@@ -32,5 +32,5 @@ check_image() {
 }
 
 check_image backend "$1"
-check_image frontend "$2"
-check_image python "$3"
+check_image frontend "$1"
+check_image python "$1"

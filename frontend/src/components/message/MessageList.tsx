@@ -663,7 +663,7 @@ function CompactionDivider({
     <div className="py-5" data-testid="compaction-divider">
       <div className="flex items-center gap-3 text-muted-foreground">
         <div className="h-px flex-1 bg-border" />
-        <div className="flex items-center gap-2 text-[11px] tracking-wide">
+        <div className="flex items-center gap-2 text-xs tracking-wide">
           <button
             onClick={() => setExpanded((v) => !v)}
             className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors motion-control hover:text-foreground"
@@ -731,7 +731,7 @@ function CompactionIndicator({ notice }: { notice?: string }) {
   return (
     <div className="flex items-center gap-3 py-5 text-muted-foreground animate-msg-in">
       <div className="h-px flex-1 bg-border" />
-      <span className="flex items-center gap-1.5 text-[11px] tracking-wide">
+      <span className="flex items-center gap-1.5 text-xs tracking-wide">
         <Loader2 className="h-3 w-3 animate-spin" />
         {notice || "正在压缩上下文"}
       </span>

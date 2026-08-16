@@ -155,7 +155,7 @@ export function UserMessage({
                 {savingEdit ? "保存中" : "保存并重新生成"}
               </button>
             </div>
-            {editError && <span role="alert" aria-live="polite" className="text-[11px] text-rose-600 dark:text-rose-400">{editError}</span>}
+            {editError && <span role="alert" aria-live="polite" className="text-xs text-rose-600 dark:text-rose-400">{editError}</span>}
           </div>
         ) : text ? <UserText text={text} /> : null}
         {!editing && (isLastUserRetryable || isEditableTail) ? (
@@ -184,14 +184,14 @@ export function UserMessage({
                 </button>
               ) : null}
             </div>
-            {retryError && <span role="alert" aria-live="polite" className="text-[11px] text-rose-600 dark:text-rose-400">{retryError}</span>}
+            {retryError && <span role="alert" aria-live="polite" className="text-xs text-rose-600 dark:text-rose-400">{retryError}</span>}
           </div>
         ) : null}
         {message.local_state === "pending" || message.local_state === "streaming" || message.local_state === "finalizing" ? (
-          <div className="text-right text-[11px] text-muted-foreground">等待服务端确认</div>
+          <div className="text-right text-xs text-muted-foreground">等待服务端确认</div>
         ) : null}
         {message.local_state === "failed_local" ? (
-          <div className="text-right text-[11px] text-rose-600 dark:text-rose-400">
+          <div className="text-right text-xs text-rose-600 dark:text-rose-400">
             {message.local_error || "本次回复未能完成，可重试最后一条消息"}
           </div>
         ) : null}
@@ -261,7 +261,7 @@ function UserText({ text }: { text: string }) {
         <div className="flex justify-center">
           <button
             onClick={handleToggle}
-            className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors motion-control hover:text-foreground"
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs text-muted-foreground transition-colors motion-control hover:text-foreground"
           >
             {collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
             <span>{collapsed ? "展开" : "收起"}</span>

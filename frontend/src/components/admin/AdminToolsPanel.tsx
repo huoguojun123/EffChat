@@ -91,7 +91,7 @@ export function AdminToolsPanel({ tools, setTools, setError }: Props) {
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm font-medium">{tool.display_name || tool.key}</span>
-                    <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{tool.key}</span>
+                    <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{tool.key}</span>
                   </div>
                   <div className={`mt-1 text-xs ${tool.enabled ? "text-emerald-600" : "text-muted-foreground"}`}>
                     {tool.enabled ? "当前可被 Agent 调用" : "已从 Agent 工具集中移除"}
@@ -140,7 +140,7 @@ export function AdminToolsPanel({ tools, setTools, setError }: Props) {
                               <span className="text-muted-foreground">{new Date(event.created_at).toLocaleString("zh-CN")}</span>
                             </div>
                             <div className="mt-1 truncate text-muted-foreground" title={event.reason}>{event.reason}</div>
-                            <div className="mt-1 font-mono text-[11px] text-muted-foreground">{toolEventChange(event)}</div>
+                            <div className="mt-1 font-mono text-xs text-muted-foreground">{toolEventChange(event)}</div>
                           </div>
                           {canRollback ? (
                             <button

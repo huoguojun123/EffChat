@@ -72,7 +72,7 @@ function FileButton({ active, path, kind, onClick }: { active: boolean; path: st
     >
       <FileText className="h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">{path}</span>
-      <span className="text-[11px] text-muted-foreground">{kind}</span>
+      <span className="text-xs text-muted-foreground">{kind}</span>
     </button>
   )
 }

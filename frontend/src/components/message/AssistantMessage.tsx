@@ -228,7 +228,7 @@ function ErrorNotice({ detail, diagnostic, onRetry, retrying }: { detail: string
             {hasDetail ? detail : "请求过程中出现错误，可以重试。如果反复出现，请检查模型配置或稍后再试。"}
           </p>
           {diagnostic ? (
-            <p className="break-words text-[11px] leading-relaxed text-rose-600/70 dark:text-rose-400/70">
+            <p className="break-words text-xs leading-relaxed text-rose-600/70 dark:text-rose-400/70">
               {diagnostic}
             </p>
           ) : null}
@@ -309,7 +309,7 @@ const ReasoningSummary = memo(function ReasoningSummary({
         {segments.map((segment, index) => (
           <div key={index} className="space-y-1.5">
             {segment.thinking?.trim() ? (
-              <div className="whitespace-pre-wrap text-[12px] leading-[1.45] text-muted-foreground">{compactReasoningText(segment.thinking)}</div>
+              <div className="whitespace-pre-wrap text-xs leading-[1.45] text-muted-foreground">{compactReasoningText(segment.thinking)}</div>
             ) : null}
             {segment.tool_calls?.length ? <ToolCallTree toolCalls={segment.tool_calls} /> : null}
           </div>

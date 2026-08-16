@@ -58,9 +58,9 @@ export function AdminSkillsLibrary({
             <button className="min-w-0 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => onEdit(skill)}>
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-sm font-medium">{skill.name}</span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">L{skill.min_group_level ?? 0}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">L{skill.min_group_level ?? 0}</span>
               </div>
-              <div className="truncate text-[11px] text-muted-foreground">
+              <div className="truncate text-xs text-muted-foreground">
                 {sourceLabel(skill.source_type)} · {skill.files?.length || 0} files · {skill.id}
               </div>
             </button>

@@ -160,7 +160,7 @@ export function AdminSkillEditor({
                     onSetReferenceContent(activePath, e.target.value)
                   }
                 }}
-                className="min-h-[320px] flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 font-mono text-[13px] leading-5 outline-none focus:border-ring/50"
+                className="min-h-[320px] flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 font-mono text-sm leading-5 outline-none focus:border-ring/50"
               />
             </div>
             <AdminSkillFilesPanel

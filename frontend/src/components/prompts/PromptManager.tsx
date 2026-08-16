@@ -392,7 +392,7 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
                       <div className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
                         {group.groupName}
                       </div>
-                      <span className="text-[11px] tabular-nums text-muted-foreground">{group.items.length}</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">{group.items.length}</span>
                     </div>
                     <div>
                       {group.items.map((prompt) => {
@@ -529,9 +529,9 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
       </div>
 
       <style>{`
-        .prompt-input{height:36px;width:100%;border-radius:8px;border:1px solid var(--border);background:var(--background);padding:0 11px;font-size:14px;outline:none}
+        .prompt-input{height:36px;width:100%;border-radius:8px;border:1px solid var(--border);background:var(--background);padding:0 11px;font-size:var(--text-sm);outline:none}
         .prompt-input:focus,.prompt-textarea:focus{border-color:var(--foreground)}
-        .prompt-textarea{width:100%;resize:vertical;border-radius:8px;border:1px solid var(--border);background:var(--background);padding:10px 12px;font-size:14px;line-height:1.7;outline:none}
+        .prompt-textarea{width:100%;resize:vertical;border-radius:8px;border:1px solid var(--border);background:var(--background);padding:10px 12px;font-size:var(--text-sm);line-height:1.7;outline:none}
         .prompt-input:disabled,.prompt-textarea:disabled{opacity:.72}
       `}</style>
     </div>

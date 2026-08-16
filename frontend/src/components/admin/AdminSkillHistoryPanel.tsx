@@ -65,7 +65,7 @@ export function AdminSkillHistoryPanel({ skill, onRollback, setError }: Props) {
                 <span className="text-muted-foreground">{new Date(event.created_at).toLocaleString("zh-CN")}</span>
               </div>
               <div className="mt-1 truncate text-muted-foreground" title={event.reason}>{event.reason}</div>
-              <div className="mt-1 font-mono text-[11px] text-muted-foreground">{skillEventChange(event)}</div>
+              <div className="mt-1 font-mono text-xs text-muted-foreground">{skillEventChange(event)}</div>
             </div>
             {canRollback ? (
               <button

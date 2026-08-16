@@ -183,7 +183,7 @@ export function Sidebar() {
         <button
           onClick={handleNewChat}
           disabled={isLoadingSessionCreateReadiness || !sessionCreateReadiness?.ready || isCreatingSession}
-          className="flex w-full items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar px-2.5 py-2 text-[14px] font-medium text-sidebar-foreground shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-[background-color,border-color,box-shadow] motion-control hover:border-sidebar-border hover:bg-sidebar-accent/80 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
+          className="flex w-full items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar px-2.5 py-2 text-sm font-medium text-sidebar-foreground shadow-[0_1px_3px_rgba(0,0,0,0.05)] transition-[background-color,border-color,box-shadow] motion-control hover:border-sidebar-border hover:bg-sidebar-accent/80 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
           data-testid="new-chat"
         >
           {isCreatingSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -216,7 +216,7 @@ export function Sidebar() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索对话"
-            className="h-9 w-full rounded-lg border border-transparent bg-sidebar-accent/40 pl-8 pr-7 text-[14px] outline-none transition-[background-color,border-color,box-shadow] motion-control placeholder:text-muted-foreground/60 focus:border-sidebar-border/60 focus:bg-sidebar-accent focus:shadow-[0_0_0_2px_rgba(0,0,0,0.05)]"
+            className="h-9 w-full rounded-lg border border-transparent bg-sidebar-accent/40 pl-8 pr-7 text-sm outline-none transition-[background-color,border-color,box-shadow] motion-control placeholder:text-muted-foreground/60 focus:border-sidebar-border/60 focus:bg-sidebar-accent focus:shadow-[0_0_0_2px_rgba(0,0,0,0.05)]"
           />
           {query && (
             <button
@@ -229,7 +229,7 @@ export function Sidebar() {
           )}
         </div>
         {globalSearchActive && activeFolderId !== "all" ? (
-          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
             <button type="button" onClick={() => setSearchAll(false)} className={cn("rounded px-1.5 py-0.5", !searchAll && "bg-sidebar-accent text-sidebar-foreground")}>当前范围</button>
             <button type="button" onClick={() => setSearchAll(true)} className={cn("rounded px-1.5 py-0.5", searchAll && "bg-sidebar-accent text-sidebar-foreground")}>全部对话</button>
           </div>
@@ -255,7 +255,7 @@ export function Sidebar() {
               <div
                 key={folder.id}
                 className={cn(
-                  "group flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-2 text-[14px] transition-[background-color,color,box-shadow] motion-control",
+                  "group flex cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm transition-[background-color,color,box-shadow] motion-control",
                   activeFolderId === folder.id
                     ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
                     : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
@@ -357,7 +357,7 @@ export function Sidebar() {
                 setFolderName("")
                 setFolderError("")
               }}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[14px] text-muted-foreground transition-colors motion-control hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted-foreground transition-colors motion-control hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
             >
               <FolderPlus className="h-3.5 w-3.5" />
               新建文件夹
@@ -378,7 +378,7 @@ export function Sidebar() {
           <SessionList filteredSessions={filtered} onSelectSession={closeOnMobile} />
         )}
         {isLoadingMoreSessions && (
-          <div className="px-3 py-3 text-center text-[11px] text-muted-foreground">
+          <div className="px-3 py-3 text-center text-xs text-muted-foreground">
             加载更多...
           </div>
         )}
@@ -435,8 +435,8 @@ function ConversationSearchResults({ results, loading, error, onSelect }: { resu
         >
           {result.kind === "session" ? <MessagesSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <MessageSquareText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px] font-medium text-sidebar-foreground">{result.session_title || "新对话"}</span>
-            {result.kind === "message" ? <span className="mt-0.5 line-clamp-2 block text-[11px] leading-4 text-muted-foreground">{result.role === "user" ? "你：" : "助手："}{result.snippet}</span> : null}
+            <span className="block truncate text-sm font-medium text-sidebar-foreground">{result.session_title || "新对话"}</span>
+            {result.kind === "message" ? <span className="mt-0.5 line-clamp-2 block text-xs leading-4 text-muted-foreground">{result.role === "user" ? "你：" : "助手："}{result.snippet}</span> : null}
           </span>
         </button>
       ))}
@@ -466,7 +466,7 @@ function FolderNavButton({
       onClick={onClick}
       aria-current={active ? "true" : undefined}
       className={cn(
-        "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-[14px] transition-[background-color,color,box-shadow] motion-control",
+        "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-[background-color,color,box-shadow] motion-control",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
           : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"

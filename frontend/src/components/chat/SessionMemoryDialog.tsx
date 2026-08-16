@@ -455,7 +455,7 @@ export function SessionMemoryDialog({ open, sessionId, onOpenChange, onEnabledCh
           <aside className="max-h-[38dvh] min-h-0 overflow-y-auto border-t border-border/70 bg-muted/15 px-3 py-3 sm:px-4 md:max-h-none md:border-l md:border-t-0">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="text-sm font-medium tracking-tight">记忆维护</div>
-              {latestTaskRun ? <span className={cn("rounded-full px-2 py-0.5 text-[11px]", taskRunTone(latestTaskRun))}>{taskRunLabel(latestTaskRun)}</span> : null}
+              {latestTaskRun ? <span className={cn("rounded-full px-2 py-0.5 text-xs", taskRunTone(latestTaskRun))}>{taskRunLabel(latestTaskRun)}</span> : null}
             </div>
             <MemoryMaintenancePanel runs={maintenanceRuns} disabled={!data || saving || changed} onRetry={() => void retryMaintenance()} />
 
@@ -637,12 +637,12 @@ function MemoryItemRow({
   const current = isCurrentProgressItem(item)
   return (
     <div className={cn("group grid grid-cols-[1.5rem_minmax(0,1fr)_auto] gap-1.5 rounded-lg border border-border/75 bg-background px-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.035)] transition-[background-color,border-color,box-shadow] motion-control hover:border-ring/35 hover:bg-muted/15 focus-within:border-ring/45 sm:gap-2 sm:px-3", expanded ? "py-2" : "min-h-10 items-center py-1")}>
-      <div className={cn("text-[11px] tabular-nums text-muted-foreground", expanded ? "pt-2" : "self-center")}>{itemIndex + 1}</div>
+      <div className={cn("text-xs tabular-nums text-muted-foreground", expanded ? "pt-2" : "self-center")}>{itemIndex + 1}</div>
       <div className="min-w-0">
         {expanded ? (
           <>
             {current ? (
-              <div className="mb-1 inline-flex rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+              <div className="mb-1 inline-flex rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">
                 Current
               </div>
             ) : null}
@@ -661,7 +661,7 @@ function MemoryItemRow({
             className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-sm text-left text-sm leading-5 text-foreground/90 outline-none transition-colors motion-control hover:text-foreground focus-visible:bg-muted/35 disabled:opacity-70"
             title="展开编辑"
           >
-            {current ? <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">Current</span> : null}
+            {current ? <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">Current</span> : null}
             <span className={cn("min-w-0 break-words", item.trim() ? "line-clamp-1" : "text-muted-foreground")}>
               {item.trim() || "空条目，展开后编辑"}
             </span>
@@ -770,7 +770,7 @@ function MemoryMaintenancePanel({ runs, disabled, onRetry }: { runs: ModelTaskRu
                 <span className="shrink-0 tabular-nums text-muted-foreground">{formatTime(new Date(item.finished_at || item.started_at))}</span>
               </div>
               {item.status === "failed" && (item.error_type || item.error_message) ? (
-                <div className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-muted-foreground">
+                <div className="mt-1 line-clamp-2 break-words text-xs leading-4 text-muted-foreground">
                   {taskRunErrorTitle(item)}：{taskRunErrorMessage(item)}
                 </div>
               ) : null}
@@ -788,17 +788,17 @@ function MemoryChangeTimelineItem({ change, canUndo, onUndo }: { change: Session
     <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-3">
       <div className="pt-0.5 text-right">
         <div className="text-xs font-medium tabular-nums text-foreground">{stamp.date}</div>
-        <div className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">{stamp.time}</div>
+        <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">{stamp.time}</div>
       </div>
       <div className="relative min-w-0 border-l border-border/70 pb-3 pl-3">
         <span className={cn("absolute -left-[5px] top-1 h-2.5 w-2.5 rounded-full ring-4 ring-background", change.source === "compact" ? "bg-amber-400" : change.source === "auto" ? "bg-sky-400" : change.source === "tool" ? "bg-violet-400" : "bg-muted-foreground/60")} />
         <div className="flex min-w-0 items-start justify-between gap-2">
           <div className="min-w-0 break-words text-sm leading-5">{displayChangeSummary(change)}</div>
-          <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[11px]", changeSourceClass(change.source))}>
+          <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs", changeSourceClass(change.source))}>
             {sourceLabel(change.source)}
           </span>
         </div>
-        <div className="mt-1 flex min-w-0 items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <div className="mt-1 flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
           <span className="inline-flex min-w-0 items-center gap-1 truncate">
             <Clock3 className="h-3 w-3 shrink-0" />
             <span className="truncate">{stamp.full}</span>

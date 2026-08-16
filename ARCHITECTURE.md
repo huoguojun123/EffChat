@@ -68,7 +68,7 @@ backend (Gin)
 - `src/api`：REST API 封装和文件 blob 鉴权下载。
 - `src/lib/sseProtocol.ts` / `runReconciliation.ts`：纯 SSE 帧解析、错误归一化和有界运行对账；`useSSE` 继续负责 React 生命周期、发送、停止、重试与 store 协调。
 
-外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面紧凑断点（包括 1080p/125% 下约 1536×864 CSS viewport）只收窄侧栏、管理导航、设置框和欢迎引文，不改变用户可调的聊天正文字号；移动端保持抽屉式侧栏和无横向溢出。
+外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面密度只依据可用 CSS viewport，不识别 OS、浏览器或 DPR：标准桌面保留 `0.25rem` spacing，宽度不超过 1600px 或高度不超过 900px 的非移动桌面使用 `0.2375rem` 紧凑 spacing，并同步侧栏、管理导航、设置框、欢迎引文、composer CSS 与运行时自动增高下限。产品 chrome 的常规辅助文字至少为 12px；用户可调的聊天正文字号保持独立。移动端不继承桌面紧凑 spacing，继续使用抽屉式侧栏、约 44 CSS px 的高频触摸命中盒和无横向溢出。
 
 聊天区域的通用 shell 与当前是否已有 active session 解耦：欢迎页、readiness 检查中、检查失败和无可用模型状态都继续渲染唯一的侧栏 opener，使移动抽屉或桌面持久化收起后的历史会话、账号菜单和设置仍可到达。模型选择、文件、导出、输入框、会话文件抽屉和拖放上传只在 active session 存在时渲染；隐藏侧栏继续由 `aria-hidden`、`inert` 和 pointer-events 共同隔离，不复制第二套 opener 或侧栏状态。
 

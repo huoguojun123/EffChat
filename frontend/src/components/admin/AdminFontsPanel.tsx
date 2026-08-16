@@ -262,7 +262,7 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
               <div className="min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="truncate font-medium">{font.display_name}</span>
-                  {selectedSlots.map((slot) => <span key={slot} className="rounded-sm bg-foreground px-1.5 py-0.5 text-[11px] text-background">{slot}</span>)}
+                  {selectedSlots.map((slot) => <span key={slot} className="rounded-sm bg-foreground px-1.5 py-0.5 text-xs text-background">{slot}</span>)}
                 </div>
                 <div className="mt-0.5 text-sm text-muted-foreground">{selectedSlots.length > 0 ? `用于 ${selectedSlots.join("、")}` : "未用于槽位"}</div>
               </div>

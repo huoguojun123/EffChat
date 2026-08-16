@@ -216,13 +216,13 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                     <FileIcon file={file} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{file.filename}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">
+                      <span className="block truncate text-xs text-muted-foreground">
                         {fileStatusLabel(file)}
                         {file.tokenEstimate ? ` · ${formatTokens(file.tokenEstimate)}` : ""}
                         {" · "}{formatBytes(file.size)}
                       </span>
                       {file.extractError ? (
-                        <span className="block truncate text-[11px] text-amber-500" title={file.extractError}>
+                        <span className="block truncate text-xs text-amber-500" title={file.extractError}>
                           解析失败：{file.extractError}
                         </span>
                       ) : null}
@@ -243,7 +243,7 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                   <span className="shrink-0"><FileIcon file={selected} /></span>
                   <div className="min-w-0 flex-1 overflow-hidden">
                     <div className="truncate text-sm font-medium">{selected.filename}</div>
-                    <div className="truncate text-[11px] text-muted-foreground">
+                    <div className="truncate text-xs text-muted-foreground">
                       {selected.content_type} · {formatBytes(selected.size)}
                       {selected.tokenEstimate ? ` · ${formatTokens(selected.tokenEstimate)}` : ""}
                     </div>

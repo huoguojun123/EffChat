@@ -177,21 +177,21 @@ export function FileChip({ file, onRemove, onRetry }: { file: FileInfo; onRemove
             <button
               type="button"
               onClick={onRetry}
-              className="shrink-0 rounded-[6px] px-1.5 text-[10px] font-medium text-primary transition-colors motion-control hover:bg-primary/10"
+              className="shrink-0 rounded-[6px] px-1.5 text-xs font-medium text-primary transition-colors motion-control hover:bg-primary/10"
             >
               重试
             </button>
           ) : null}
         </>
       ) : file.extractStatus === "ocr_pending" || file.extractStatus === "ocr_running" ? (
-        <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-sky-600">
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-sky-600">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           {statusLabel}
         </span>
       ) : statusLabel ? (
-        <span className="shrink-0 text-[10px] text-muted-foreground/70">{statusLabel}</span>
+        <span className="shrink-0 text-xs text-muted-foreground/70">{statusLabel}</span>
       ) : (
-        <span className="shrink-0 text-[10px] text-muted-foreground/60">{formatBytes(file.size)}</span>
+        <span className="shrink-0 text-xs text-muted-foreground/60">{formatBytes(file.size)}</span>
       )}
       <button
         onClick={onRemove}

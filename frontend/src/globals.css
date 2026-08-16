@@ -43,6 +43,7 @@
 }
 
 :root {
+  --spacing: 0.25rem;
   --motion-duration-control: 150ms;
   --motion-duration-surface: 180ms;
   --motion-duration-panel: 180ms;
@@ -50,6 +51,11 @@
   --desktop-sidebar-width: clamp(248px, 17vw, 280px);
   --admin-nav-width: clamp(204px, 14vw, 220px);
   --settings-dialog-width: 600px;
+  --chat-composer-height: 54px;
+  --chat-composer-padding-y: 15px;
+  --empty-greeting-max-width: min(48rem, 82vw);
+  --empty-greeting-font-size: 1.35rem;
+  --empty-greeting-line-height: 2.25rem;
   --theme-bg: #faf9f5;
   --theme-fg: #23211e;
   --theme-surface: #f4f2eb;
@@ -823,32 +829,33 @@ html.app-route-leaving #root {
 }
 
 .empty-greeting-quote {
-  max-width: min(48rem, 82vw);
-  font-size: 1.35rem;
-  line-height: 2.25rem;
+  max-width: var(--empty-greeting-max-width);
+  font-size: var(--empty-greeting-font-size);
+  line-height: var(--empty-greeting-line-height);
 }
 
-/* 1920×1080 at 125% scaling exposes roughly a 1536×864 CSS viewport. Keep
-   chrome compact there without changing the user-controlled chat text size. */
+/* Desktop density follows the available CSS viewport, not OS or DPR detection.
+   Tailwind v4 spacing utilities resolve this shared token at runtime, while
+   chat content keeps its independent user-controlled --chat-font-scale. */
 @media (min-width: 769px) and (max-width: 1600px), (min-width: 769px) and (max-height: 900px) {
   :root {
-    --desktop-sidebar-width: clamp(244px, 16.5vw, 260px);
-    --admin-nav-width: 208px;
+    --spacing: 0.2375rem;
+    --desktop-sidebar-width: clamp(240px, 16vw, 256px);
+    --admin-nav-width: 200px;
     --settings-dialog-width: 560px;
-  }
-
-  .empty-greeting-quote {
-    max-width: min(44rem, 74vw);
-    font-size: 1.15rem;
-    line-height: 2rem;
+    --chat-composer-height: 50px;
+    --chat-composer-padding-y: 13px;
+    --empty-greeting-max-width: min(44rem, 74vw);
+    --empty-greeting-font-size: 1.15rem;
+    --empty-greeting-line-height: 2rem;
   }
 }
 
 @media (max-width: 768px) {
-  .empty-greeting-quote {
-    max-width: 90vw;
-    font-size: 1.125rem;
-    line-height: 1.9rem;
+  :root {
+    --empty-greeting-max-width: 90vw;
+    --empty-greeting-font-size: 1.125rem;
+    --empty-greeting-line-height: 1.9rem;
   }
 }
 

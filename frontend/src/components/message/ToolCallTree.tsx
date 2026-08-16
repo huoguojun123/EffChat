@@ -57,10 +57,10 @@ function ToolCallNode({
         )}
       >
         {iconOf(toolName)}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {toolNameLabel(toolName)}{sourceLabel ? `（${sourceLabel}）` : ""}
         </span>
-        {citationsCount > 0 && <span className="shrink-0 text-[11px] text-muted-foreground">{citationsCount} 个来源</span>}
+        {citationsCount > 0 && <span className="shrink-0 text-xs text-muted-foreground">{citationsCount} 个来源</span>}
         <StatusBadge status={displayStatus} />
         {hasDetail ? (
           open ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
@@ -117,7 +117,7 @@ function iconOf(toolName: string) {
 function StatusBadge({ status }: { status: string }) {
   return (
     <span className={cn(
-      "inline-flex items-center gap-1 text-[11px]",
+      "inline-flex items-center gap-1 text-xs",
       status === "done" && "text-emerald-600 dark:text-emerald-400",
       status === "warning" && "text-amber-700 dark:text-amber-300",
       status === "error" && "text-rose-600 dark:text-rose-400",
@@ -156,11 +156,11 @@ function SearchResultView({ result, query }: { result: SearchResult; query?: str
               className="block transition-colors motion-control hover:text-foreground"
             >
               <div className="flex items-center gap-2">
-                <span className="shrink-0 text-[11px] text-muted-foreground">{index + 1}.</span>
+                <span className="shrink-0 text-xs text-muted-foreground">{index + 1}.</span>
                 <span className="min-w-0 flex-1 truncate text-xs font-medium">{item.title || hostOf(item.url)}</span>
                 <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
               </div>
-              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{hostOf(item.url)}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{hostOf(item.url)}</div>
               {item.snippet ? <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{item.snippet}</div> : null}
             </a>
           )

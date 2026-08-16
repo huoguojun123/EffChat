@@ -130,7 +130,7 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
                         }`}
                       >
                         <div className="truncate text-sm font-medium">{prompt.title}</div>
-                        <div className="mt-1 truncate text-[11px] opacity-60">{prompt.is_public ? "系统提示词" : "我的提示词"}</div>
+                        <div className="mt-1 truncate text-xs opacity-60">{prompt.is_public ? "系统提示词" : "我的提示词"}</div>
                       </button>
                     ))}
                   </section>
@@ -145,7 +145,7 @@ export function PromptPickerDialog({ open, onOpenChange }: Props) {
                   <>
                     <div className="mb-3 flex items-center gap-2">
                       <h3 className="truncate text-base font-semibold">{selected.title}</h3>
-                      <span className="rounded-md border px-2 py-0.5 text-[11px] text-muted-foreground">{selected.group_name || "默认分组"}</span>
+                      <span className="rounded-md border px-2 py-0.5 text-xs text-muted-foreground">{selected.group_name || "默认分组"}</span>
                       {activeSession?.system_prompt === selected.content && (
                         <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 px-2 py-0.5 text-xs text-emerald-600">
                           <Check className="h-3 w-3" />

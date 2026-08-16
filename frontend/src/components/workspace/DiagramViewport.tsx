@@ -148,7 +148,7 @@ export function DiagramViewport({
         <ViewportButton label="缩小" onClick={() => changeScale(scale / 1.2)} disabled={scale <= minScale}>
           <Minus className="h-4 w-4" />
         </ViewportButton>
-        <span className="w-10 text-center text-[11px] tabular-nums text-muted-foreground sm:w-11" aria-live="polite">
+        <span className="w-10 text-center text-xs tabular-nums text-muted-foreground sm:w-11" aria-live="polite">
           {Math.round(scale * 100)}%
         </span>
         <ViewportButton label="放大" onClick={() => changeScale(scale * 1.2)} disabled={scale >= maxScale}>

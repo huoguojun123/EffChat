@@ -50,8 +50,8 @@ export function AttachmentCard({ att }: { att: AttachmentMeta }) {
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-medium leading-tight">{att.filename}</div>
-          <div className="text-[11px]">附件已删除</div>
+          <div className="truncate text-sm font-medium leading-tight">{att.filename}</div>
+          <div className="text-xs">附件已删除</div>
         </div>
       </div>
     )
@@ -70,8 +70,8 @@ export function AttachmentCard({ att }: { att: AttachmentMeta }) {
           <Icon className={`h-5 w-5 ${tint}`} />
         </div>
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-medium leading-tight">{att.filename}</div>
-          <div className="text-[11px] text-muted-foreground">
+          <div className="truncate text-sm font-medium leading-tight">{att.filename}</div>
+          <div className="text-xs text-muted-foreground">
             {ext}
             {att.size > 0 ? ` · ${formatBytes(att.size)}` : ""}
           </div>

@@ -176,7 +176,7 @@ function ModeButton({ active, icon, label, onClick }: { active: boolean; icon: R
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "flex h-8 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium text-muted-foreground transition-[background-color,color,box-shadow] motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-background/50",
+        "flex h-8 items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-muted-foreground transition-[background-color,color,box-shadow] motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-background/50",
         active && "bg-background text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.05)] hover:bg-background"
       )}
     >
@@ -412,7 +412,7 @@ function ProfileForm({ onDone, onDirtyChange }: { onDone: () => void; onDirtyCha
         </Button>
       </div>
 
-      <style>{`.form-input,.form-readonly{width:100%;height:34px;padding:0 12px;border-radius:8px;background:var(--muted);border:1px solid transparent;outline:none;font-size:14px;transition:border-color var(--motion-duration-control) var(--motion-ease-standard),background-color var(--motion-duration-control) var(--motion-ease-standard)}.form-input:focus{border-color:var(--ring);background:var(--bg)}.form-readonly{display:flex;align-items:center;color:var(--muted-fg)}`}</style>
+      <style>{`.form-input,.form-readonly{width:100%;height:34px;padding:0 12px;border-radius:8px;background:var(--muted);border:1px solid transparent;outline:none;font-size:var(--text-sm);transition:border-color var(--motion-duration-control) var(--motion-ease-standard),background-color var(--motion-duration-control) var(--motion-ease-standard)}.form-input:focus{border-color:var(--ring);background:var(--bg)}.form-readonly{display:flex;align-items:center;color:var(--muted-fg)}`}</style>
     </div>
   )
 }
@@ -505,7 +505,7 @@ function PasswordForm({ onDone, onDirtyChange }: { onDone: () => void; onDirtyCh
         </Button>
       </div>
 
-      <style>{`.form-input{width:100%;height:34px;padding:0 12px;border-radius:8px;background:var(--muted);border:1px solid transparent;outline:none;font-size:14px;transition:border-color var(--motion-duration-control) var(--motion-ease-standard),background-color var(--motion-duration-control) var(--motion-ease-standard)}.form-input:focus{border-color:var(--ring);background:var(--bg)}`}</style>
+      <style>{`.form-input{width:100%;height:34px;padding:0 12px;border-radius:8px;background:var(--muted);border:1px solid transparent;outline:none;font-size:var(--text-sm);transition:border-color var(--motion-duration-control) var(--motion-ease-standard),background-color var(--motion-duration-control) var(--motion-ease-standard)}.form-input:focus{border-color:var(--ring);background:var(--bg)}`}</style>
     </form>
   )
 }

@@ -110,7 +110,7 @@ const StreamingReasoningSummary = memo(function StreamingReasoningSummary({
         {segments.map((segment, index) => (
           <div key={index} className="space-y-1.5">
             {segment.thinking?.trim() ? (
-              <div className="whitespace-pre-wrap text-[12px] leading-[1.45] text-muted-foreground">{compactReasoningText(segment.thinking)}</div>
+              <div className="whitespace-pre-wrap text-xs leading-[1.45] text-muted-foreground">{compactReasoningText(segment.thinking)}</div>
             ) : null}
             {segment.tool_calls?.length ? <ToolCallTree toolCalls={segment.tool_calls} streaming /> : null}
           </div>

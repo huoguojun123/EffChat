@@ -42,7 +42,7 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 function AppBootShell() {
   return (
     <div className="flex h-dvh overflow-hidden bg-background" aria-busy="true">
-      <div className="hidden w-[280px] shrink-0 border-r border-border/70 bg-sidebar md:block" />
+      <div className="hidden w-[var(--desktop-sidebar-width)] shrink-0 border-r border-border/70 bg-sidebar md:block" />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="h-12 shrink-0 border-b border-border/50" />
         <LoadingIndicator label="正在启动" className="flex-1" />

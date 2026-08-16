@@ -321,7 +321,7 @@ function ConfigInput({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          className="min-h-[420px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-[13px] leading-5 outline-none focus:border-foreground"
+          className="min-h-[420px] w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-sm leading-5 outline-none focus:border-foreground"
         />
       </div>
     )

@@ -9,7 +9,7 @@ import { useSkillStore } from "@/stores/skills"
 import { isStreamingAbortable, isStreamingInteractionBusy } from "@/lib/streamingStatus"
 import { isFileSendBlocked, isOCRPending } from "@/api/files"
 import {
-  COMPOSER_TEXTAREA_MIN_HEIGHT,
+  getComposerTextareaMinHeight,
   getComposerTextareaMaxHeight,
   type SearchMode,
 } from "./ChatInput.constants"
@@ -114,8 +114,9 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     const el = textareaRef.current
     el.style.height = "0px"
     const contentHeight = el.scrollHeight
+    const minHeight = getComposerTextareaMinHeight(el.ownerDocument)
     const maxHeight = getComposerTextareaMaxHeight(window.innerWidth)
-    const nextHeight = Math.min(Math.max(contentHeight, COMPOSER_TEXTAREA_MIN_HEIGHT), maxHeight)
+    const nextHeight = Math.min(Math.max(contentHeight, minHeight), maxHeight)
     el.style.height = `${nextHeight}px`
     el.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden"
   }, [])

@@ -103,11 +103,11 @@ export function SkillImportDialog({
                 <div className="min-w-0">
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm font-medium">{skill.name}</span>
-                    {duplicated && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">重复 ID</span>}
-                    {skill.default_action === "update" && <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-700 dark:text-sky-300">已存在，将更新</span>}
-                    {skill.default_action === "review" && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">疑似重复</span>}
+                    {duplicated && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-300">重复 ID</span>}
+                    {skill.default_action === "update" && <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-700 dark:text-sky-300">已存在，将更新</span>}
+                    {skill.default_action === "review" && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-300">疑似重复</span>}
                   </span>
-                  <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{skill.id} · {skill.source_path}</span>
+                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">{skill.id} · {skill.source_path}</span>
                   {skill.description && <span className="mt-1 line-clamp-2 block text-xs leading-5 text-muted-foreground">{skill.description}</span>}
                   {skillFiles.length > 0 && (
                     <div className="mt-2 grid gap-1 rounded-md bg-muted/45 p-2">
@@ -115,7 +115,7 @@ export function SkillImportDialog({
                         const entry = file.kind === "entry" || file.path === "SKILL.md"
                         const fileChecked = entry || selectedFiles.has(file.path)
                         return (
-                          <label key={file.path} className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+                          <label key={file.path} className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                             <input
                               type="checkbox"
                               checked={fileChecked}
@@ -197,9 +197,9 @@ export function SkillUpdateDialog({
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="truncate font-medium">{candidate.name}</span>
-                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{candidate.match_type || "候选"}</span>
+                      <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{candidate.match_type || "候选"}</span>
                     </div>
-                    <div className="mt-1 truncate text-[11px] text-muted-foreground">{candidate.id} · {candidate.source_path}</div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">{candidate.id} · {candidate.source_path}</div>
                   </button>
                 ))}
               </div>
@@ -233,7 +233,7 @@ export function SkillUpdateDialog({
                   </div>
                 )}
                 <div className="overflow-hidden rounded-md border border-border/70">
-                  <div className="grid grid-cols-[2rem_minmax(0,1fr)_5rem_5rem_5rem] gap-2 border-b border-border/70 bg-muted/45 px-3 py-2 text-[11px] text-muted-foreground">
+                  <div className="grid grid-cols-[2rem_minmax(0,1fr)_5rem_5rem_5rem] gap-2 border-b border-border/70 bg-muted/45 px-3 py-2 text-xs text-muted-foreground">
                     <span />
                     <span>文件</span>
                     <span>状态</span>
@@ -280,9 +280,9 @@ function VersionPanel({ title, name, id, path, content, truncated }: { title: st
     <div className="min-w-0 rounded-md border border-border/70 bg-background">
       <div className="border-b border-border/70 px-3 py-2">
         <div className="text-xs font-medium">{title}</div>
-        <div className="mt-1 truncate text-[11px] text-muted-foreground">{name} · {id} · {path}</div>
+        <div className="mt-1 truncate text-xs text-muted-foreground">{name} · {id} · {path}</div>
       </div>
-      <pre className="max-h-44 overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-[11px] leading-5 scrollbar-thin">
+      <pre className="max-h-44 overflow-auto whitespace-pre-wrap px-3 py-2 font-mono text-xs leading-5 scrollbar-thin">
         {content || "暂无预览"}
         {truncated ? "\n\n……预览已截断" : ""}
       </pre>

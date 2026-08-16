@@ -55,7 +55,7 @@ export function UserMenu() {
           <div className="h-px bg-border mx-1 my-1" />
 
           <div className="px-1">
-            <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">主题</p>
+            <p className="px-2 py-1 text-xs font-medium text-muted-foreground">主题</p>
             <div className="flex gap-0.5 px-1 pb-1">
               <ThemeBtn active={theme === "light"} onClick={() => setTheme("light")} icon={<Sun className="h-3.5 w-3.5" />} label="亮色" />
               <ThemeBtn active={theme === "dark"} onClick={() => setTheme("dark")} icon={<Moon className="h-3.5 w-3.5" />} label="暗色" />
@@ -67,8 +67,8 @@ export function UserMenu() {
 
           <div className="px-1">
             <div className="flex items-center justify-between px-2 py-1">
-              <p className="text-[11px] font-medium text-muted-foreground">对话字号</p>
-              <span className="text-[11px] tabular-nums text-muted-foreground">
+              <p className="text-xs font-medium text-muted-foreground">对话字号</p>
+              <span className="text-xs tabular-nums text-muted-foreground">
                 {Math.round(chatFontScale * 100)}%
               </span>
             </div>
@@ -119,7 +119,7 @@ export function UserMenu() {
             <LogOut className="h-4 w-4" />
             退出登录
           </button>
-          <div className="mx-1 mt-1 border-t border-border px-2.5 pt-2 pb-1 text-[11px] text-muted-foreground">
+          <div className="mx-1 mt-1 border-t border-border px-2.5 pt-2 pb-1 text-xs text-muted-foreground">
             {systemVersion}
           </div>
         </PopoverContent>
@@ -147,7 +147,7 @@ function ThemeBtn({ active, onClick, icon, label }: { active: boolean; onClick: 
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 flex-col items-center gap-1 rounded-md py-1.5 text-[11px] transition-colors motion-control ${
+      className={`flex flex-1 flex-col items-center gap-1 rounded-md py-1.5 text-xs transition-colors motion-control ${
         active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
       }`}
     >

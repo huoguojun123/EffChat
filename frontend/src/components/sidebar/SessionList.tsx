@@ -104,7 +104,7 @@ export function SessionList({
         ) : null}
         {grouped.map(({ label, items }) => (
           <div key={label}>
-            {label ? <p className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
+            {label ? <p className="px-2.5 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground/60">
               {label}
             </p> : null}
             <div className="space-y-px">
@@ -116,7 +116,7 @@ export function SessionList({
                   <div
                     key={session.id}
                     className={cn(
-                      "group relative flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[14px] cursor-pointer transition-colors motion-control",
+                      "group relative flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm cursor-pointer transition-colors motion-control",
                       active
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"

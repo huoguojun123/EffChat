@@ -8,9 +8,17 @@ export const SEARCH_MODE_LABEL: Record<SearchMode, string> = {
   auto: "联网：开启",
 }
 
-export const COMPOSER_TEXTAREA_MIN_HEIGHT = 54
+const COMPOSER_TEXTAREA_FALLBACK_MIN_HEIGHT = 54
 export const COMPOSER_TEXTAREA_MOBILE_MAX_HEIGHT = 132
 export const COMPOSER_TEXTAREA_DESKTOP_MAX_HEIGHT = 180
+
+export function getComposerTextareaMinHeight(ownerDocument?: Document) {
+  const raw = ownerDocument?.defaultView
+    ?.getComputedStyle(ownerDocument.documentElement)
+    .getPropertyValue("--chat-composer-height")
+  const value = Number.parseFloat(raw || "")
+  return Number.isFinite(value) && value > 0 ? value : COMPOSER_TEXTAREA_FALLBACK_MIN_HEIGHT
+}
 
 export function getComposerTextareaMaxHeight(viewportWidth: number) {
   if (viewportWidth >= 640) return COMPOSER_TEXTAREA_DESKTOP_MAX_HEIGHT

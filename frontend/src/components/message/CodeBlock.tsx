@@ -145,7 +145,7 @@ export const CodeBlock = memo(function CodeBlock({ code, language, streaming = f
     <>
       <div className="code-block-shell group relative my-3 overflow-hidden rounded-lg border border-border/70 bg-background/70">
         <span
-          className="pointer-events-none absolute left-2.5 top-2 z-20 rounded px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/75 backdrop-blur-sm"
+          className="pointer-events-none absolute left-2.5 top-2 z-20 rounded px-1.5 py-0.5 font-mono text-xs text-muted-foreground/75 backdrop-blur-sm"
           aria-label={`代码语言：${language || "text"}`}
         >
           {language || "text"}

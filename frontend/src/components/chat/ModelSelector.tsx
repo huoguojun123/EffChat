@@ -68,11 +68,11 @@ export function ModelSelector() {
             {formatModelName(currentModel, currentModelId)}
           </span>
           {currentModel ? (
-            <span className="hidden shrink-0 rounded-lg bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium leading-none text-muted-foreground/80 sm:inline">
+            <span className="hidden shrink-0 rounded-lg bg-muted/60 px-1.5 py-0.5 text-xs font-medium leading-none text-muted-foreground/80 sm:inline">
               {formatChannelName(currentModel)}
             </span>
           ) : currentModelId ? (
-            <span className="shrink-0 rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-amber-700 dark:text-amber-300">
+            <span className="shrink-0 rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium leading-none text-amber-700 dark:text-amber-300">
               模型不可用
             </span>
           ) : null}
@@ -80,7 +80,7 @@ export function ModelSelector() {
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72 p-1.5">
-        <p className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+        <p className="px-2.5 py-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
           模型
         </p>
         <div id={listboxId} role="listbox" className="max-h-[340px] overflow-y-auto scrollbar-thin space-y-0.5">
@@ -101,7 +101,7 @@ export function ModelSelector() {
                     <p className="text-sm font-medium truncate">{model.display_name}</p>
                     {active && <Check className="h-3 w-3 text-foreground/60 shrink-0" />}
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5 truncate">
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">
                     {formatChannelName(model)} · {formatContextWindow(model.context_window)}
                   </p>
                 </div>

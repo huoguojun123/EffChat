@@ -7,6 +7,27 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0-beta.3] - 2026-08-16
+
+### Fixed
+
+- Added one CSS-viewport-driven standard/compact density contract for desktop
+  product chrome, including sidebar, administration navigation, dialogs,
+  controls, spacing, and composer geometry.
+- Normalized visible product labels and metadata to the existing 12px and 14px
+  typography tokens while leaving user Markdown, code, previews, and the
+  independent chat font-size control unchanged.
+- Kept runtime textarea auto-resizing aligned with the shared composer height
+  token so compact Windows-style viewports do not jump back to the standard
+  desktop height after input.
+
+### Changed
+
+- Added deterministic browser regression coverage for standard desktop,
+  1536x864 at device scale 1.25, low-height desktop, and mobile layouts.
+- Preserved mobile spacing and 44 CSS px touch targets without adding OS, DPR,
+  browser, CSS zoom, or platform-specific branches.
+
 ## [0.4.0-beta.2] - 2026-08-16
 
 ### Added
@@ -125,7 +146,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.0-beta.2...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.0-beta.3...HEAD
+[0.4.0-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.3
 [0.4.0-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.2
 [0.4.0-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.1
 [0.3.4-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.3.4-beta.3

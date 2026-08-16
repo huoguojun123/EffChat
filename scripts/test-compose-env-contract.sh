@@ -12,6 +12,7 @@ write_env() {
 
   printf '%s\n' \
     'COMPOSE_PROJECT_NAME=effchat-env-contract-test' \
+    'COMPOSE_PROFILES=bundled-db' \
     'POSTGRES_USER=effchat' \
     "POSTGRES_PASSWORD=$postgres_password" \
     'POSTGRES_DB=effchat' \

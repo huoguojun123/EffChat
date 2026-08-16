@@ -122,7 +122,7 @@ flowchart LR
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v4
 - **Database:** PostgreSQL
 - **Extractor:** isolated Python sidecar
-- **Deployment:** Docker Compose
+- **Deployment:** one EffChat application image used by the `web`, `backend`, `extractor`, and `migrate` roles, plus the official PostgreSQL image
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for complete data flows, directory responsibilities, and runtime invariants.
 
@@ -130,7 +130,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for complete data flows, directory respon
 
 ### One-command personal install
 
-The installer prompts for an installation directory and web port, creates local random secrets, downloads release-matched Compose and migrations, pulls the images, and starts EffChat:
+The installer prompts for an installation directory, web port, and database source, creates local random secrets, downloads release-matched Compose, pulls one EffChat application image, and starts the stack. It uses a dedicated PostgreSQL service by default or can connect to an existing PostgreSQL server:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
@@ -142,7 +142,7 @@ Open `http://127.0.0.1:8088`. You can preset the directory or port to skip the c
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat EFFCHAT_WEB_PORT=8088 bash
 ```
 
-Fresh installation only accepts an empty directory. To update a recognized EffChat registry deployment, run the same script and enter `update`; the installer preserves the environment file, port, project name, and data/storage/backups, replaces only controlled deployment files, and archives old files under `deployment-backups/`.
+The resulting directory has one active `.env`, one `compose.yml`, and runtime data. To update a recognized EffChat deployment, run the same script and enter `update`; the installer preserves ports, project name, unknown settings, JWT and database credentials, and data/storage/backups. It replaces only controlled deployment files and archives superseded Compose, environment, and host migration files under `deployment-backups/`. Application migrations ship inside the image.
 
 ### Docker Compose with published images
 
@@ -157,9 +157,11 @@ docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
 
+The `web`, `backend`, `py-extractor`, and one-shot `migrate` services share the same `gjhuo/effchat` image while remaining separate containers. `COMPOSE_PROFILES=bundled-db` enables the official `postgres:17` service by default; clear that profile and provide either `DATABASE_URL` or `DB_*` to use external PostgreSQL.
+
 ### Build the complete stack from source
 
-The source path retains the same data and migration contracts while building the three application images locally:
+The source path retains the same data and migration contracts while building the unified EffChat application image locally:
 
 ```bash
 git clone https://github.com/huoguojun123/EffChat.git
@@ -173,7 +175,7 @@ Common commands:
 
 ```bash
 scripts/docker-build.sh config  # Render and validate Compose
-scripts/docker-build.sh build   # Build application images only
+scripts/docker-build.sh build   # Build the unified application image only
 scripts/docker-build.sh logs    # Follow service logs
 scripts/docker-build.sh down    # Stop services without deleting data volumes
 ```

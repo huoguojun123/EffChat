@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from app import docx_content, markdown_table, pptx_content, resource_limits, xlsx_content
 
 
-app = FastAPI(title="EffChat Extractor", version="0.4.0-beta.1")
+app = FastAPI(title="EffChat Extractor", version="0.4.0-beta.2")
 logger = logging.getLogger("uvicorn.error")
 
 MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTOR_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))

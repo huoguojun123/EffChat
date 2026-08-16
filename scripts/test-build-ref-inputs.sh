@@ -15,17 +15,17 @@ mkdir -p \
   "$fixture/backend" \
   "$fixture/frontend" \
   "$fixture/py-extractor" \
+  "$fixture/docker" \
   "$fixture/scripts/licenses"
 cp "$ROOT/scripts/docker-build.sh" "$fixture/scripts/docker-build.sh"
 cp "$ROOT/scripts/compose-env.sh" "$fixture/scripts/compose-env.sh"
 chmod +x "$fixture/scripts/docker-build.sh"
 
 printf 'package main\n' > "$fixture/backend/main.go"
-printf 'FROM scratch\n' > "$fixture/backend/Dockerfile"
 printf 'export const fixture = true\n' > "$fixture/frontend/app.ts"
-printf 'FROM scratch\n' > "$fixture/frontend/Dockerfile"
 printf 'fixture = True\n' > "$fixture/py-extractor/app.py"
-printf 'FROM scratch\n' > "$fixture/py-extractor/Dockerfile"
+printf 'FROM scratch\n' > "$fixture/Dockerfile"
+printf '#!/bin/sh\nexec "$@"\n' > "$fixture/docker/entrypoint.sh"
 printf 'fixture license helper\n' > "$fixture/scripts/licenses/helper.py"
 printf 'services: {}\n' > "$fixture/docker-compose.yml"
 printf 'data/\n' > "$fixture/.dockerignore"
@@ -45,11 +45,10 @@ baseline="$(build_ref)"
 
 included=(
   backend/main.go
-  backend/Dockerfile
   frontend/app.ts
-  frontend/Dockerfile
   py-extractor/app.py
-  py-extractor/Dockerfile
+  Dockerfile
+  docker/entrypoint.sh
   scripts/licenses/helper.py
   docker-compose.yml
   .dockerignore

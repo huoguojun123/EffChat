@@ -6,17 +6,43 @@ x-default-logging: &default-logging
     max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
     max-file: ${DOCKER_LOG_MAX_FILE:-5}
 
+x-effchat-app: &effchat-app
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
+      HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
+      ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
+      NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
+      GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+      GOSUMDB: ${GOSUMDB:-sum.golang.org}
+      ALPINE_MIRROR: ${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
+      NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}
+      BUILD_REF: ${BUILD_REF:-unknown}
+  image: effchat:local
+
+x-database-env: &database-env
+  DATABASE_URL: ${DATABASE_URL:-}
+  DB_HOST: ${DB_HOST:-postgres}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_USER: ${DB_USER:-${POSTGRES_USER:-effchat}}
+  DB_PASSWORD: ${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}
+  DB_NAME: ${DB_NAME:-${POSTGRES_DB:-effchat}}
+  DB_SSLMODE: ${DB_SSLMODE:-disable}
+
 services:
   postgres:
     image: postgres:17
+    profiles: [bundled-db]
     restart: unless-stopped
     logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-effchat}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: ${POSTGRES_DB:-effchat}
     volumes:
-      - ${DATA_DIR:-../data}/postgres:/var/lib/postgresql/data
+      - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -24,37 +50,20 @@ services:
       retries: 10
 
   migrate:
-    image: postgres:17
+    <<: *effchat-app
+    command: [migrate]
     restart: "no"
     logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: 5432
-      PGUSER: ${POSTGRES_USER:-effchat}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
-      PGDATABASE: ${POSTGRES_DB:-effchat}
-    volumes:
-      - ./backend/migrations:/migrations:ro
-    command:
-      - sh
-      - -ec
-      - |
-        /migrations/build_migration_script.sh > /tmp/apply-migrations.sql
-        psql -v ON_ERROR_STOP=1 -f /tmp/apply-migrations.sql
+      <<: *database-env
 
   py-extractor:
-    build:
-      context: .
-      dockerfile: py-extractor/Dockerfile
-      args:
-        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
-        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
-        ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
-        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
-    image: effchat-py-extractor:local
+    <<: *effchat-app
+    command: [extractor]
     restart: unless-stopped
     logging: *default-logging
     mem_limit: ${PY_EXTRACTOR_MEM_LIMIT:-512m}
@@ -73,40 +82,22 @@ services:
       retries: 3
 
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-      args:
-        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
-        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
-        ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
-        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
-        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
-        GOSUMDB: ${GOSUMDB:-sum.golang.org}
-        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
-        BUILD_REF: ${BUILD_REF:-unknown}
-    image: effchat-backend:local
+    <<: *effchat-app
+    command: [backend]
     restart: unless-stopped
     stop_grace_period: 70s
     logging: *default-logging
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       py-extractor:
         condition: service_healthy
     environment:
+      <<: *database-env
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 8080
       SERVER_MODE: ${SERVER_MODE:-release}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: ${POSTGRES_USER:-effchat}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
-      DB_NAME: ${POSTGRES_DB:-effchat}
-      DB_SSLMODE: disable
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
+      JWT_SECRET: ${JWT_SECRET:-}
       CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
       AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
@@ -122,35 +113,32 @@ services:
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
       no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
     volumes:
-      - ${DATA_DIR:-../data}/storage:/app/storage
+      - ${DATA_DIR:-./data}/storage:/app/storage
     ports:
       - "127.0.0.1:${BACKEND_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/health >/dev/null"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
   web:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-      args:
-        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-}
-        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-}
-        ALL_PROXY: ${DOCKER_BUILD_ALL_PROXY:-}
-        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
-        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}
-    image: effchat-web:local
+    <<: *effchat-app
+    command: [web]
     restart: unless-stopped
     logging: *default-logging
     environment:
-      # The web proxy, backend and extractor share one deployment upload
-      # ceiling; the Nginx envsh adds only multipart framing overhead.
       PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
-      # Only substitute EffChat-owned template variables. Nginx runtime
-      # variables such as $uri and $remote_addr must remain intact.
-      NGINX_ENVSUBST_FILTER: ^EFFCHAT_
     depends_on:
       backend:
         condition: service_healthy
     ports:
       - "127.0.0.1:${WEB_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1/health >/dev/null"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
 networks:
   default:

@@ -1,6 +1,6 @@
 services:
   model-stub:
-    image: effchat-py-extractor:local
+    image: effchat:local
     restart: "no"
     command: ["python", "/e2e/model-stub.py"]
     volumes:

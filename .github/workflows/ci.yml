@@ -169,18 +169,27 @@ jobs:
         run: scripts/test-release-image-contract.sh
       - name: Test registry Compose contract
         run: scripts/test-registry-compose-contract.sh
+      - name: Test unified image contract
+        run: scripts/test-unified-image-contract.sh
       - name: Verify Nginx security headers
         run: node frontend/scripts/check-nginx-security-headers.mjs
       - name: Test third-party license archive
         run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/licenses/test_collect_third_party_licenses.py
       - name: Render Compose configuration
         run: docker compose --env-file .env.docker.example config
-      - name: Build application images
-        run: docker compose --env-file .env.docker.example build backend web py-extractor
-      - name: Verify extractor runtime user
+      - name: Build unified application image
+        run: docker compose --env-file .env.docker.example build backend
+      - name: Verify unified image roles and runtime dependencies
         run: |
-          test "$(docker image inspect effchat-py-extractor:local --format '{{.Config.User}}')" = '10001:10001'
-          docker run --rm --entrypoint python effchat-py-extractor:local -c \
-            'import os; assert (os.getuid(), os.getgid()) == (10001, 10001)'
+          docker run --rm --entrypoint sh effchat:local -ec '
+            test -x /app/effchat-server
+            test -f /app/migrations/build_migration_script.sh
+            test -f /usr/share/nginx/html/index.html
+            test "$(id -u app):$(id -g app)" = 10001:10001
+            python -c "from app.main import app; assert app"
+            psql --version
+            git help --config | grep -qx http.curloptResolve
+            nginx -t
+          '
       - name: Verify image license archives
-        run: scripts/check-image-licenses.sh effchat-backend:local effchat-web:local effchat-py-extractor:local
+        run: scripts/check-image-licenses.sh effchat:local

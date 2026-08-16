@@ -56,6 +56,9 @@ func Connect(cfg config.DatabaseConfig) (*sql.DB, error) {
 }
 
 func buildDSN(cfg config.DatabaseConfig) string {
+	if cfg.URL != "" {
+		return cfg.URL
+	}
 	return fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		conninfoValue(cfg.Host),

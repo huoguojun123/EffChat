@@ -36,14 +36,14 @@ if ! grep -Fxq '      checks: read' <<<"$verify_permissions"; then
   exit 1
 fi
 
-# One Buildx invocation publishes the same staging manifest to both
-# registries. Promotion happens only after all three component builds finish.
-require_count 1 '            ghcr.io/huoguojun123/${{ matrix.component.image }}'
-require_count 1 '            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.component.image }}'
+# One Buildx invocation publishes the same unified staging manifest to both
+# registries. Promotion happens only after that multi-architecture build finishes.
+require_count 1 '            ghcr.io/huoguojun123/effchat'
+require_count 1 '            ${{ secrets.DOCKERHUB_USERNAME }}/effchat'
 require_count 1 '          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}'
-require_count 1 '            dockerhub_source="${DOCKERHUB_USERNAME}/${image}:${SOURCE_TAG}"'
-require_count 1 '              --tag "${DOCKERHUB_USERNAME}/${image}:${RELEASE_TAG}" \'
-require_count 1 '              --tag "${DOCKERHUB_USERNAME}/${image}:sha-${GITHUB_SHA}" \'
+require_count 1 '          dockerhub_source="${DOCKERHUB_USERNAME}/effchat:${SOURCE_TAG}"'
+require_count 1 '            --tag "${DOCKERHUB_USERNAME}/effchat:${RELEASE_TAG}" \'
+require_count 1 '            --tag "${DOCKERHUB_USERNAME}/effchat:sha-${GITHUB_SHA}" \'
 
 if grep -Eq -- '(^|[[:space:]:])latest([[:space:]]|$)' "$WORKFLOW"; then
   echo "pre-release workflow must not publish latest" >&2

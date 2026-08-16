@@ -54,3 +54,19 @@ func TestBuildDSNQuotesKeywordValues(t *testing.T) {
 		t.Fatalf("pq.NewConnector rejected quoted dsn %q: %v", dsn, err)
 	}
 }
+
+func TestBuildDSNPrefersDatabaseURL(t *testing.T) {
+	const databaseURL = "postgres://fixture:secret@db.example/effchat?sslmode=require"
+	dsn := buildDSN(config.DatabaseConfig{
+		URL:      databaseURL,
+		Host:     "ignored.example",
+		Port:     5432,
+		User:     "ignored",
+		Password: "ignored",
+		DBName:   "ignored",
+		SSLMode:  "disable",
+	})
+	if dsn != databaseURL {
+		t.Fatalf("buildDSN() = %q, want DATABASE_URL", dsn)
+	}
+}

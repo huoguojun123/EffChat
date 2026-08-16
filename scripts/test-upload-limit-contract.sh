@@ -20,6 +20,6 @@ done
 
 grep -Fq 'client_max_body_size ${EFFCHAT_NGINX_MAX_BODY_BYTES};' "$ROOT/frontend/nginx.conf"
 grep -Fq 'PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}' "$ROOT/docker-compose.yml"
-grep -Fq 'NGINX_ENVSUBST_FILTER: ^EFFCHAT_' "$ROOT/docker-compose.yml"
+grep -Fq "envsubst '\$EFFCHAT_NGINX_MAX_BODY_BYTES'" "$ROOT/docker/entrypoint.sh"
 
 echo "upload limit contract tests passed"

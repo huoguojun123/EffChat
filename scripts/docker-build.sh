@@ -20,6 +20,8 @@ BUILD_REF_PATHS=(
   backend
   frontend
   py-extractor
+  Dockerfile
+  docker
   scripts
   docker-compose.yml
   .dockerignore
@@ -31,7 +33,7 @@ BUILD_REF_PATHS=(
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/docker-build.sh build      Build backend and web images
+  scripts/docker-build.sh build      Build the unified EffChat image
   scripts/docker-build.sh up         Build and start the full stack
   scripts/docker-build.sh config     Validate and render docker-compose.yml
   scripts/docker-build.sh build-ref  Print the build identifier for this source tree
@@ -59,18 +61,30 @@ require_env_file() {
 validate_runtime_secrets() {
   require_env_file
 
-  local jwt_secret postgres_password
+  local jwt_secret database_url database_host database_password
   jwt_secret="$(env_value JWT_SECRET)"
-  postgres_password="$(env_value POSTGRES_PASSWORD)"
+  database_url="$(env_value DATABASE_URL)"
+  database_host="$(env_value DB_HOST)"
 
   if [ -z "$jwt_secret" ] || [ "$jwt_secret" = "your-secret-key-change-this-in-production" ]; then
     echo "JWT_SECRET in $ENV_FILE must be replaced with a strong random value."
     exit 1
   fi
 
-  if [ -z "$postgres_password" ] || [ "$postgres_password" = "change-this-postgres-password" ]; then
-    echo "POSTGRES_PASSWORD in $ENV_FILE must be replaced before deployment."
-    exit 1
+  if [ -z "$database_url" ]; then
+    if [ "${database_host:-postgres}" = postgres ]; then
+      database_password="$(env_value POSTGRES_PASSWORD)"
+      if [ -z "$database_password" ] || [ "$database_password" = "change-this-postgres-password" ]; then
+        echo "POSTGRES_PASSWORD in $ENV_FILE must be replaced before deployment."
+        exit 1
+      fi
+    else
+      database_password="$(env_value DB_PASSWORD)"
+      if [ -z "$database_password" ]; then
+        echo "DB_PASSWORD in $ENV_FILE is required for external PostgreSQL."
+        exit 1
+      fi
+    fi
   fi
 }
 
@@ -214,10 +228,15 @@ case "$cmd" in
     # leaves the currently running deployment available for recovery.
     "${COMPOSE[@]}" build
     prepare_data_dirs
-    "${COMPOSE[@]}" up -d --wait postgres
-    "${COMPOSE[@]}" run --rm --no-deps migrate
-    "$SRC_DIR/scripts/storage-layout.sh" apply
-    "${COMPOSE[@]}" up -d --no-build --wait
+    database_host="$(env_value DB_HOST)"
+    if [ -z "$(env_value DATABASE_URL)" ] && [ "${database_host:-postgres}" = postgres ]; then
+      "${COMPOSE[@]}" up -d --wait postgres
+      "${COMPOSE[@]}" run --rm --no-deps migrate
+      "$SRC_DIR/scripts/storage-layout.sh" apply
+      "${COMPOSE[@]}" up -d --no-build --wait
+    else
+      "${COMPOSE[@]}" up -d --no-build --wait
+    fi
     ;;
   config)
     require_env_file

@@ -6,20 +6,30 @@ x-default-logging: &default-logging
     max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
     max-file: ${DOCKER_LOG_MAX_FILE:-5}
 
-# Registry deployment template. It deliberately keeps the existing data,
-# environment and service contracts; only application image sources change
-# from local builds to the published Docker Hub beta manifests.
+x-effchat-app: &effchat-app
+  image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.0-beta.2}
+
+x-database-env: &database-env
+  DATABASE_URL: ${DATABASE_URL:-}
+  DB_HOST: ${DB_HOST:-postgres}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_USER: ${DB_USER:-${POSTGRES_USER:-effchat}}
+  DB_PASSWORD: ${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}
+  DB_NAME: ${DB_NAME:-${POSTGRES_DB:-effchat}}
+  DB_SSLMODE: ${DB_SSLMODE:-disable}
+
 services:
   postgres:
     image: postgres:17
+    profiles: [bundled-db]
     restart: unless-stopped
     logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-effchat}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: ${POSTGRES_DB:-effchat}
     volumes:
-      - ${DATA_DIR:-../data}/postgres:/var/lib/postgresql/data
+      - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -27,29 +37,20 @@ services:
       retries: 10
 
   migrate:
-    image: postgres:17
+    <<: *effchat-app
+    command: [migrate]
     restart: "no"
     logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
+        required: false
     environment:
-      PGHOST: postgres
-      PGPORT: 5432
-      PGUSER: ${POSTGRES_USER:-effchat}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
-      PGDATABASE: ${POSTGRES_DB:-effchat}
-    volumes:
-      - ${MIGRATIONS_DIR:-./backend/migrations}:/migrations:ro
-    command:
-      - sh
-      - -ec
-      - |
-        /migrations/build_migration_script.sh > /tmp/apply-migrations.sql
-        psql -v ON_ERROR_STOP=1 -f /tmp/apply-migrations.sql
+      <<: *database-env
 
   py-extractor:
-    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-py-extractor:${EFFCHAT_VERSION:-v0.4.0-beta.1}
+    <<: *effchat-app
+    command: [extractor]
     restart: unless-stopped
     logging: *default-logging
     mem_limit: ${PY_EXTRACTOR_MEM_LIMIT:-512m}
@@ -68,28 +69,22 @@ services:
       retries: 3
 
   backend:
-    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-backend:${EFFCHAT_VERSION:-v0.4.0-beta.1}
+    <<: *effchat-app
+    command: [backend]
     restart: unless-stopped
     stop_grace_period: 70s
     logging: *default-logging
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       py-extractor:
         condition: service_healthy
     environment:
+      <<: *database-env
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 8080
       SERVER_MODE: ${SERVER_MODE:-release}
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: ${POSTGRES_USER:-effchat}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set DB password in .env.docker}
-      DB_NAME: ${POSTGRES_DB:-effchat}
-      DB_SSLMODE: disable
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.docker}
+      JWT_SECRET: ${JWT_SECRET:-}
       CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
       AUTH_RATE_LIMIT_MAX_ATTEMPTS: ${AUTH_RATE_LIMIT_MAX_ATTEMPTS:-10}
@@ -105,22 +100,32 @@ services:
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
       no_proxy: ${no_proxy:-localhost,127.0.0.1,::1},postgres,backend,web,py-extractor
     volumes:
-      - ${DATA_DIR:-../data}/storage:/app/storage
+      - ${DATA_DIR:-./data}/storage:/app/storage
     ports:
       - "127.0.0.1:${BACKEND_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/health >/dev/null"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
   web:
-    image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat-web:${EFFCHAT_VERSION:-v0.4.0-beta.1}
+    <<: *effchat-app
+    command: [web]
     restart: unless-stopped
     logging: *default-logging
     environment:
       PY_EXTRACTOR_MAX_UPLOAD_BYTES: ${PY_EXTRACTOR_MAX_UPLOAD_BYTES:-26214400}
-      NGINX_ENVSUBST_FILTER: ^EFFCHAT_
     depends_on:
       backend:
         condition: service_healthy
     ports:
       - "127.0.0.1:${WEB_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1/health >/dev/null"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 
 networks:
   default:

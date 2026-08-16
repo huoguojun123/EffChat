@@ -11,7 +11,7 @@ import (
 //
 // 现在项目处在预发布测试阶段，不承诺稳定 API；把版本集中放在 config 包里，
 // 避免 /health、管理后台标题、后续日志分别写死不同字符串。
-const AppVersion = "0.4.0-beta.1"
+const AppVersion = "0.4.0-beta.2"
 
 // BuildRef is set by the release image build and remains "unknown" for local Go runs.
 var BuildRef = "unknown"
@@ -33,6 +33,7 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
+	URL      string
 	Host     string
 	Port     int
 	User     string
@@ -90,6 +91,7 @@ func Load() *Config {
 			Mode: getEnv("SERVER_MODE", "debug"),
 		},
 		Database: DatabaseConfig{
+			URL:      strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnvInt("DB_PORT", 5432),
 			User:     getEnv("DB_USER", "effchat"),

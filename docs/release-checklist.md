@@ -2,7 +2,7 @@
 
 > 本清单用于公开仓库的首次开放与后续版本发布。
 >
-> 当前 beta 版本线：`v0.4.0-beta.1`；源码仓库仍为 private，稳定版与 `latest` 尚未发布。
+> 本仓库已公开；默认仍发布 prerelease，稳定版与 `latest` 只有项目所有者明确批准后才发布。
 
 ## 首次公开
 
@@ -15,7 +15,7 @@
 - [x] 已配置 Issue、PR 模板和 Dependabot；自动 PR 仅保留安全更新，常规版本更新在维护者主动批处理前暂停。
 - [x] 默认提示词、图标、字体、产品截图和其他公开素材已有来源与许可边界；README 截图由项目所有者提供并完成配置脱敏，截图中的第三方名称仅用于说明互操作性。
 - [x] 第三方依赖许可证没有已知冲突。
-- [x] 三个应用镜像从实际分发依赖生成第三方许可正文/版权归档，依赖缺少许可材料或精确版本 fallback 时构建失败。
+- [x] 统一应用镜像从实际 Go、前端和 Python 分发依赖生成三类第三方许可正文/版权归档，依赖缺少许可材料或精确版本 fallback 时构建失败。
 
 ### 内容与泄漏
 
@@ -44,10 +44,10 @@ gitleaks git .
 - [x] CI 覆盖 Go 测试与 vet、前端 lint/test/build、Compose 渲染和容器构建。
 - [x] Gitleaks 在 pull request 和 `main` push 时运行。
 - [x] tag workflow 在 GHCR 登录前校验 tag commit 可达 `origin/main`，且同一 commit 的 CI 与 Gitleaks 全部成功。
-- [x] 三个应用镜像用一次多架构构建同时写入 GHCR 与 Docker Hub commit staging manifest；全部成功后才在两个 registry 统一晋级版本与 `sha-` tag，并生成 SBOM 与 provenance。
+- [x] 统一应用镜像用一次多架构构建同时写入 GHCR 与 Docker Hub commit staging manifest；成功后才在两个 registry 晋级版本与 `sha-` tag，并生成 SBOM 与 provenance。
 - [x] `main` 已启用分支保护，禁止 force push/删除并要求 PR、对话解决及七项 CI/Gitleaks 检查通过；仓库公开后继续沿用同一规则。
 - [ ] GitHub 私密漏洞报告已启用。
-- [ ] 仓库描述已核对；topics、主页和从 private 改为 public 仍待首次开放收口。
+- [x] 仓库描述、topics、主页和 public 可见性已完成首次开放收口。
 
 ## 每次提交或 Pull Request
 
@@ -86,15 +86,15 @@ npm run build
 cd ..
 scripts/test-postgres.sh
 docker compose --env-file .env.docker.example config
-scripts/check-image-licenses.sh effchat-backend:local effchat-web:local effchat-py-extractor:local
+scripts/check-image-licenses.sh effchat:local
 git diff --check
 ```
 
 - [ ] CI 全部通过。
 - [ ] Gitleaks 对当前目录和完整历史通过。
 - [ ] 依赖漏洞与许可证扫描已审阅。
-- [ ] 三个应用镜像构建成功。
-- [ ] 三个应用镜像的 component manifest、许可正文和 SHA-256 离线校验通过。
+- [ ] 统一应用镜像构建成功，四个角色均来自同一 image ID。
+- [ ] 统一镜像中的 backend、frontend、python component manifest、许可正文和 SHA-256 离线校验通过。
 - [ ] `linux/amd64` 与 `linux/arm64` manifest 均存在。
 - [ ] GHCR 与 Docker Hub 的镜像 digest 一致，且 build ref、SBOM 和 provenance 可追溯到 tag。
 - [ ] 预发布 tag 没有更新 `latest`。

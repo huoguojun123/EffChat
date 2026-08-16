@@ -1,6 +1,8 @@
 # Docker Compose 部署
 
-本文档提供两条入口：个人用户优先使用一条命令安装；需要自己管理目录、环境变量、升级和备份时使用标准 Docker Compose。两条路径使用同一组发布镜像、migration 和数据生命周期规则。
+本文档提供两条入口：个人用户优先使用一条命令安装；需要保留源码或自行管理完整配置时使用仓库内的 Docker Compose。两条路径都使用同一个 EffChat 应用镜像、同一组 migration 和同一数据生命周期规则。
+
+统一镜像不等于单容器多进程。`web`、`backend`、`py-extractor` 和一次性 `migrate` 仍是独立容器角色，只是从同一个 `gjhuo/effchat` manifest 启动；PostgreSQL 始终使用官方 `postgres:17` 镜像，可由 Compose 专用启动，也可连接外部实例。
 
 ## 一条命令部署
 
@@ -10,23 +12,34 @@
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
 ```
 
-安装器会提示安装目录和 Web 端口；其他配置使用安全默认值。随后从同一测试版 tag 下载 `compose.yml` 和 migration，生成随机的 PostgreSQL/JWT secret，拉取 Docker Hub 镜像并等待服务健康。默认安装到当前目录的 `effchat/`，访问 `http://127.0.0.1:8088`。指定其他目录时运行：
+安装器会提示安装目录、Web 端口和数据库来源。默认选择 `bundled`，自动生成 PostgreSQL/JWT secret 并启动专用 PostgreSQL；选择 `external` 时按提示填写 host、port、database、user、隐藏 password 和 SSL mode。随后脚本从同一测试版 tag 下载 Compose，拉取 Docker Hub 镜像并等待服务健康。默认安装到当前目录的 `effchat/`，访问 `http://127.0.0.1:8088`。指定其他目录时运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | EFFCHAT_HOME=/srv/effchat bash
 ```
 
-首次安装只接受不存在或完全为空的目标目录。已有部署再次运行同一脚本时，输入原目录并确认 `update`；脚本识别 `compose.yml`、`docker-compose.registry.yml` 或兼容的 `docker-compose.yml`，也会查找部署目录或父目录中的 `.env.docker`。它只更新镜像、Compose、migration 和环境文件中的 `EFFCHAT_VERSION`，把旧 Compose/migration 放入带时间戳的 `deployment-backups/`；端口、数据库/JWT secret、数据路径和所有 data/storage/backups 保持不变。无法确认是 EffChat registry Compose 的目录会停止，不覆盖任意自定义部署。
+新安装接受不存在或完全为空的目标目录，生成以下活动布局：
 
-“Compose 在 `src/`、环境文件在上级目录”的服务器布局也属于兼容范围；只需在提示中填写 Compose 目录，并在环境文件提示中填写上级 `.env.docker`。
+```text
+effchat/
+├── .env
+├── compose.yml
+└── data/
+```
+
+再次对同一目录运行脚本并确认 `update` 即可升级。脚本识别当前 `.env + compose.yml`，也能把历史 `.env.docker`、三镜像 Compose 和宿主机 migration 布局收敛到同一结构；端口、项目名、未知配置、JWT、数据库凭据、数据路径和所有 data/storage/backups 保持不变。被替换的 Compose、环境入口和旧 migration 会进入带时间戳的 `deployment-backups/`。无法确认属于 EffChat 的目录会直接停止，不覆盖任意自定义部署。
+
+应用 migration 已嵌入统一镜像，部署目录不再需要活动 `migrations/`。更新不会执行 `docker compose down -v`，不会删除 PostgreSQL、storage 或备份。
 
 安装完成后，模型渠道、API key、搜索服务和网页提取 provider 在管理员后台配置，不写入安装命令或公开文件。
 
 个人用户日常只需在安装目录执行：
 
 ```bash
-docker compose --env-file .env.docker -f compose.yml ps
-docker compose --env-file .env.docker -f compose.yml logs -f
+docker compose ps
+docker compose logs -f
+docker compose pull
+docker compose up -d
 ```
 
 升级前请先按“备份与隔离恢复”完成备份；不要用 `docker compose down -v`。
@@ -37,23 +50,17 @@ docker compose --env-file .env.docker -f compose.yml logs -f
 
 ## Registry 镜像部署
 
-需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用
-`docker-compose.registry.yml`。该模板保留本文件中的环境变量、端口、网络、
-PostgreSQL 和 storage 挂载；只把三个应用服务的 `build`/`:local` 替换为
-`${DOCKERHUB_NAMESPACE:-gjhuo}` 下的 `${EFFCHAT_VERSION:-v0.4.0-beta.1}` 镜像。
-
-应用镜像不携带迁移 SQL。部署目录必须同时保留由同一 public release 导出的
-`backend/migrations/`（包含 `build_migration_script.sh`、`init.sql`、`legacy-checksums.txt` 和
-`production/*.sql`），并通过 `MIGRATIONS_DIR` 挂载给一次性 `migrate` 服务。这样源码可以
-归档，migration 仍有精确、可审计和可回滚的输入；不要把运行中的数据库目录或 storage
-目录作为 migration 来源。
+需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用 `docker-compose.registry.yml`。模板中的四个 EffChat 角色都引用 `${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.0-beta.2}`；migration SQL 与 runner 随同一镜像发布，不再挂载宿主机源码。
 
 ## 组件
 
-- `postgres`：PostgreSQL 17，数据写入 `${DATA_DIR:-../data}/postgres`。
+- `postgres`：可选的 PostgreSQL 17 专用服务，仅 `bundled-db` profile 启用，数据写入 `${DATA_DIR:-../data}/postgres`。
 - `migrate`：一次性迁移容器，等待数据库健康后执行尚未记录到 `schema_migrations` 的生产迁移。
+- `py-extractor`：隔离运行文档提取与 OCR 适配，保留独立内存限制和健康检查。
 - `backend`：Go release 服务，受管文件写入 `${DATA_DIR:-../data}/storage`，默认只映射到宿主机 `127.0.0.1:18080`。
 - `web`：Nginx 静态前端，内置 `/api/` 到 `backend:8080` 的容器内转发，默认只映射到宿主机 `127.0.0.1:8088`。
+
+四个 EffChat 角色拥有相同 image ID，但继续使用各自 command、权限、资源上限、日志、依赖和健康探针；没有引入 supervisor 或常驻多进程容器。
 
 ## 首次部署
 
@@ -67,6 +74,44 @@ cp .env.docker.example .env.docker
 
 - `POSTGRES_PASSWORD`
 - `JWT_SECRET`
+
+默认模板已经设置 `COMPOSE_PROFILES=bundled-db`，因此上述 `POSTGRES_*` 同时用于专用 PostgreSQL 与应用连接。`DB_PASSWORD` 应与 `POSTGRES_PASSWORD` 保持一致；一键安装器会自动保证这一点。
+
+### PostgreSQL 来源
+
+**专用 PostgreSQL（默认）**
+
+保持：
+
+```env
+COMPOSE_PROFILES=bundled-db
+DATABASE_URL=
+DB_HOST=postgres
+```
+
+**外部 PostgreSQL**
+
+不要启用 `bundled-db`，并二选一：
+
+```env
+COMPOSE_PROFILES=
+DATABASE_URL=postgres://effchat:encoded-password@db.example.com:5432/effchat?sslmode=require
+```
+
+或：
+
+```env
+COMPOSE_PROFILES=
+DATABASE_URL=
+DB_HOST=db.example.com
+DB_PORT=5432
+DB_USER=effchat
+DB_PASSWORD=replace-with-a-strong-password
+DB_NAME=effchat
+DB_SSLMODE=require
+```
+
+`DATABASE_URL` 非空时优先于 `DB_*`。backend 与 migrate 消费同一组变量；外部数据库不可达、凭据错误或 migration 失败时不会偷偷回退到本地 PostgreSQL。PostgreSQL 是唯一数据库实现，本轮没有引入 SQLite 或双数据库迁移。
 
 **想让聊天功能真正可用：**
 
@@ -88,11 +133,11 @@ cp .env.docker.example .env.docker
 - `TRUST_PROXY_HEADERS`（使用内置 Web 反代时保持 `true`；后端可能绕过可信代理时设为 `false`）
 - `RUN_FIRST_OUTPUT_TIMEOUT` / `SSE_HEARTBEAT_INTERVAL`
 
-`.env.docker` 完全遵循 Docker Compose 的 dotenv 语义：单引号、双引号、转义、行尾注释和当前 shell 覆盖均由 Compose 解析。`docker-build.sh` 与 `storage-layout.sh` 只读取 `docker compose config --environment` 的最终插值结果，不会 `source` 或自行解释 env 文件；因此 secret 占位检查、`DATA_DIR` 文件操作和实际 Compose 挂载使用同一值。可先执行 `scripts/docker-build.sh config` 检查最终配置。
+仓库内 `.env.docker` 完全遵循 Docker Compose 的 dotenv 语义：单引号、双引号、转义、行尾注释和当前 shell 覆盖均由 Compose 解析。`docker-build.sh` 与 `storage-layout.sh` 只读取 `docker compose config --environment` 的最终插值结果，不会 `source` 或自行解释 env 文件；因此 secret 占位检查、`DATA_DIR` 文件操作和实际 Compose 挂载使用同一值。可先执行 `scripts/docker-build.sh config` 检查最终配置。一键安装生成的 `.env` 使用 Compose 单引号编码，更新时保留未知键和 secret，并拒绝换行值。
 
 `RUN_FIRST_OUTPUT_TIMEOUT` 支持 Go duration（如 `90s`、`25m`）或纯秒数，只限制模型返回首个有效文本、思考内容或具名工具调用前的等待。一旦有效输出开始，后端会继续读取流直到 EOF；用户停止、服务排空、账号或会话失效仍可取消任务。值为 `0` 时使用聊天 15 分钟、压缩 5 分钟的内建首包默认值。
 
-`scripts/docker-build.sh up` 先构建全部镜像，再启动 PostgreSQL、执行 migration 和 storage layout，最后用已有镜像 `up --no-build --wait` 切换并等待服务健康；构建失败不会先停服务或改 schema/storage。`reset-db` 也先完成构建，再执行明确确认的删除和等待健康启动。
+`scripts/docker-build.sh up` 先构建统一应用镜像，再按所选数据库模式执行 migration 和启动服务；构建失败不会先停服务或改 schema/storage。`reset-db` 也先完成构建，再执行明确确认的删除和等待健康启动。
 
 ### Git Skill 的出站网络边界
 
@@ -215,7 +260,7 @@ CONFIRM_RESET=DELETE_EFFCHAT_DATA scripts/docker-build.sh reset-db
 ## 常用命令
 
 ```bash
-scripts/docker-build.sh build    # 构建 backend 和 web 镜像
+scripts/docker-build.sh build    # 构建统一 EffChat 应用镜像
 scripts/docker-build.sh up       # 构建并启动整套服务
 scripts/docker-build.sh config   # 渲染并校验 compose 配置
 scripts/docker-build.sh build-ref # 查看将注入 /health 的构建标识
@@ -254,7 +299,7 @@ scripts/backup-restore.sh restore \
 
 `backup` 会记录当前正在运行的 Web、backend 和提取器并优雅停止它们，避免 `pause` 把跨数据库与文件系统的在途事务冻结在中间状态；随后从仍运行的 PostgreSQL 生成 custom-format `pg_dump`，同时归档稳定的 `storage`。只有数据库 dump、storage tar、受保护的逐文件 SHA-256 清单、migration 版本/checksum 账本、Compose checksum、应用版本、build ref、schema 和 PostgreSQL major 全部成功并由同一验证器复核后，临时目录才会原子发布为一个版本化备份集；失败会删除临时工件，并且无论成功或失败都只恢复原先运行的服务。默认输出到 `${DATA_DIR}/backups`，可用 `BACKUP_ROOT` 指向受保护的异机挂载；自定义目录的父目录必须预先存在。
 
-备份不包含 `.env.docker`、数据库密码、JWT secret 或后台渠道密钥，但 database dump 本身包含消息、用户、渠道密钥等数据库内容。运维方仍需为备份目录配置最小权限、静态加密、异机副本、保留周期和安全销毁。
+备份不包含活动 `.env` / `.env.docker`、数据库密码、JWT secret 或后台渠道密钥，但 database dump 本身包含消息、用户、渠道密钥等数据库内容。运维方仍需为备份目录配置最小权限、静态加密、异机副本、保留周期和安全销毁。
 
 `restore` 不覆盖或切换现有部署，只接受空、非符号链接且与活动 `DATA_DIR` 无重叠的目标，并通过原子目录锁阻止两个恢复任务写入同一根目录。第三个参数提供恢复栈所需的基础设施 secret；脚本不会复制该文件，而是强制用独立 `COMPOSE_PROJECT_NAME`、显式 Docker network、目标 `DATA_DIR` 和 Docker 分配的 loopback 动态端口覆盖冲突字段。恢复顺序固定为：验证全部工件与路径 → 在临时目录安全解包并逐文件复核 storage → 启动隔离 PostgreSQL 并确认空库/major → `pg_restore` → 核对备份 migration 账本 → 运行当前统一 migration runner → 核对受管文件引用 → 等待四个服务并检查内部 health。任一步失败都只停止隔离 project（不使用 `-v`）并清理本次创建的目标内容。
 

@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+func TestLoadDatabaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "  postgres://fixture:secret@db.example/effchat?sslmode=require  ")
+	t.Setenv("DB_HOST", "ignored.example")
+
+	cfg := Load()
+	if cfg.Database.URL != "postgres://fixture:secret@db.example/effchat?sslmode=require" {
+		t.Fatalf("Database.URL = %q", cfg.Database.URL)
+	}
+}
+
 func TestLoadAIConfigIgnoresBusinessRuntimeEnv(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-openai")
 	t.Setenv("OPENAI_BASE_URL", "https://gw.example.com/v1")

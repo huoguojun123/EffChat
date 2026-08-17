@@ -16,7 +16,7 @@ export const thinkingFormatOptions = [
   { value: "deepseek_v4_disabled", label: "DeepSeek 关闭思考", hint: "适用 DeepSeek V4 双模式模型；下发 thinking.type=disabled，不展示思考预算。" },
   { value: "xai_grok", label: "Grok reasoning", hint: "适用 Grok 标准推理模型；下发 low/medium/high，4.6 等已核验型号额外支持 xhigh。" },
   { value: "glm_thinking", label: "GLM thinking", hint: "GLM 4.5+ 使用 thinking.type；5.2/5.3 额外支持 low/high/max，5.3 固定开启思考。" },
-  { value: "minimax_thinking", label: "MiniMax thinking", hint: "M3 支持 adaptive/disabled；M2 系列固定思考并分离 reasoning_content。" },
+  { value: "minimax_thinking", label: "MiniMax thinking", hint: "OpenAI/Anthropic 兼容通道共享 family profile：M3 支持 adaptive/disabled，M2 系列固定思考。" },
   { value: "volcengine_thinking", label: "Doubao / Ark thinking", hint: "适用豆包 Seed / 方舟推理模型；下发 thinking.type 与 reasoning_effort。" },
 ]
 

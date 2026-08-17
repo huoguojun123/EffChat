@@ -139,6 +139,11 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 			}
 			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
 			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
+		} else if format == modelbank.ThinkingFormatMiniMaxThinking && modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "disabled"}
 		}
 		return
 	}
@@ -159,6 +164,13 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 		}
 		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 		cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
+	case modelbank.ThinkingFormatMiniMaxThinking:
+		if modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": thinkingTypeForToggle(effort, "adaptive")}
+		}
 	}
 	logThinkingFormat(req, format, effort)
 }

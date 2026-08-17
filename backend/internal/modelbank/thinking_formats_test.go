@@ -42,6 +42,7 @@ func TestResolveThinkingFormatFallsBackWhenManualFormatDoesNotMatch(t *testing.T
 		{name: "gpt 5.6 legacy format falls back to dedicated format", provider: "openai", modelID: "gpt-5.6", configured: "openai_reasoning_effort", reasoning: true, want: ThinkingFormatOpenAIGPT56},
 		{name: "gpt 5.5 does not accept dedicated format", provider: "openai", modelID: "gpt-5.5", configured: "openai_gpt_5_6", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "google adapter accepts gemini manual thinking by display name", provider: "my-gateway", modelID: "flash-latest", configured: "gemini_thinking", reasoning: false, want: ThinkingFormatGeminiThinking},
+		{name: "minimax family overrides stale claude budget on anthropic adapter", provider: "minimax", modelID: "MiniMax-M3", configured: "anthropic_budget", reasoning: true, want: ThinkingFormatMiniMaxThinking},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,6 +51,8 @@ func TestResolveThinkingFormatFallsBackWhenManualFormatDoesNotMatch(t *testing.T
 			if strings.Contains(tc.name, "display name") {
 				displayName = "Gemini-3.5-Flash"
 				adapter = "google"
+			} else if strings.Contains(tc.name, "anthropic adapter") {
+				adapter = "anthropic"
 			}
 			got := ResolveThinkingFormatWithContext(tc.provider, adapter, tc.modelID, displayName, tc.configured, tc.reasoning)
 			if got != tc.want {

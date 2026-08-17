@@ -79,6 +79,18 @@ func TestRuntimeProfileUsesChannelAdapterAndDisplayName(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileKeepsMiniMaxFamilyOnAnthropicAdapter(t *testing.T) {
+	profile := RuntimeProfileForModelWithAdapter(&model.Model{
+		ID: "MiniMax-M3", Provider: "minimax", Reasoning: true, ThinkingFormat: "auto",
+	}, "anthropic")
+	if profile.WireProtocol != WireProtocolAnthropicNative || profile.Family != "minimax" {
+		t.Fatalf("profile = %+v, want anthropic-native MiniMax", profile)
+	}
+	if profile.ThinkingFormat != string(ThinkingFormatMiniMaxThinking) || len(profile.ThinkingEffortOptions) != 2 {
+		t.Fatalf("MiniMax thinking profile = %+v", profile)
+	}
+}
+
 func TestRuntimeProfileExposesOpenAIResponsesWireProtocol(t *testing.T) {
 	profile := RuntimeProfileForModelWithAdapter(&model.Model{
 		ID:             "gpt-5.1",

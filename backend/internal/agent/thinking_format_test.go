@@ -306,6 +306,38 @@ func TestApplyClaudeThinkingAdaptiveHigh(t *testing.T) {
 	}
 }
 
+func TestApplyClaudeThinkingUsesMiniMaxFamilyContract(t *testing.T) {
+	t.Run("m3 adaptive", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M3", MaxTokens: 8192}
+		applyClaudeThinking(&ChatRequest{
+			Provider: "minimax", ModelID: "MiniMax-M3", Reasoning: true, ThinkingEffort: "medium",
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "adaptive" || cfg.Thinking != nil {
+			t.Fatalf("MiniMax M3 Anthropic thinking = %#v manual=%#v", cfg.AdditionalRequestFields, cfg.Thinking)
+		}
+	})
+
+	t.Run("m3 disabled", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M3", MaxTokens: 8192}
+		applyClaudeThinking(&ChatRequest{
+			Provider: "minimax", ModelID: "MiniMax-M3", Reasoning: true, ThinkingEffort: "none",
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Fatalf("MiniMax M3 Anthropic thinking = %#v, want disabled", cfg.AdditionalRequestFields)
+		}
+	})
+
+	t.Run("m2 fixed thinking needs no control field", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M2.7", MaxTokens: 8192}
+		applyClaudeThinking(&ChatRequest{Provider: "minimax", ModelID: "MiniMax-M2.7", Reasoning: true}, cfg)
+		if len(cfg.AdditionalRequestFields) != 0 || cfg.Thinking != nil {
+			t.Fatalf("MiniMax M2.7 must not receive a thinking control: %#v manual=%#v", cfg.AdditionalRequestFields, cfg.Thinking)
+		}
+	})
+}
+
 func TestApplyGeminiThinkingUsesGenerationContract(t *testing.T) {
 	t.Run("2.5 budget", func(t *testing.T) {
 		cfg := &gemini.Config{Model: "gemini-2.5-pro"}
@@ -430,6 +462,17 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		outputConfig, _ := cfg.AdditionalRequestFields["output_config"].(map[string]any)
 		if outputConfig["effort"] != "low" {
 			t.Fatalf("suppressed adaptive output config = %#v", outputConfig)
+		}
+	})
+
+	t.Run("minimax m3 anthropic disables thinking", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M3", MaxTokens: 4096}
+		applyClaudeThinking(&ChatRequest{
+			Provider: "minimax", ModelID: "MiniMax-M3", Reasoning: true, SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Fatalf("suppressed MiniMax M3 fields = %#v", cfg.AdditionalRequestFields)
 		}
 	})
 

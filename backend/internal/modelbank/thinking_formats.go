@@ -154,6 +154,12 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	if isGeminiThinkingModel(id) || p == "google" || a == "google" {
 		return ThinkingFormatGeminiThinking
 	}
+	// MiniMax exposes the same family-level thinking modes through both its
+	// OpenAI- and Anthropic-compatible APIs. Family must win over adapter here,
+	// otherwise an Anthropic channel would incorrectly receive Claude budgets.
+	if reasoning && isMiniMaxThinkingModel(id) {
+		return ThinkingFormatMiniMaxThinking
+	}
 	if isAnthropicThinkingModel(p, id) || a == "anthropic" {
 		if isAnthropicAdaptiveModel(id) {
 			return ThinkingFormatAnthropicAdaptive
@@ -168,9 +174,6 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	}
 	if reasoning && isGLMThinkingModel(id) {
 		return ThinkingFormatGLMThinking
-	}
-	if reasoning && isMiniMaxThinkingModel(id) {
-		return ThinkingFormatMiniMaxThinking
 	}
 	if reasoning && isVolcengineThinkingModel(id) {
 		return ThinkingFormatVolcengineThinking
@@ -427,7 +430,7 @@ func isThinkingFormatApplicableWithContext(provider, adapter, modelID, displayNa
 	case ThinkingFormatDashScopeQwen:
 		return isDashScopeQwenThinkingModel(id)
 	case ThinkingFormatAnthropicBudget, ThinkingFormatAnthropicAdaptive:
-		return a == "anthropic" || isAnthropicThinkingModel(p, id)
+		return !isMiniMaxThinkingModel(id) && (a == "anthropic" || isAnthropicThinkingModel(p, id))
 	case ThinkingFormatGeminiThinking:
 		return a == "google" || p == "google" || isGeminiThinkingModel(id)
 	case ThinkingFormatXAIGrok:
@@ -561,8 +564,12 @@ func isMiniMaxThinkingModel(id string) bool {
 	return strings.Contains(id, "minimax-m3") || isMiniMaxM2Model(id)
 }
 
-func isMiniMaxM2Model(id string) bool {
-	return strings.Contains(id, "minimax-m2")
+func isMiniMaxM2Model(modelID string) bool {
+	return strings.Contains(normalizeModelID(modelID), "minimax-m2")
+}
+
+func MiniMaxThinkingCanDisable(modelID string) bool {
+	return !isMiniMaxM2Model(modelID)
 }
 
 func isVolcengineThinkingModel(id string) bool {

@@ -235,6 +235,22 @@ func builtinModels() map[string]*ModelInfo {
 			},
 		},
 
+		// ============ MiniMax ============
+		"MiniMax-M3": {
+			ID: "MiniMax-M3", DisplayName: "MiniMax M3", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 524288,
+			},
+		},
+		"MiniMax-M2.7": {
+			ID: "MiniMax-M2.7", DisplayName: "MiniMax M2.7", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 204800,
+			},
+		},
+
 		// ============ xAI ============
 		"grok-4.6": {
 			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,

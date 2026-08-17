@@ -70,6 +70,19 @@ func TestApplyOpenAICompatibleThinkingSupportsGPT56ExtendedEfforts(t *testing.T)
 	}
 }
 
+func TestOpenAIResponsesReasoningSupportsGPT56Max(t *testing.T) {
+	reasoning := openAIResponsesReasoning(&ChatRequest{
+		Provider:       "openai",
+		ModelID:        "gpt-5.6",
+		Reasoning:      true,
+		ThinkingFormat: string(modelbank.ThinkingFormatOpenAIGPT56),
+		ThinkingEffort: string(modelbank.ThinkingEffortMax),
+	})
+	if reasoning == nil || reasoning.Effort != "max" {
+		t.Fatalf("Responses reasoning = %#v, want max", reasoning)
+	}
+}
+
 func TestApplyOpenAITokenLimitUsesCompletionTokensForReasoning(t *testing.T) {
 	reasoning := &openai.ChatModelConfig{}
 	applyOpenAITokenLimit(&ChatRequest{Provider: "openai", ModelID: "gpt-5.6", Reasoning: true, ThinkingFormat: "auto", MaxTokens: 4096}, reasoning)

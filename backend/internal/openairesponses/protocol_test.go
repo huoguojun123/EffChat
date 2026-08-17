@@ -13,6 +13,8 @@ import (
 
 	einoModel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 func collectProtocolStream(t *testing.T, model einoModel.ToolCallingChatModel, messages []*schema.Message) *schema.Message {
@@ -73,6 +75,10 @@ func TestResponsesProtocolStreamsThroughOfficialAdapter(t *testing.T) {
 		BaseURL: server.URL + "/v1",
 		APIKey:  "test-key",
 		Model:   "gpt-demo",
+		Reasoning: &responses.ReasoningParam{
+			Effort:  shared.ReasoningEffortMax,
+			Summary: shared.ReasoningSummaryAuto,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,6 +127,10 @@ func TestResponsesProtocolStreamsThroughOfficialAdapter(t *testing.T) {
 	}
 	if _, exists := body["previous_response_id"]; exists {
 		t.Fatalf("request must not use previous_response_id: %#v", body)
+	}
+	reasoning, _ := body["reasoning"].(map[string]any)
+	if reasoning["effort"] != "max" || reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning request = %#v", reasoning)
 	}
 	tools, ok := body["tools"].([]any)
 	if !ok || len(tools) != 1 {

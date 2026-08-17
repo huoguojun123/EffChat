@@ -91,7 +91,8 @@ func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
 		modelbank.ThinkingEffortLow,
 		modelbank.ThinkingEffortMedium,
 		modelbank.ThinkingEffortHigh,
-		modelbank.ThinkingEffortXHigh:
+		modelbank.ThinkingEffortXHigh,
+		modelbank.ThinkingEffortMax:
 		return &responses.ReasoningParam{
 			Effort:  shared.ReasoningEffort(effort),
 			Summary: shared.ReasoningSummaryAuto,

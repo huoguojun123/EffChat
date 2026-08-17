@@ -218,6 +218,59 @@ func TestBuildChatModelOmitsUnsupportedGrokReasoningPenalties(t *testing.T) {
 	}
 }
 
+func TestBuildChatModelPreservesDeepSeekReasoningForToolContinuation(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-deepseek\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "deepseek-v4-flash", Provider: "deepseek", Reasoning: true, ThinkingEffort: "low",
+		RuntimeChannel: &model.AIChannel{Key: "deepseek", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{})
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	idx := 0
+	messages := []*schema.Message{
+		schema.UserMessage("look it up"),
+		{
+			Role: schema.Assistant, ReasoningContent: "I should use the tool",
+			ToolCalls: []schema.ToolCall{{
+				Index: &idx, ID: "call_1", Type: "function",
+				Function: schema.FunctionCall{Name: "web_search", Arguments: `{"query":"fixture"}`},
+			}},
+		},
+		{Role: schema.Tool, Content: `{"result":"ok"}`, ToolCallID: "call_1", ToolName: "web_search"},
+	}
+	if _, err := modelstream.Collect(t.Context(), chatModel, messages, time.Second); err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	body := <-requestBodies
+	wireMessages, ok := body["messages"].([]any)
+	if !ok || len(wireMessages) != 3 {
+		t.Fatalf("messages = %#v, want three wire messages", body["messages"])
+	}
+	assistant, ok := wireMessages[1].(map[string]any)
+	if !ok || assistant["reasoning_content"] != "I should use the tool" {
+		t.Fatalf("assistant tool continuation lost reasoning_content: %#v", wireMessages[1])
+	}
+	tool, ok := wireMessages[2].(map[string]any)
+	if !ok || tool["tool_call_id"] != "call_1" {
+		t.Fatalf("tool result lost call id: %#v", wireMessages[2])
+	}
+}
+
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

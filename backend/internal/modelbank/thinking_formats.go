@@ -219,6 +219,9 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		}
 		return ThinkingEffortMedium
 	case ThinkingFormatDeepSeekV4:
+		if effort == ThinkingEffortLow {
+			return ThinkingEffortLow
+		}
 		if effort == ThinkingEffortMax {
 			return ThinkingEffortMax
 		}
@@ -301,6 +304,7 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		}
 	case ThinkingFormatDeepSeekV4:
 		return []model.ThinkingEffortOption{
+			{Value: string(ThinkingEffortLow), Label: "Low", Description: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=low。"},
 			{Value: string(ThinkingEffortHigh), Label: "High", Description: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=high。"},
 			{Value: string(ThinkingEffortMax), Label: "Max", Description: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=max。"},
 		}

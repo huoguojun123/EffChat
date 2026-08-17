@@ -80,8 +80,8 @@ func TestApplyThinkingRuntimeMetadata(t *testing.T) {
 	if m.DefaultThinkingEffort != string(ThinkingEffortHigh) {
 		t.Fatalf("default effort = %q, want high", m.DefaultThinkingEffort)
 	}
-	if got := len(m.ThinkingEffortOptions); got != 2 {
-		t.Fatalf("options len = %d, want 2", got)
+	if got := len(m.ThinkingEffortOptions); got != 3 {
+		t.Fatalf("options len = %d, want 3", got)
 	}
 }
 
@@ -199,7 +199,8 @@ func TestResolveThinkingEffortPerFormat(t *testing.T) {
 		{name: "openai high", format: ThinkingFormatOpenAIReasoningEffort, requested: "high", want: ThinkingEffortHigh},
 		{name: "openai default", format: ThinkingFormatOpenAIReasoningEffort, requested: "", want: ThinkingEffortMedium},
 		{name: "deepseek max", format: ThinkingFormatDeepSeekV4, requested: "max", want: ThinkingEffortMax},
-		{name: "deepseek low coerces high", format: ThinkingFormatDeepSeekV4, requested: "low", want: ThinkingEffortHigh},
+		{name: "deepseek low", format: ThinkingFormatDeepSeekV4, requested: "low", want: ThinkingEffortLow},
+		{name: "deepseek medium coerces high", format: ThinkingFormatDeepSeekV4, requested: "medium", want: ThinkingEffortHigh},
 		{name: "budget format high", format: ThinkingFormatDashScopeQwen, requested: "high", want: ThinkingEffortHigh},
 		{name: "adaptive effort low", format: ThinkingFormatAnthropicAdaptive, requested: "low", want: ThinkingEffortLow},
 		{name: "none ignores effort", format: ThinkingFormatNone, requested: "high", want: ThinkingEffortAuto},
@@ -256,7 +257,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 		{
 			name:     "deepseek",
 			format:   ThinkingFormatDeepSeekV4,
-			contains: []string{"deepseek-v4", "thinking.type=enabled", "reasoning_effort=max"},
+			contains: []string{"deepseek-v4", "reasoning_effort=low", "thinking.type=enabled", "reasoning_effort=max"},
 		},
 		{
 			name:     "qwen",

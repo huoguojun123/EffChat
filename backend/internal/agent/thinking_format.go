@@ -196,6 +196,9 @@ func openAIReasoningEffort(effort modelbank.ThinkingEffort) openai.ReasoningEffo
 }
 
 func deepSeekReasoningEffort(effort modelbank.ThinkingEffort) string {
+	if effort == modelbank.ThinkingEffortLow {
+		return "low"
+	}
 	if effort == modelbank.ThinkingEffortMax {
 		return "max"
 	}

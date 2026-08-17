@@ -41,6 +41,20 @@ func TestApplyOpenAICompatibleThinkingDeepSeekMax(t *testing.T) {
 	}
 }
 
+func TestApplyOpenAICompatibleThinkingDeepSeekLow(t *testing.T) {
+	cfg := &openai.ChatModelConfig{Model: "deepseek-v4-flash"}
+	applyOpenAICompatibleThinking(&ChatRequest{
+		Provider:       "openai",
+		ModelID:        "deepseek-v4-flash",
+		Reasoning:      true,
+		ThinkingEffort: string(modelbank.ThinkingEffortLow),
+	}, cfg)
+
+	if got := cfg.ExtraFields["reasoning_effort"]; got != "low" {
+		t.Fatalf("reasoning_effort = %#v, want low", got)
+	}
+}
+
 func TestApplyOpenAICompatibleThinkingOpenAIHigh(t *testing.T) {
 	cfg := &openai.ChatModelConfig{Model: "gpt-5.1"}
 	applyOpenAICompatibleThinking(&ChatRequest{

@@ -227,21 +227,6 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 384000,
 			},
 		},
-		"deepseek-chat": {
-			ID: "deepseek-chat", DisplayName: "DeepSeek Chat", Provider: "deepseek", Enabled: true,
-			Capabilities: ModelCapabilities{
-				ToolUse: true, SearchImpl: SearchImplNone,
-				ContextWindow: 1000000, MaxOutput: 384000,
-			},
-		},
-		"deepseek-reasoner": {
-			ID: "deepseek-reasoner", DisplayName: "DeepSeek Reasoner", Provider: "deepseek", Enabled: true,
-			Capabilities: ModelCapabilities{
-				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
-				ContextWindow: 1000000, MaxOutput: 384000,
-			},
-		},
-
 		// ============ Perplexity ============
 		"sonar": {
 			ID: "sonar", DisplayName: "Sonar", Provider: "perplexity", Enabled: true,

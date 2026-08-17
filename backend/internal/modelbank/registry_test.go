@@ -100,3 +100,12 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		}
 	}
 }
+
+func TestBuiltinsDoNotRestoreRetiredDeepSeekAliases(t *testing.T) {
+	resetRegistryToBuiltins()
+	for _, id := range []string{"deepseek-chat", "deepseek-reasoner"} {
+		if Get(id) != nil {
+			t.Fatalf("retired DeepSeek alias %s must not return from the builtin fallback", id)
+		}
+	}
+}

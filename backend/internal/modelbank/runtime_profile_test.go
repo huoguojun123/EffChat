@@ -26,7 +26,7 @@ func TestRuntimeProfileSeparatesProviderAndFamily(t *testing.T) {
 	if profile.ThinkingFormat != string(ThinkingFormatDeepSeekV4) {
 		t.Fatalf("thinking_format = %q, want %q", profile.ThinkingFormat, ThinkingFormatDeepSeekV4)
 	}
-	if len(profile.ThinkingEffortOptions) == 0 || profile.DefaultThinkingEffort == "" {
+	if len(profile.ThinkingEffortOptions) != 3 || profile.DefaultThinkingEffort != "high" {
 		t.Fatalf("thinking effort metadata missing: %+v", profile)
 	}
 }

@@ -88,6 +88,8 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536, vision: true},
 		{id: "qwen3.7-max", provider: "qwen", context: 1000000, output: 65536},
 		{id: "qwen3.7-plus", provider: "qwen", context: 1000000, output: 65536, vision: true},
+		{id: "glm-5.3", provider: "zhipu", context: 1000000, output: 128000},
+		{id: "glm-5.2", provider: "zhipu", context: 1000000, output: 128000},
 		{id: "grok-4.6", provider: "xai", context: 500000, output: 0, vision: true},
 	}
 	for _, tc := range cases {

@@ -139,6 +139,10 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 		{name: "grok 4.6 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.6", requested: "xhigh", want: ThinkingEffortXHigh},
 		{name: "glm accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "none", want: ThinkingEffortNone},
 		{name: "glm normalizes enabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "low", want: ThinkingEffortHigh},
+		{name: "glm 5.2 accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-5.2", requested: "none", want: ThinkingEffortNone},
+		{name: "glm 5.2 accepts low", format: ThinkingFormatGLMThinking, modelID: "glm-5.2", requested: "low", want: ThinkingEffortLow},
+		{name: "glm 5.3 cannot disable", format: ThinkingFormatGLMThinking, modelID: "glm-5.3", requested: "none", want: ThinkingEffortLow},
+		{name: "glm 5.3 accepts max", format: ThinkingFormatGLMThinking, modelID: "glm-5.3", requested: "max", want: ThinkingEffortMax},
 		{name: "minimax m3 accepts disabled", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M3", requested: "none", want: ThinkingEffortNone},
 		{name: "minimax m3 defaults adaptive", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M3", requested: "", want: ThinkingEffortMedium},
 		{name: "minimax m2 has no selectable effort", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M2.7", requested: "high", want: ThinkingEffortAuto},
@@ -158,6 +162,12 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 	}
 	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-4.5"); len(got) != 2 || got[0].Value != "none" || got[1].Value != "high" {
 		t.Fatalf("GLM options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-5.2"); len(got) != 4 || got[0].Value != "none" || got[3].Value != "max" {
+		t.Fatalf("GLM 5.2 options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-5.3"); len(got) != 3 || got[0].Value != "low" || got[2].Value != "max" {
+		t.Fatalf("GLM 5.3 options = %#v", got)
 	}
 	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.6"); len(got) != 4 || got[3].Value != "xhigh" {
 		t.Fatalf("Grok 4.6 options = %#v", got)
@@ -202,6 +212,18 @@ func TestQwenThinkingLifecycleCapabilities(t *testing.T) {
 	}
 	if QwenPreservesThinkingHistory("qwen3.5-plus") {
 		t.Fatal("Qwen 3.5 must not receive the newer preserve_thinking field")
+	}
+}
+
+func TestGLMThinkingCapabilities(t *testing.T) {
+	if !GLMSupportsReasoningEffort("glm-5.2") || !GLMSupportsReasoningEffort("zai/glm-5.3") {
+		t.Fatal("GLM 5.2/5.3 should expose reasoning effort")
+	}
+	if GLMSupportsReasoningEffort("glm-4.5") {
+		t.Fatal("GLM 4.5 must keep the legacy toggle-only contract")
+	}
+	if !GLMAlwaysUsesThinking("glm-5.3") || GLMAlwaysUsesThinking("glm-5.2") {
+		t.Fatal("only GLM 5.3 should be forced into thinking mode")
 	}
 }
 

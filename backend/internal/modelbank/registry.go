@@ -219,6 +219,22 @@ func builtinModels() map[string]*ModelInfo {
 			},
 		},
 
+		// ============ GLM ============
+		"glm-5.3": {
+			ID: "glm-5.3", DisplayName: "GLM-5.3", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"glm-5.2": {
+			ID: "glm-5.2", DisplayName: "GLM-5.2", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+
 		// ============ xAI ============
 		"grok-4.6": {
 			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,

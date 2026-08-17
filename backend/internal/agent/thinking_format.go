@@ -40,6 +40,13 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			} else {
 				setOpenAIExtraField(cfg, "thinking_budget", 1024)
 			}
+		} else if format == modelbank.ThinkingFormatGLMThinking {
+			if modelbank.GLMAlwaysUsesThinking(req.ModelID) {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "enabled"})
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			} else {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+			}
 		}
 		return
 	}
@@ -70,6 +77,9 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
 	case modelbank.ThinkingFormatGLMThinking:
 		setOpenAIExtraField(cfg, "thinking", map[string]any{"type": thinkingTypeForToggle(effort, "enabled")})
+		if effort != modelbank.ThinkingEffortNone && modelbank.GLMSupportsReasoningEffort(req.ModelID) {
+			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		}
 	case modelbank.ThinkingFormatMiniMaxThinking:
 		// MiniMax exposes reasoning in a separate field only with this switch.
 		// The OpenAI-compatible Eino adapter already maps reasoning_content into

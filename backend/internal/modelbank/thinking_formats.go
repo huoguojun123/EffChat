@@ -253,6 +253,18 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		// these requests to high, so mirror that instead of inventing an off mode.
 		return ThinkingEffortHigh
 	case ThinkingFormatGLMThinking:
+		if GLMSupportsReasoningEffort(modelID) {
+			if effort == ThinkingEffortLow || effort == ThinkingEffortHigh || effort == ThinkingEffortMax {
+				return effort
+			}
+			if effort == ThinkingEffortNone && !GLMAlwaysUsesThinking(modelID) {
+				return ThinkingEffortNone
+			}
+			if effort == ThinkingEffortNone {
+				return ThinkingEffortLow
+			}
+			return ThinkingEffortHigh
+		}
 		if effort == ThinkingEffortNone {
 			return ThinkingEffortNone
 		}
@@ -361,6 +373,17 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		}
 		return options
 	case ThinkingFormatGLMThinking:
+		if GLMSupportsReasoningEffort(modelID) {
+			options := make([]model.ThinkingEffortOption, 0, 4)
+			if !GLMAlwaysUsesThinking(modelID) {
+				options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortNone), Label: "关闭", Description: "关闭当前 GLM 型号的深度思考。"})
+			}
+			return append(options,
+				model.ThinkingEffortOption{Value: string(ThinkingEffortLow), Label: "低", Description: "下发 thinking.type=enabled + reasoning_effort=low。"},
+				model.ThinkingEffortOption{Value: string(ThinkingEffortHigh), Label: "高", Description: "下发 thinking.type=enabled + reasoning_effort=high。"},
+				model.ThinkingEffortOption{Value: string(ThinkingEffortMax), Label: "最大", Description: "下发 thinking.type=enabled + reasoning_effort=max。"},
+			)
+		}
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortNone), Label: "关闭", Description: "适用 GLM 4.5+；下发 thinking.type=disabled。"},
 			{Value: string(ThinkingEffortHigh), Label: "开启", Description: "适用 GLM 4.5+；下发 thinking.type=enabled。"},
@@ -523,6 +546,15 @@ func xAISupportsXHighEffort(modelID string) bool {
 
 func isGLMThinkingModel(id string) bool {
 	return strings.HasPrefix(id, "glm-") || strings.Contains(id, "/glm-") || strings.Contains(id, "zai/glm")
+}
+
+func GLMSupportsReasoningEffort(modelID string) bool {
+	id := normalizeModelID(modelID)
+	return strings.Contains(id, "glm-5.2") || strings.Contains(id, "glm-5.3")
+}
+
+func GLMAlwaysUsesThinking(modelID string) bool {
+	return strings.Contains(normalizeModelID(modelID), "glm-5.3")
 }
 
 func isMiniMaxThinkingModel(id string) bool {

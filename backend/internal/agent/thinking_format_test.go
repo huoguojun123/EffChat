@@ -196,6 +196,31 @@ func TestApplyOpenAICompatibleThinkingVendorFormats(t *testing.T) {
 		}
 	})
 
+	t.Run("glm 5.3 always thinking", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "glm-5.3"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "zhipu", ModelID: "glm-5.3", Reasoning: true, ThinkingEffort: "none",
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "enabled" || cfg.ExtraFields["reasoning_effort"] != "low" {
+			t.Fatalf("GLM 5.3 fields = %#v, want enabled + low", cfg.ExtraFields)
+		}
+	})
+
+	t.Run("glm 5.2 can disable", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "glm-5.2"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "zhipu", ModelID: "glm-5.2", Reasoning: true, ThinkingEffort: "none",
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Fatalf("GLM 5.2 fields = %#v, want disabled", cfg.ExtraFields)
+		}
+		if _, ok := cfg.ExtraFields["reasoning_effort"]; ok {
+			t.Fatalf("disabled GLM 5.2 leaked effort: %#v", cfg.ExtraFields)
+		}
+	})
+
 	t.Run("minimax m3", func(t *testing.T) {
 		cfg := &openai.ChatModelConfig{Model: "MiniMax-M3"}
 		applyOpenAICompatibleThinking(&ChatRequest{
@@ -340,6 +365,17 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
 		if !ok || thinking["type"] != "disabled" || cfg.ReasoningEffort != "" {
 			t.Fatalf("suppressed DeepSeek fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
+		}
+	})
+
+	t.Run("glm 5.3 uses minimum legal effort", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "glm-5.3"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "zhipu", ModelID: "glm-5.3", Reasoning: true, SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "enabled" || cfg.ExtraFields["reasoning_effort"] != "low" {
+			t.Fatalf("suppressed GLM 5.3 fields = %#v", cfg.ExtraFields)
 		}
 	})
 

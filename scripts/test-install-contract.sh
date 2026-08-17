@@ -17,7 +17,7 @@ grep -Fq 'docker compose up -d --wait' "$SCRIPT"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/effchat-install-contract.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-fixture="$TMP_DIR/fixture/EffChat-v0.4.0-beta.3"
+fixture="$TMP_DIR/fixture/EffChat-v0.4.1-beta.1"
 mkdir -p "$fixture"
 cp "$ROOT/docker-compose.registry.yml" "$fixture/docker-compose.registry.yml"
 tar -czf "$TMP_DIR/release.tar.gz" -C "$TMP_DIR/fixture" "$(basename "$fixture")"
@@ -154,7 +154,7 @@ grep -Fxq "WEB_PORT='8188'" "$update_dir/.env"
 grep -Fxq "POSTGRES_PASSWORD='keep-existing-password'" "$update_dir/.env"
 grep -Fxq "DB_PASSWORD='keep-existing-password'" "$update_dir/.env"
 grep -Fxq "JWT_SECRET='keep-existing-jwt'" "$update_dir/.env"
-grep -Fxq "EFFCHAT_VERSION='v0.4.0-beta.3'" "$update_dir/.env"
+grep -Fxq "EFFCHAT_VERSION='v0.4.1-beta.1'" "$update_dir/.env"
 grep -Fxq 'keep data' "$update_dir/data/storage/sentinel.txt"
 backup_dir="$(find "$update_dir/deployment-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 test -n "$backup_dir"
@@ -174,7 +174,7 @@ if EFFCHAT_HOME="$unknown_dir" EFFCHAT_MODE=update run_installer 2>/dev/null; th
 fi
 grep -Fxq 'keep unknown data' "$unknown_dir/data/sentinel.txt"
 
-grep -Fq 'DEFAULT_VERSION="v0.4.0-beta.3"' "$SCRIPT"
+grep -Fq 'DEFAULT_VERSION="v0.4.1-beta.1"' "$SCRIPT"
 grep -Fq 'curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash' "$ROOT/README.md"
 grep -Fq 'curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash' "$ROOT/README.en.md"
 

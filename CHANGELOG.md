@@ -7,6 +7,33 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.1] - 2026-08-17
+
+### Added
+
+- Added conservative builtin catalog candidates for current Gemini, Claude,
+  Grok, DeepSeek, Qwen, GLM, MiniMax, and Kimi model families without seeding
+  or rewriting administrator-owned PostgreSQL model records.
+- Added first-class Kimi K3, K2.7 Code, and K2.6 runtime profiles while keeping
+  the existing OpenAI-compatible adapter, local Tool ownership, streaming,
+  usage, and persistence paths.
+
+### Fixed
+
+- Aligned current provider thinking contracts, including Gemini generation
+  levels, Claude adaptive effort, OpenAI Responses `max`, DeepSeek V4,
+  Grok, Qwen, GLM, MiniMax, Doubao, and model-specific Kimi controls.
+- Prevented incompatible sampling, penalty, token-limit, and thinking fields
+  from leaking across model families while preserving saved administrator
+  profiles and unknown-model fail-safe behavior.
+
+### Changed
+
+- Expanded local protocol fixtures and runtime-profile tests for thinking,
+  utility suppression, Tool continuation, and outgoing request JSON without
+  adding migrations, public API fields, provider fallbacks, or deployment
+  topology changes.
+
 ## [0.4.0-beta.3] - 2026-08-16
 
 ### Fixed
@@ -146,7 +173,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.0-beta.3...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.1...HEAD
+[0.4.1-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.1
 [0.4.0-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.3
 [0.4.0-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.2
 [0.4.0-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.1

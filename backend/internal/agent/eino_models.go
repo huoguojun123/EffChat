@@ -44,6 +44,13 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		if err := model.ValidateOpenAIRequestProfile(openAIProfile); err != nil {
 			return nil, fmt.Errorf("invalid OpenAI-compatible request profile: %w", err)
 		}
+		if modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning) == modelbank.ThinkingFormatXAIGrok {
+			// xAI rejects both penalty fields on reasoning models. Preserve the
+			// administrator's stored profile, but omit incompatible wire fields for
+			// this request instead of turning a reusable gateway profile into a 400.
+			openAIProfile.PresencePenalty = nil
+			openAIProfile.FrequencyPenalty = nil
+		}
 		cfg := &openai.ChatModelConfig{
 			Model:            req.ModelID,
 			APIKey:           channel.APIKey,

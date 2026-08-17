@@ -203,6 +203,15 @@ func builtinModels() map[string]*ModelInfo {
 			},
 		},
 
+		// ============ xAI ============
+		"grok-4.6": {
+			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 500000,
+			},
+		},
+
 		// ============ DeepSeek ============
 		"deepseek-v4-flash": {
 			ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Provider: "deepseek", Enabled: true,

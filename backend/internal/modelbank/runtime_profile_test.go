@@ -123,7 +123,8 @@ func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 		optionCount   int
 		defaultEffort string
 	}{
-		{name: "grok", provider: "xai", modelID: "grok-4.5", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 3, defaultEffort: "high"},
+		{name: "grok 4.5", provider: "xai", modelID: "grok-4.5", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 3, defaultEffort: "high"},
+		{name: "grok 4.6", provider: "xai", modelID: "grok-4.6", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 4, defaultEffort: "high"},
 		{name: "glm", provider: "zhipu", modelID: "glm-4.5", family: "glm", format: ThinkingFormatGLMThinking, optionCount: 2, defaultEffort: "high"},
 		{name: "minimax m3", provider: "minimax", modelID: "MiniMax-M3", family: "minimax", format: ThinkingFormatMiniMaxThinking, optionCount: 2, defaultEffort: "medium"},
 		{name: "minimax m2", provider: "minimax", modelID: "MiniMax-M2.7", family: "minimax", format: ThinkingFormatMiniMaxThinking, optionCount: 0, defaultEffort: ""},

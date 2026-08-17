@@ -85,6 +85,7 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "claude-sonnet-4-7", provider: "anthropic", context: 1000000, output: 128000},
 		{id: "gemini-3.7-flash", provider: "google", context: 1048576, output: 65536},
 		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536},
+		{id: "grok-4.6", provider: "xai", context: 500000, output: 0},
 	}
 	for _, tc := range cases {
 		info := Get(tc.id)

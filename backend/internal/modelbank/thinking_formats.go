@@ -243,6 +243,9 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		if effort == ThinkingEffortLow || effort == ThinkingEffortMedium || effort == ThinkingEffortHigh {
 			return effort
 		}
+		if effort == ThinkingEffortXHigh && xAISupportsXHighEffort(modelID) {
+			return effort
+		}
 		// Grok's ordinary reasoning models cannot disable reasoning; xAI defaults
 		// these requests to high, so mirror that instead of inventing an off mode.
 		return ThinkingEffortHigh
@@ -344,11 +347,15 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		}
 		return options
 	case ThinkingFormatXAIGrok:
-		return []model.ThinkingEffortOption{
-			{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Grok 4.5 等标准推理模型；下发 reasoning_effort=low。"},
-			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Grok 4.5 等标准推理模型；下发 reasoning_effort=medium。"},
+		options := []model.ThinkingEffortOption{
+			{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Grok 标准推理模型；下发 reasoning_effort=low。"},
+			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Grok 标准推理模型；下发 reasoning_effort=medium。"},
 			{Value: string(ThinkingEffortHigh), Label: "高", Description: "xAI 默认档位；下发 reasoning_effort=high。"},
 		}
+		if xAISupportsXHighEffort(modelID) {
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.6、4.20 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
+		}
+		return options
 	case ThinkingFormatGLMThinking:
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortNone), Label: "关闭", Description: "适用 GLM 4.5+；下发 thinking.type=disabled。"},
@@ -479,7 +486,18 @@ func isGPT56Model(id string) bool {
 func isGrokReasoningModel(id string) bool {
 	// grok-4.20-multi-agent uses a different agent-count control. Treat it as
 	// unsupported here rather than sending a standard reasoning budget to it.
-	return strings.Contains(id, "grok-") && !strings.Contains(id, "multi-agent")
+	// Explicit non-reasoning variants must also stay out of this family even if
+	// an imported catalog incorrectly marks their generic reasoning capability.
+	return strings.Contains(id, "grok-") &&
+		!strings.Contains(id, "multi-agent") &&
+		!strings.Contains(id, "non-reasoning")
+}
+
+func xAISupportsXHighEffort(modelID string) bool {
+	id := normalizeModelID(modelID)
+	return strings.Contains(id, "grok-4.6") ||
+		strings.Contains(id, "grok-4.20") ||
+		strings.Contains(id, "grok-4-1-fast")
 }
 
 func isGLMThinkingModel(id string) bool {

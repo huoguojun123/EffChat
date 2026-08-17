@@ -122,15 +122,25 @@ func TestApplyOpenAICompatibleThinkingQwen(t *testing.T) {
 
 func TestApplyOpenAICompatibleThinkingVendorFormats(t *testing.T) {
 	t.Run("grok", func(t *testing.T) {
-		cfg := &openai.ChatModelConfig{Model: "grok-4.5"}
+		cfg := &openai.ChatModelConfig{Model: "grok-4.6"}
 		applyOpenAICompatibleThinking(&ChatRequest{
 			Provider:       "xai",
-			ModelID:        "grok-4.5",
+			ModelID:        "grok-4.6",
 			Reasoning:      true,
-			ThinkingEffort: "medium",
+			ThinkingEffort: "xhigh",
 		}, cfg)
-		if got := cfg.ExtraFields["reasoning_effort"]; got != "medium" {
-			t.Fatalf("reasoning_effort = %#v, want medium", got)
+		if got := cfg.ExtraFields["reasoning_effort"]; got != "xhigh" {
+			t.Fatalf("reasoning_effort = %#v, want xhigh", got)
+		}
+	})
+
+	t.Run("grok utility uses minimum effort", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "grok-4.6"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "xai", ModelID: "grok-4.6", Reasoning: true, SuppressThinking: true,
+		}, cfg)
+		if got := cfg.ExtraFields["reasoning_effort"]; got != "low" {
+			t.Fatalf("reasoning_effort = %#v, want low", got)
 		}
 	})
 

@@ -106,7 +106,9 @@ func TestResolveThinkingFormatKnownFamilies(t *testing.T) {
 		{name: "claude 3.5 remains manual budget", provider: "anthropic", modelID: "claude-3-5-haiku-latest", reasoning: false, want: ThinkingFormatAnthropicBudget},
 		{name: "openai reasoning through custom gateway", provider: "my-gateway", modelID: "gpt-5.1", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "grok reasoning", provider: "xai", modelID: "grok-4.5", reasoning: true, want: ThinkingFormatXAIGrok},
+		{name: "grok 4.6 reasoning", provider: "xai", modelID: "grok-4.6", reasoning: true, want: ThinkingFormatXAIGrok},
 		{name: "grok multi agent remains unsupported", provider: "xai", modelID: "grok-4.20-multi-agent", reasoning: true, want: ThinkingFormatNone},
+		{name: "grok explicit non reasoning remains unsupported", provider: "xai", modelID: "grok-4-fast-non-reasoning", reasoning: true, want: ThinkingFormatNone},
 		{name: "glm thinking", provider: "zhipu", modelID: "glm-4.5", reasoning: true, want: ThinkingFormatGLMThinking},
 		{name: "minimax m3 thinking", provider: "minimax", modelID: "MiniMax-M3", reasoning: true, want: ThinkingFormatMiniMaxThinking},
 		{name: "minimax m2 thinking", provider: "minimax", modelID: "MiniMax-M2.7", reasoning: true, want: ThinkingFormatMiniMaxThinking},
@@ -133,6 +135,8 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 	}{
 		{name: "grok cannot disable ordinary reasoning", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "none", want: ThinkingEffortHigh},
 		{name: "grok keeps medium", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "medium", want: ThinkingEffortMedium},
+		{name: "grok 4.5 rejects xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "xhigh", want: ThinkingEffortHigh},
+		{name: "grok 4.6 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.6", requested: "xhigh", want: ThinkingEffortXHigh},
 		{name: "glm accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "none", want: ThinkingEffortNone},
 		{name: "glm normalizes enabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "low", want: ThinkingEffortHigh},
 		{name: "minimax m3 accepts disabled", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M3", requested: "none", want: ThinkingEffortNone},
@@ -155,6 +159,12 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-4.5"); len(got) != 2 || got[0].Value != "none" || got[1].Value != "high" {
 		t.Fatalf("GLM options = %#v", got)
 	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.6"); len(got) != 4 || got[3].Value != "xhigh" {
+		t.Fatalf("Grok 4.6 options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.5"); len(got) != 3 {
+		t.Fatalf("Grok 4.5 options = %#v", got)
+	}
 }
 
 func TestKnownThinkingModelDetection(t *testing.T) {
@@ -173,6 +183,9 @@ func TestKnownThinkingModelDetection(t *testing.T) {
 	}
 	if IsKnownThinkingModel("xai", "grok-4.20-multi-agent", "") {
 		t.Fatal("Grok multi-agent must not receive the ordinary reasoning format")
+	}
+	if IsKnownThinkingModel("xai", "grok-4-fast-non-reasoning", "") {
+		t.Fatal("Grok non-reasoning variants must not receive the reasoning format")
 	}
 }
 
@@ -275,7 +288,8 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 		{
 			name:     "grok",
 			format:   ThinkingFormatXAIGrok,
-			contains: []string{"Grok 4.5", "reasoning_effort"},
+			modelID:  "grok-4.6",
+			contains: []string{"Grok 标准推理模型", "reasoning_effort", "Grok 4.6"},
 		},
 		{
 			name:     "glm",

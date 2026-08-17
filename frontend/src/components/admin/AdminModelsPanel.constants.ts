@@ -14,7 +14,7 @@ export const thinkingFormatOptions = [
   { value: "dashscope_qwen", label: "Qwen thinking", hint: "适用 QwQ、Qwen3/3.5/3.6/3.7；下发 enable_thinking + thinking_budget。" },
   { value: "deepseek_v4", label: "DeepSeek thinking", hint: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=high/max。" },
   { value: "deepseek_v4_disabled", label: "DeepSeek 关闭思考", hint: "适用 DeepSeek V4 双模式模型；下发 thinking.type=disabled，不展示思考预算。" },
-  { value: "xai_grok", label: "Grok reasoning", hint: "适用 Grok 4.5 等标准推理模型；下发 reasoning_effort=low/medium/high。" },
+  { value: "xai_grok", label: "Grok reasoning", hint: "适用 Grok 标准推理模型；下发 low/medium/high，4.6 等已核验型号额外支持 xhigh。" },
   { value: "glm_thinking", label: "GLM thinking", hint: "适用 GLM 4.5+；下发 thinking.type=enabled 或 disabled。" },
   { value: "minimax_thinking", label: "MiniMax thinking", hint: "M3 支持 adaptive/disabled；M2 系列固定思考并分离 reasoning_content。" },
   { value: "volcengine_thinking", label: "Doubao / Ark thinking", hint: "适用豆包 Seed / 方舟推理模型；下发 thinking.type 与 reasoning_effort。" },

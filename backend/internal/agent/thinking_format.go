@@ -30,6 +30,10 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 		if format == modelbank.ThinkingFormatDeepSeekV4 || format == modelbank.ThinkingFormatDeepSeekV4Disabled {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+		} else if format == modelbank.ThinkingFormatXAIGrok {
+			// Standard Grok reasoning cannot be disabled. Utilities request the
+			// lowest legal effort instead of omitting the field and inheriting high.
+			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
 		}
 		return
 	}

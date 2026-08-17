@@ -36,6 +36,7 @@ const (
 	ThinkingFormatGLMThinking           ThinkingFormat = "glm_thinking"
 	ThinkingFormatMiniMaxThinking       ThinkingFormat = "minimax_thinking"
 	ThinkingFormatVolcengineThinking    ThinkingFormat = "volcengine_thinking"
+	ThinkingFormatKimiThinking          ThinkingFormat = "kimi_thinking"
 )
 
 // ThinkingEffort 是一次请求里用户选择的“思考投入”。
@@ -65,6 +66,18 @@ const (
 	GeminiThinkingLevel
 )
 
+// KimiThinkingContract separates Moonshot models whose OpenAI-compatible
+// thinking controls are intentionally incompatible with one another.
+type KimiThinkingContract uint8
+
+const (
+	KimiThinkingUnknown KimiThinkingContract = iota
+	KimiThinkingK3
+	KimiThinkingK27Code
+	KimiThinkingK26
+	KimiThinkingK25
+)
+
 var validThinkingFormats = map[string]bool{
 	string(ThinkingFormatAuto):                  true,
 	string(ThinkingFormatNone):                  true,
@@ -80,6 +93,7 @@ var validThinkingFormats = map[string]bool{
 	string(ThinkingFormatGLMThinking):           true,
 	string(ThinkingFormatMiniMaxThinking):       true,
 	string(ThinkingFormatVolcengineThinking):    true,
+	string(ThinkingFormatKimiThinking):          true,
 }
 
 var validThinkingEfforts = map[string]bool{
@@ -153,6 +167,11 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	}
 	if isGeminiThinkingModel(id) || p == "google" || a == "google" {
 		return ThinkingFormatGeminiThinking
+	}
+	// K3 and K2.7 Code always think even if an imported capability bit is
+	// stale. K2.6/K2.5 remain opt-in through the model reasoning capability.
+	if isKimiAlwaysThinkingModel(id) || (reasoning && isKimiThinkingModel(id)) {
+		return ThinkingFormatKimiThinking
 	}
 	// MiniMax exposes the same family-level thinking modes through both its
 	// OpenAI- and Anthropic-compatible APIs. Family must win over adapter here,
@@ -287,6 +306,26 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 			return effort
 		}
 		return ThinkingEffortMedium
+	case ThinkingFormatKimiThinking:
+		switch ResolveKimiThinkingContract(modelID) {
+		case KimiThinkingK3:
+			if effort == ThinkingEffortLow || effort == ThinkingEffortHigh || effort == ThinkingEffortMax {
+				return effort
+			}
+			if effort == ThinkingEffortNone {
+				return ThinkingEffortLow
+			}
+			return ThinkingEffortMax
+		case KimiThinkingK27Code:
+			return ThinkingEffortAuto
+		case KimiThinkingK26, KimiThinkingK25:
+			if effort == ThinkingEffortNone {
+				return ThinkingEffortNone
+			}
+			return ThinkingEffortMedium
+		default:
+			return ThinkingEffortAuto
+		}
 	default:
 		return ThinkingEffortAuto
 	}
@@ -406,6 +445,22 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用豆包 Seed / 方舟推理模型；下发 thinking.type=enabled + reasoning_effort=medium。"},
 			{Value: string(ThinkingEffortHigh), Label: "高", Description: "适用豆包 Seed / 方舟推理模型；下发 thinking.type=enabled + reasoning_effort=high。"},
 		}
+	case ThinkingFormatKimiThinking:
+		switch ResolveKimiThinkingContract(modelID) {
+		case KimiThinkingK3:
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Kimi K3；下发 reasoning_effort=low。"},
+				{Value: string(ThinkingEffortHigh), Label: "高", Description: "适用 Kimi K3；下发 reasoning_effort=high。"},
+				{Value: string(ThinkingEffortMax), Label: "最大", Description: "Kimi K3 默认档位；下发 reasoning_effort=max。"},
+			}
+		case KimiThinkingK26, KimiThinkingK25:
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortNone), Label: "关闭", Description: "适用 Kimi K2.6/K2.5；下发 thinking.type=disabled。"},
+				{Value: string(ThinkingEffortMedium), Label: "开启", Description: "下发 thinking.type=enabled；K2.6 同时启用 Preserved Thinking。"},
+			}
+		default:
+			return nil
+		}
 	default:
 		return nil
 	}
@@ -441,6 +496,8 @@ func isThinkingFormatApplicableWithContext(provider, adapter, modelID, displayNa
 		return isMiniMaxThinkingModel(id)
 	case ThinkingFormatVolcengineThinking:
 		return isVolcengineThinkingModel(id)
+	case ThinkingFormatKimiThinking:
+		return isKimiThinkingModel(id)
 	default:
 		return false
 	}
@@ -577,6 +634,40 @@ func isVolcengineThinkingModel(id string) bool {
 		strings.Contains(id, "seed-1") || strings.Contains(id, "seed-2")
 }
 
+func isKimiThinkingModel(id string) bool {
+	return ResolveKimiThinkingContract(id) != KimiThinkingUnknown
+}
+
+func isKimiAlwaysThinkingModel(id string) bool {
+	contract := ResolveKimiThinkingContract(id)
+	return contract == KimiThinkingK3 || contract == KimiThinkingK27Code
+}
+
+// ResolveKimiThinkingContract returns only the model-specific controls that
+// Moonshot currently documents. Unknown Moonshot aliases receive no inferred
+// fields instead of inheriting the wrong Kimi generation contract.
+func ResolveKimiThinkingContract(modelID string) KimiThinkingContract {
+	id := normalizeModelID(modelID)
+	switch {
+	case strings.Contains(id, "kimi-k3"):
+		return KimiThinkingK3
+	case strings.Contains(id, "kimi-k2.7-code"):
+		return KimiThinkingK27Code
+	case strings.Contains(id, "kimi-k2.6"):
+		return KimiThinkingK26
+	case strings.Contains(id, "kimi-k2.5"):
+		return KimiThinkingK25
+	default:
+		return KimiThinkingUnknown
+	}
+}
+
+// KimiOmitsSamplingParameters reports current Kimi models whose documented
+// temperature, top-p, n, and penalty values are fixed by the service.
+func KimiOmitsSamplingParameters(modelID string) bool {
+	return ResolveKimiThinkingContract(modelID) != KimiThinkingUnknown
+}
+
 // IsKnownThinkingModel lets catalog import safely mark model families whose
 // official APIs expose reasoning controls even when an upstream /models reply
 // omits that capability bit.
@@ -587,7 +678,7 @@ func IsKnownThinkingModel(provider, modelID, displayName string) bool {
 		isAnthropicThinkingModel(p, id) || isDashScopeQwenThinkingModel(id) ||
 		isOpenAIReasoningModel(p, id) || isGrokReasoningModel(id) ||
 		isGLMThinkingModel(id) || isMiniMaxThinkingModel(id) ||
-		isVolcengineThinkingModel(id)
+		isVolcengineThinkingModel(id) || isKimiThinkingModel(id)
 }
 
 func isGeminiThinkingModel(id string) bool {

@@ -93,6 +93,10 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "MiniMax-M3", provider: "minimax", context: 1000000, output: 524288},
 		{id: "MiniMax-M2.7", provider: "minimax", context: 1000000, output: 204800},
 		{id: "grok-4.6", provider: "xai", context: 500000, output: 0, vision: true},
+		{id: "kimi-k3", provider: "moonshot", context: 1048576, output: 1048576, vision: true},
+		{id: "kimi-k2.7-code", provider: "moonshot", context: 262144, output: 0, vision: true},
+		{id: "kimi-k2.7-code-highspeed", provider: "moonshot", context: 262144, output: 0, vision: true},
+		{id: "kimi-k2.6", provider: "moonshot", context: 262144, output: 0, vision: true},
 	}
 	for _, tc := range cases {
 		info := Get(tc.id)

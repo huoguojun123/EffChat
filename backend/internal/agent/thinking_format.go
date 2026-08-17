@@ -47,6 +47,13 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			} else {
 				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
 			}
+		} else if format == modelbank.ThinkingFormatKimiThinking {
+			switch modelbank.ResolveKimiThinkingContract(req.ModelID) {
+			case modelbank.KimiThinkingK3:
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			case modelbank.KimiThinkingK26, modelbank.KimiThinkingK25:
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+			}
 		}
 		return
 	}
@@ -94,6 +101,17 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		} else {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "enabled"})
 			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		}
+	case modelbank.ThinkingFormatKimiThinking:
+		switch modelbank.ResolveKimiThinkingContract(req.ModelID) {
+		case modelbank.KimiThinkingK3:
+			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		case modelbank.KimiThinkingK26, modelbank.KimiThinkingK25:
+			thinking := map[string]any{"type": thinkingTypeForToggle(effort, "enabled")}
+			if effort != modelbank.ThinkingEffortNone && modelbank.ResolveKimiThinkingContract(req.ModelID) == modelbank.KimiThinkingK26 {
+				thinking["keep"] = "all"
+			}
+			setOpenAIExtraField(cfg, "thinking", thinking)
 		}
 	}
 	logThinkingFormat(req, format, effort)

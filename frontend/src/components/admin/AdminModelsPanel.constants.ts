@@ -4,7 +4,7 @@ export const baseProviderOptions = ["openai", "anthropic", "google", "deepseek",
 
 // These values are persisted and interpreted by the backend adapter layer, so labels can change but values must remain stable.
 export const thinkingFormatOptions = [
-  { value: "auto", label: "自动推荐", hint: "按模型名和渠道关键词匹配；GPT、Claude、Gemini、Qwen、DeepSeek、Grok、GLM、MiniMax、豆包会自动走对应格式。" },
+  { value: "auto", label: "自动推荐", hint: "按模型名和渠道关键词匹配；GPT、Claude、Gemini、Qwen、DeepSeek、Grok、GLM、MiniMax、Kimi、豆包会自动走对应格式。" },
   { value: "none", label: "关闭", hint: "适合普通非推理模型，或需要完全交给上游默认行为的模型。" },
   { value: "openai_reasoning_effort", label: "OpenAI reasoning", hint: "适用 GPT-5.5 及更早 GPT-5、gpt-oss、o 系列；下发三档 reasoning_effort。" },
   { value: "openai_gpt_5_6", label: "GPT-5.6 reasoning", hint: "适用 GPT-5.6 系列；下发独立的六档 reasoning_effort 和 max_completion_tokens。" },
@@ -18,6 +18,7 @@ export const thinkingFormatOptions = [
   { value: "glm_thinking", label: "GLM thinking", hint: "GLM 4.5+ 使用 thinking.type；5.2/5.3 额外支持 low/high/max，5.3 固定开启思考。" },
   { value: "minimax_thinking", label: "MiniMax thinking", hint: "OpenAI/Anthropic 兼容通道共享 family profile：M3 支持 adaptive/disabled，M2 系列固定思考。" },
   { value: "volcengine_thinking", label: "Doubao / Ark thinking", hint: "适用豆包 Seed / 方舟推理模型；下发 thinking.type 与 reasoning_effort。" },
+  { value: "kimi_thinking", label: "Kimi thinking", hint: "K3 使用 low/high/max；K2.7 Code 固定思考；K2.6 支持开启、关闭与 Preserved Thinking。" },
 ]
 
 export const providerLabels: Record<string, string> = {

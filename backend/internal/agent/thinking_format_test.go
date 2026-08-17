@@ -84,6 +84,52 @@ func TestApplyOpenAICompatibleThinkingSupportsGPT56ExtendedEfforts(t *testing.T)
 	}
 }
 
+func TestApplyOpenAICompatibleThinkingKimiFamilies(t *testing.T) {
+	t.Run("k3 max and utility low", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "kimi-k3"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true}, cfg)
+		if got := cfg.ExtraFields["reasoning_effort"]; got != "max" {
+			t.Fatalf("K3 reasoning_effort = %#v, want max", got)
+		}
+		utility := &openai.ChatModelConfig{Model: cfg.Model}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, SuppressThinking: true}, utility)
+		if got := utility.ExtraFields["reasoning_effort"]; got != "low" {
+			t.Fatalf("K3 utility effort = %#v, want low", got)
+		}
+	})
+
+	t.Run("k2.7 sends no control fields", func(t *testing.T) {
+		for _, suppressed := range []bool{false, true} {
+			cfg := &openai.ChatModelConfig{Model: "kimi-k2.7-code"}
+			applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, SuppressThinking: suppressed}, cfg)
+			if len(cfg.ExtraFields) != 0 {
+				t.Fatalf("K2.7 fields with suppressed=%t: %#v", suppressed, cfg.ExtraFields)
+			}
+		}
+	})
+
+	t.Run("k2.6 keeps or disables thinking", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "kimi-k2.6"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true}, cfg)
+		thinking, _ := cfg.ExtraFields["thinking"].(map[string]any)
+		if thinking["type"] != "enabled" || thinking["keep"] != "all" {
+			t.Fatalf("K2.6 thinking = %#v", thinking)
+		}
+		disabled := &openai.ChatModelConfig{Model: cfg.Model}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, ThinkingEffort: "none"}, disabled)
+		thinking, _ = disabled.ExtraFields["thinking"].(map[string]any)
+		if thinking["type"] != "disabled" || thinking["keep"] != nil {
+			t.Fatalf("K2.6 disabled thinking = %#v", thinking)
+		}
+		utility := &openai.ChatModelConfig{Model: cfg.Model}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, SuppressThinking: true}, utility)
+		thinking, _ = utility.ExtraFields["thinking"].(map[string]any)
+		if thinking["type"] != "disabled" {
+			t.Fatalf("K2.6 utility thinking = %#v", thinking)
+		}
+	})
+}
+
 func TestOpenAIResponsesReasoningSupportsGPT56Max(t *testing.T) {
 	reasoning := openAIResponsesReasoning(&ChatRequest{
 		Provider:       "openai",
@@ -107,6 +153,11 @@ func TestApplyOpenAITokenLimitUsesCompletionTokensForReasoning(t *testing.T) {
 	applyOpenAITokenLimit(&ChatRequest{Provider: "openai", ModelID: "gpt-4o", MaxTokens: 2048}, regular)
 	if regular.MaxTokens == nil || *regular.MaxTokens != 2048 || regular.MaxCompletionTokens != nil {
 		t.Fatalf("regular token fields = max=%v completion=%v", regular.MaxTokens, regular.MaxCompletionTokens)
+	}
+	k3 := &openai.ChatModelConfig{}
+	applyOpenAITokenLimit(&ChatRequest{Provider: "moonshot", ModelID: "kimi-k3", MaxTokens: 8192}, k3)
+	if k3.MaxCompletionTokens == nil || *k3.MaxCompletionTokens != 8192 || k3.MaxTokens != nil {
+		t.Fatalf("K3 token fields = max=%v completion=%v", k3.MaxTokens, k3.MaxCompletionTokens)
 	}
 }
 

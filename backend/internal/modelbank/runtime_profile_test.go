@@ -144,6 +144,9 @@ func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 		{name: "minimax m3", provider: "minimax", modelID: "MiniMax-M3", family: "minimax", format: ThinkingFormatMiniMaxThinking, optionCount: 2, defaultEffort: "medium"},
 		{name: "minimax m2", provider: "minimax", modelID: "MiniMax-M2.7", family: "minimax", format: ThinkingFormatMiniMaxThinking, optionCount: 0, defaultEffort: ""},
 		{name: "doubao", provider: "volcengine", modelID: "doubao-seed-2-0-pro", family: "volcengine", format: ThinkingFormatVolcengineThinking, optionCount: 4, defaultEffort: "medium"},
+		{name: "kimi k3", provider: "moonshot", modelID: "kimi-k3", family: "kimi", format: ThinkingFormatKimiThinking, optionCount: 3, defaultEffort: "max"},
+		{name: "kimi k2.7", provider: "moonshot", modelID: "kimi-k2.7-code", family: "kimi", format: ThinkingFormatKimiThinking, optionCount: 0, defaultEffort: ""},
+		{name: "kimi k2.6", provider: "moonshot", modelID: "kimi-k2.6", family: "kimi", format: ThinkingFormatKimiThinking, optionCount: 2, defaultEffort: "medium"},
 	}
 
 	for _, tc := range cases {

@@ -251,6 +251,36 @@ func builtinModels() map[string]*ModelInfo {
 			},
 		},
 
+		// ============ Moonshot Kimi ============
+		"kimi-k3": {
+			ID: "kimi-k3", DisplayName: "Kimi K3", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1048576, MaxOutput: 1048576,
+			},
+		},
+		"kimi-k2.7-code": {
+			ID: "kimi-k2.7-code", DisplayName: "Kimi K2.7 Code", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 262144,
+			},
+		},
+		"kimi-k2.7-code-highspeed": {
+			ID: "kimi-k2.7-code-highspeed", DisplayName: "Kimi K2.7 Code HighSpeed", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 262144,
+			},
+		},
+		"kimi-k2.6": {
+			ID: "kimi-k2.6", DisplayName: "Kimi K2.6", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 262144,
+			},
+		},
+
 		// ============ xAI ============
 		"grok-4.6": {
 			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,

@@ -310,6 +310,70 @@ func TestBuildChatModelAppliesQwenThinkingAndNativeSearch(t *testing.T) {
 	}
 }
 
+func TestBuildChatModelAppliesKimiGenerationContracts(t *testing.T) {
+	requestBodies := make(chan map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-kimi\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"kimi-fixture\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	temperature, topP, presence, frequency := 0.5, 0.8, 0.2, -0.2
+	n := 2
+	for _, tc := range []struct {
+		name       string
+		modelID    string
+		maxTokens  int
+		wantLimit  string
+		wantEffort string
+		wantKeep   bool
+	}{
+		{name: "K3", modelID: "kimi-k3", maxTokens: 8192, wantLimit: "max_completion_tokens", wantEffort: "max"},
+		{name: "K2.6", modelID: "kimi-k2.6", maxTokens: 4096, wantLimit: "max_tokens", wantKeep: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+			chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+				ModelID: tc.modelID, Provider: "moonshot", MaxTokens: tc.maxTokens, Reasoning: true,
+				TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &temperature,
+				OpenAIRequestProfile: model.OpenAIRequestProfile{TopP: &topP, N: &n, PresencePenalty: &presence, FrequencyPenalty: &frequency},
+				RuntimeChannel:       &model.AIChannel{Key: "moonshot", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+			}, modelbank.SearchDecision{})
+			if err != nil {
+				t.Fatalf("build model: %v", err)
+			}
+			if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+				t.Fatalf("collect stream: %v", err)
+			}
+			body := <-requestBodies
+			if body[tc.wantLimit] != float64(tc.maxTokens) {
+				t.Fatalf("%s = %#v; body=%#v", tc.wantLimit, body[tc.wantLimit], body)
+			}
+			for _, key := range []string{"temperature", "top_p", "n", "presence_penalty", "frequency_penalty"} {
+				if _, ok := body[key]; ok {
+					t.Fatalf("fixed Kimi field %q leaked: %#v", key, body)
+				}
+			}
+			if tc.wantEffort != "" && body["reasoning_effort"] != tc.wantEffort {
+				t.Fatalf("reasoning_effort = %#v, want %q", body["reasoning_effort"], tc.wantEffort)
+			}
+			if tc.wantKeep {
+				thinking, _ := body["thinking"].(map[string]any)
+				if thinking["type"] != "enabled" || thinking["keep"] != "all" {
+					t.Fatalf("thinking = %#v", thinking)
+				}
+			}
+		})
+	}
+}
+
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

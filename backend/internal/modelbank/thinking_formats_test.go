@@ -423,3 +423,55 @@ func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
 		t.Fatalf("Claude 4.6 xhigh = %q, want medium fallback", got)
 	}
 }
+
+func TestKimiThinkingContracts(t *testing.T) {
+	cases := []struct {
+		modelID   string
+		reasoning bool
+		contract  KimiThinkingContract
+		format    ThinkingFormat
+	}{
+		{modelID: "kimi-k3", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.7-code", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.7-code-highspeed", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.6", reasoning: true, contract: KimiThinkingK26, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.5", reasoning: true, contract: KimiThinkingK25, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.6", contract: KimiThinkingK26, format: ThinkingFormatNone},
+		{modelID: "moonshot-v1-auto", reasoning: true, contract: KimiThinkingUnknown, format: ThinkingFormatNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID+"/"+string(tc.format), func(t *testing.T) {
+			if got := ResolveKimiThinkingContract(tc.modelID); got != tc.contract {
+				t.Fatalf("contract = %v, want %v", got, tc.contract)
+			}
+			if got := ResolveThinkingFormat("moonshot", tc.modelID, "auto", tc.reasoning); got != tc.format {
+				t.Fatalf("format = %q, want %q", got, tc.format)
+			}
+		})
+	}
+}
+
+func TestKimiThinkingEffortOptions(t *testing.T) {
+	k3 := ThinkingEffortOptionsForModel(ThinkingFormatKimiThinking, "kimi-k3")
+	if len(k3) != 3 || k3[0].Value != "low" || k3[2].Value != "max" {
+		t.Fatalf("K3 options = %#v", k3)
+	}
+	for requested, want := range map[string]ThinkingEffort{
+		"": ThinkingEffortMax, "none": ThinkingEffortLow, "low": ThinkingEffortLow,
+		"high": ThinkingEffortHigh, "max": ThinkingEffortMax,
+	} {
+		if got := ResolveThinkingEffortForModel(ThinkingFormatKimiThinking, "kimi-k3", requested); got != want {
+			t.Fatalf("K3 effort %q = %q, want %q", requested, got, want)
+		}
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatKimiThinking, "kimi-k2.7-code"); len(got) != 0 {
+		t.Fatalf("K2.7 options = %#v, want none", got)
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatKimiThinking, "kimi-k2.7-code", "high"); got != ThinkingEffortAuto {
+		t.Fatalf("K2.7 effort = %q, want auto", got)
+	}
+	k26 := ThinkingEffortOptionsForModel(ThinkingFormatKimiThinking, "kimi-k2.6")
+	if len(k26) != 2 || k26[0].Value != "none" || k26[1].Value != "medium" {
+		t.Fatalf("K2.6 options = %#v", k26)
+	}
+}

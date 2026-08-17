@@ -116,6 +116,13 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 128000,
 			},
 		},
+		"claude-sonnet-4-7": {
+			ID: "claude-sonnet-4-7", DisplayName: "Claude Sonnet 4.7", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-sonnet-4-6": {
 			ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -139,6 +146,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Google Gemini ============
+		"gemini-3.7-flash": {
+			ID: "gemini-3.7-flash", DisplayName: "Gemini 3.7 Flash", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
 		"gemini-3.6-flash": {
 			ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -189,6 +203,93 @@ func builtinModels() map[string]*ModelInfo {
 			},
 		},
 
+		// ============ Qwen ============
+		"qwen3.7-max": {
+			ID: "qwen3.7-max", DisplayName: "Qwen3.7 Max", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 65536,
+			},
+		},
+		"qwen3.7-plus": {
+			ID: "qwen3.7-plus", DisplayName: "Qwen3.7 Plus", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 65536,
+			},
+		},
+
+		// ============ GLM ============
+		"glm-5.3": {
+			ID: "glm-5.3", DisplayName: "GLM-5.3", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"glm-5.2": {
+			ID: "glm-5.2", DisplayName: "GLM-5.2", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+
+		// ============ MiniMax ============
+		"MiniMax-M3": {
+			ID: "MiniMax-M3", DisplayName: "MiniMax M3", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 524288,
+			},
+		},
+		"MiniMax-M2.7": {
+			ID: "MiniMax-M2.7", DisplayName: "MiniMax M2.7", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 204800,
+			},
+		},
+
+		// ============ Moonshot Kimi ============
+		"kimi-k3": {
+			ID: "kimi-k3", DisplayName: "Kimi K3", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1048576, MaxOutput: 1048576,
+			},
+		},
+		"kimi-k2.7-code": {
+			ID: "kimi-k2.7-code", DisplayName: "Kimi K2.7 Code", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 262144,
+			},
+		},
+		"kimi-k2.7-code-highspeed": {
+			ID: "kimi-k2.7-code-highspeed", DisplayName: "Kimi K2.7 Code HighSpeed", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 262144,
+			},
+		},
+		"kimi-k2.6": {
+			ID: "kimi-k2.6", DisplayName: "Kimi K2.6", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 262144,
+			},
+		},
+
+		// ============ xAI ============
+		"grok-4.6": {
+			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 500000,
+			},
+		},
+
 		// ============ DeepSeek ============
 		"deepseek-v4-flash": {
 			ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Provider: "deepseek", Enabled: true,
@@ -204,21 +305,6 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 384000,
 			},
 		},
-		"deepseek-chat": {
-			ID: "deepseek-chat", DisplayName: "DeepSeek Chat", Provider: "deepseek", Enabled: true,
-			Capabilities: ModelCapabilities{
-				ToolUse: true, SearchImpl: SearchImplNone,
-				ContextWindow: 1000000, MaxOutput: 384000,
-			},
-		},
-		"deepseek-reasoner": {
-			ID: "deepseek-reasoner", DisplayName: "DeepSeek Reasoner", Provider: "deepseek", Enabled: true,
-			Capabilities: ModelCapabilities{
-				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
-				ContextWindow: 1000000, MaxOutput: 384000,
-			},
-		},
-
 		// ============ Perplexity ============
 		"sonar": {
 			ID: "sonar", DisplayName: "Sonar", Provider: "perplexity", Enabled: true,

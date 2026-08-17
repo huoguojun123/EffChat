@@ -78,10 +78,25 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		provider string
 		context  int
 		output   int
+		vision   bool
 	}{
-		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000},
-		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000},
-		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536},
+		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-opus-4-8", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-sonnet-4-7", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "gemini-3.7-flash", provider: "google", context: 1048576, output: 65536, vision: true},
+		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536, vision: true},
+		{id: "qwen3.7-max", provider: "qwen", context: 1000000, output: 65536},
+		{id: "qwen3.7-plus", provider: "qwen", context: 1000000, output: 65536, vision: true},
+		{id: "glm-5.3", provider: "zhipu", context: 1000000, output: 128000},
+		{id: "glm-5.2", provider: "zhipu", context: 1000000, output: 128000},
+		{id: "MiniMax-M3", provider: "minimax", context: 1000000, output: 524288},
+		{id: "MiniMax-M2.7", provider: "minimax", context: 1000000, output: 204800},
+		{id: "grok-4.6", provider: "xai", context: 500000, output: 0, vision: true},
+		{id: "kimi-k3", provider: "moonshot", context: 1048576, output: 1048576, vision: true},
+		{id: "kimi-k2.7-code", provider: "moonshot", context: 262144, output: 0, vision: true},
+		{id: "kimi-k2.7-code-highspeed", provider: "moonshot", context: 262144, output: 0, vision: true},
+		{id: "kimi-k2.6", provider: "moonshot", context: 262144, output: 0, vision: true},
 	}
 	for _, tc := range cases {
 		info := Get(tc.id)
@@ -91,8 +106,17 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		if info.Provider != tc.provider || info.Capabilities.ContextWindow != tc.context || info.Capabilities.MaxOutput != tc.output {
 			t.Fatalf("%s profile = provider:%q limits:%d/%d", tc.id, info.Provider, info.Capabilities.ContextWindow, info.Capabilities.MaxOutput)
 		}
-		if !info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+		if info.Capabilities.Vision != tc.vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
 			t.Fatalf("%s lost required capability evidence: %+v", tc.id, info.Capabilities)
+		}
+	}
+}
+
+func TestBuiltinsDoNotRestoreRetiredDeepSeekAliases(t *testing.T) {
+	resetRegistryToBuiltins()
+	for _, id := range []string{"deepseek-chat", "deepseek-reasoner"} {
+		if Get(id) != nil {
+			t.Fatalf("retired DeepSeek alias %s must not return from the builtin fallback", id)
 		}
 	}
 }

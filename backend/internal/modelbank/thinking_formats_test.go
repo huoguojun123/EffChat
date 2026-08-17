@@ -42,6 +42,7 @@ func TestResolveThinkingFormatFallsBackWhenManualFormatDoesNotMatch(t *testing.T
 		{name: "gpt 5.6 legacy format falls back to dedicated format", provider: "openai", modelID: "gpt-5.6", configured: "openai_reasoning_effort", reasoning: true, want: ThinkingFormatOpenAIGPT56},
 		{name: "gpt 5.5 does not accept dedicated format", provider: "openai", modelID: "gpt-5.5", configured: "openai_gpt_5_6", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "google adapter accepts gemini manual thinking by display name", provider: "my-gateway", modelID: "flash-latest", configured: "gemini_thinking", reasoning: false, want: ThinkingFormatGeminiThinking},
+		{name: "minimax family overrides stale claude budget on anthropic adapter", provider: "minimax", modelID: "MiniMax-M3", configured: "anthropic_budget", reasoning: true, want: ThinkingFormatMiniMaxThinking},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,6 +51,8 @@ func TestResolveThinkingFormatFallsBackWhenManualFormatDoesNotMatch(t *testing.T
 			if strings.Contains(tc.name, "display name") {
 				displayName = "Gemini-3.5-Flash"
 				adapter = "google"
+			} else if strings.Contains(tc.name, "anthropic adapter") {
+				adapter = "anthropic"
 			}
 			got := ResolveThinkingFormatWithContext(tc.provider, adapter, tc.modelID, displayName, tc.configured, tc.reasoning)
 			if got != tc.want {
@@ -80,8 +83,8 @@ func TestApplyThinkingRuntimeMetadata(t *testing.T) {
 	if m.DefaultThinkingEffort != string(ThinkingEffortHigh) {
 		t.Fatalf("default effort = %q, want high", m.DefaultThinkingEffort)
 	}
-	if got := len(m.ThinkingEffortOptions); got != 2 {
-		t.Fatalf("options len = %d, want 2", got)
+	if got := len(m.ThinkingEffortOptions); got != 3 {
+		t.Fatalf("options len = %d, want 3", got)
 	}
 }
 
@@ -101,9 +104,14 @@ func TestResolveThinkingFormatKnownFamilies(t *testing.T) {
 		{name: "gemini uppercase fuzzy thinking", provider: "gemini", modelID: "Gemini-3.5-Flash", reasoning: false, want: ThinkingFormatGeminiThinking},
 		{name: "claude fuzzy thinking", provider: "claude", modelID: "Claude-Sonnet-4.5", reasoning: false, want: ThinkingFormatAnthropicBudget},
 		{name: "claude adaptive fuzzy thinking", provider: "anthropic", modelID: "claude-5-sonnet", reasoning: false, want: ThinkingFormatAnthropicAdaptive},
+		{name: "claude canonical sonnet 5", provider: "anthropic", modelID: "claude-sonnet-5", reasoning: false, want: ThinkingFormatAnthropicAdaptive},
+		{name: "claude canonical opus 4.8", provider: "anthropic", modelID: "claude-opus-4-8", reasoning: false, want: ThinkingFormatAnthropicAdaptive},
+		{name: "claude 3.5 remains manual budget", provider: "anthropic", modelID: "claude-3-5-haiku-latest", reasoning: false, want: ThinkingFormatAnthropicBudget},
 		{name: "openai reasoning through custom gateway", provider: "my-gateway", modelID: "gpt-5.1", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "grok reasoning", provider: "xai", modelID: "grok-4.5", reasoning: true, want: ThinkingFormatXAIGrok},
+		{name: "grok 4.6 reasoning", provider: "xai", modelID: "grok-4.6", reasoning: true, want: ThinkingFormatXAIGrok},
 		{name: "grok multi agent remains unsupported", provider: "xai", modelID: "grok-4.20-multi-agent", reasoning: true, want: ThinkingFormatNone},
+		{name: "grok explicit non reasoning remains unsupported", provider: "xai", modelID: "grok-4-fast-non-reasoning", reasoning: true, want: ThinkingFormatNone},
 		{name: "glm thinking", provider: "zhipu", modelID: "glm-4.5", reasoning: true, want: ThinkingFormatGLMThinking},
 		{name: "minimax m3 thinking", provider: "minimax", modelID: "MiniMax-M3", reasoning: true, want: ThinkingFormatMiniMaxThinking},
 		{name: "minimax m2 thinking", provider: "minimax", modelID: "MiniMax-M2.7", reasoning: true, want: ThinkingFormatMiniMaxThinking},
@@ -130,8 +138,14 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 	}{
 		{name: "grok cannot disable ordinary reasoning", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "none", want: ThinkingEffortHigh},
 		{name: "grok keeps medium", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "medium", want: ThinkingEffortMedium},
+		{name: "grok 4.5 rejects xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "xhigh", want: ThinkingEffortHigh},
+		{name: "grok 4.6 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.6", requested: "xhigh", want: ThinkingEffortXHigh},
 		{name: "glm accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "none", want: ThinkingEffortNone},
 		{name: "glm normalizes enabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "low", want: ThinkingEffortHigh},
+		{name: "glm 5.2 accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-5.2", requested: "none", want: ThinkingEffortNone},
+		{name: "glm 5.2 accepts low", format: ThinkingFormatGLMThinking, modelID: "glm-5.2", requested: "low", want: ThinkingEffortLow},
+		{name: "glm 5.3 cannot disable", format: ThinkingFormatGLMThinking, modelID: "glm-5.3", requested: "none", want: ThinkingEffortLow},
+		{name: "glm 5.3 accepts max", format: ThinkingFormatGLMThinking, modelID: "glm-5.3", requested: "max", want: ThinkingEffortMax},
 		{name: "minimax m3 accepts disabled", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M3", requested: "none", want: ThinkingEffortNone},
 		{name: "minimax m3 defaults adaptive", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M3", requested: "", want: ThinkingEffortMedium},
 		{name: "minimax m2 has no selectable effort", format: ThinkingFormatMiniMaxThinking, modelID: "MiniMax-M2.7", requested: "high", want: ThinkingEffortAuto},
@@ -152,6 +166,18 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-4.5"); len(got) != 2 || got[0].Value != "none" || got[1].Value != "high" {
 		t.Fatalf("GLM options = %#v", got)
 	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-5.2"); len(got) != 4 || got[0].Value != "none" || got[3].Value != "max" {
+		t.Fatalf("GLM 5.2 options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatGLMThinking, "glm-5.3"); len(got) != 3 || got[0].Value != "low" || got[2].Value != "max" {
+		t.Fatalf("GLM 5.3 options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.6"); len(got) != 4 || got[3].Value != "xhigh" {
+		t.Fatalf("Grok 4.6 options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.5"); len(got) != 3 {
+		t.Fatalf("Grok 4.5 options = %#v", got)
+	}
 }
 
 func TestKnownThinkingModelDetection(t *testing.T) {
@@ -171,6 +197,37 @@ func TestKnownThinkingModelDetection(t *testing.T) {
 	if IsKnownThinkingModel("xai", "grok-4.20-multi-agent", "") {
 		t.Fatal("Grok multi-agent must not receive the ordinary reasoning format")
 	}
+	if IsKnownThinkingModel("xai", "grok-4-fast-non-reasoning", "") {
+		t.Fatal("Grok non-reasoning variants must not receive the reasoning format")
+	}
+}
+
+func TestQwenThinkingLifecycleCapabilities(t *testing.T) {
+	for _, id := range []string{"qwen3.7-plus", "qwen3.6-plus"} {
+		if !QwenThinkingCanDisable(id) || !QwenPreservesThinkingHistory(id) {
+			t.Fatalf("%s should support toggle and preserve_thinking", id)
+		}
+	}
+	for _, id := range []string{"qwq-plus", "qwen3.7-max-preview", "qwen3-next-80b-a3b-thinking"} {
+		if QwenThinkingCanDisable(id) {
+			t.Fatalf("thinking-only model %s must not expose disable", id)
+		}
+	}
+	if QwenPreservesThinkingHistory("qwen3.5-plus") {
+		t.Fatal("Qwen 3.5 must not receive the newer preserve_thinking field")
+	}
+}
+
+func TestGLMThinkingCapabilities(t *testing.T) {
+	if !GLMSupportsReasoningEffort("glm-5.2") || !GLMSupportsReasoningEffort("zai/glm-5.3") {
+		t.Fatal("GLM 5.2/5.3 should expose reasoning effort")
+	}
+	if GLMSupportsReasoningEffort("glm-4.5") {
+		t.Fatal("GLM 4.5 must keep the legacy toggle-only contract")
+	}
+	if !GLMAlwaysUsesThinking("glm-5.3") || GLMAlwaysUsesThinking("glm-5.2") {
+		t.Fatal("only GLM 5.3 should be forced into thinking mode")
+	}
 }
 
 func TestResolveThinkingEffortPerFormat(t *testing.T) {
@@ -183,7 +240,8 @@ func TestResolveThinkingEffortPerFormat(t *testing.T) {
 		{name: "openai high", format: ThinkingFormatOpenAIReasoningEffort, requested: "high", want: ThinkingEffortHigh},
 		{name: "openai default", format: ThinkingFormatOpenAIReasoningEffort, requested: "", want: ThinkingEffortMedium},
 		{name: "deepseek max", format: ThinkingFormatDeepSeekV4, requested: "max", want: ThinkingEffortMax},
-		{name: "deepseek low coerces high", format: ThinkingFormatDeepSeekV4, requested: "low", want: ThinkingEffortHigh},
+		{name: "deepseek low", format: ThinkingFormatDeepSeekV4, requested: "low", want: ThinkingEffortLow},
+		{name: "deepseek medium coerces high", format: ThinkingFormatDeepSeekV4, requested: "medium", want: ThinkingEffortHigh},
 		{name: "budget format high", format: ThinkingFormatDashScopeQwen, requested: "high", want: ThinkingEffortHigh},
 		{name: "adaptive effort low", format: ThinkingFormatAnthropicAdaptive, requested: "low", want: ThinkingEffortLow},
 		{name: "none ignores effort", format: ThinkingFormatNone, requested: "high", want: ThinkingEffortAuto},
@@ -229,6 +287,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 	cases := []struct {
 		name     string
 		format   ThinkingFormat
+		modelID  string
 		contains []string
 	}{
 		{
@@ -239,7 +298,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 		{
 			name:     "deepseek",
 			format:   ThinkingFormatDeepSeekV4,
-			contains: []string{"deepseek-v4", "thinking.type=enabled", "reasoning_effort=max"},
+			contains: []string{"deepseek-v4", "reasoning_effort=low", "thinking.type=enabled", "reasoning_effort=max"},
 		},
 		{
 			name:     "qwen",
@@ -247,9 +306,16 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 			contains: []string{"QwQ", "Qwen3/3.5/3.6/3.7", "enable_thinking", "thinking_budget"},
 		},
 		{
-			name:     "gemini",
+			name:     "gemini 2.5",
 			format:   ThinkingFormatGeminiThinking,
-			contains: []string{"Gemini 2.5/3/3.1/3.5", "ThinkingConfig.thinkingBudget", "thinkingLevel"},
+			modelID:  "gemini-2.5-pro",
+			contains: []string{"Gemini 2.5", "ThinkingConfig.thinkingBudget"},
+		},
+		{
+			name:     "gemini 3.7",
+			format:   ThinkingFormatGeminiThinking,
+			modelID:  "gemini-3.7-flash",
+			contains: []string{"Gemini 3.x", "ThinkingConfig.thinkingLevel"},
 		},
 		{
 			name:     "anthropic manual budget",
@@ -264,7 +330,8 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 		{
 			name:     "grok",
 			format:   ThinkingFormatXAIGrok,
-			contains: []string{"Grok 4.5", "reasoning_effort"},
+			modelID:  "grok-4.6",
+			contains: []string{"Grok 标准推理模型", "reasoning_effort", "Grok 4.6"},
 		},
 		{
 			name:     "glm",
@@ -286,7 +353,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var joined strings.Builder
-			for _, opt := range ThinkingEffortOptions(tc.format) {
+			for _, opt := range ThinkingEffortOptionsForModel(tc.format, tc.modelID) {
 				joined.WriteString(opt.Description)
 				joined.WriteString("\n")
 			}
@@ -297,5 +364,114 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolveGeminiThinkingContract(t *testing.T) {
+	cases := []struct {
+		modelID string
+		want    GeminiThinkingContract
+		omit    bool
+	}{
+		{modelID: "gemini-2.5-pro", want: GeminiThinkingBudget},
+		{modelID: "models/gemini-3-flash-preview", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.5-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.6-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.7-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.8-unverified", want: GeminiThinkingUnknown},
+		{modelID: "custom-google-model", want: GeminiThinkingUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID, func(t *testing.T) {
+			if got := ResolveGeminiThinkingContract(tc.modelID); got != tc.want {
+				t.Fatalf("contract = %v, want %v", got, tc.want)
+			}
+			if got := GeminiOmitsSamplingParameters(tc.modelID); got != tc.omit {
+				t.Fatalf("omit sampling = %t, want %t", got, tc.omit)
+			}
+		})
+	}
+}
+
+func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
+	cases := []struct {
+		modelID string
+		want    []ThinkingEffort
+	}{
+		{modelID: "claude-sonnet-4-6", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortMax}},
+		{modelID: "claude-opus-4-8", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+		{modelID: "claude-sonnet-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+		{modelID: "claude-fable-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID, func(t *testing.T) {
+			options := ThinkingEffortOptionsForModel(ThinkingFormatAnthropicAdaptive, tc.modelID)
+			if len(options) != len(tc.want) {
+				t.Fatalf("options = %#v, want %v entries", options, len(tc.want))
+			}
+			for i, want := range tc.want {
+				if options[i].Value != string(want) {
+					t.Fatalf("option[%d] = %q, want %q", i, options[i].Value, want)
+				}
+				if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, tc.modelID, string(want)); got != want {
+					t.Fatalf("resolved %q = %q, want %q", want, got, want)
+				}
+			}
+		})
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, "claude-sonnet-4-6", "xhigh"); got != ThinkingEffortMedium {
+		t.Fatalf("Claude 4.6 xhigh = %q, want medium fallback", got)
+	}
+}
+
+func TestKimiThinkingContracts(t *testing.T) {
+	cases := []struct {
+		modelID   string
+		reasoning bool
+		contract  KimiThinkingContract
+		format    ThinkingFormat
+	}{
+		{modelID: "kimi-k3", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.7-code", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.7-code-highspeed", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.6", reasoning: true, contract: KimiThinkingK26, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.5", reasoning: true, contract: KimiThinkingK25, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k2.6", contract: KimiThinkingK26, format: ThinkingFormatNone},
+		{modelID: "moonshot-v1-auto", reasoning: true, contract: KimiThinkingUnknown, format: ThinkingFormatNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID+"/"+string(tc.format), func(t *testing.T) {
+			if got := ResolveKimiThinkingContract(tc.modelID); got != tc.contract {
+				t.Fatalf("contract = %v, want %v", got, tc.contract)
+			}
+			if got := ResolveThinkingFormat("moonshot", tc.modelID, "auto", tc.reasoning); got != tc.format {
+				t.Fatalf("format = %q, want %q", got, tc.format)
+			}
+		})
+	}
+}
+
+func TestKimiThinkingEffortOptions(t *testing.T) {
+	k3 := ThinkingEffortOptionsForModel(ThinkingFormatKimiThinking, "kimi-k3")
+	if len(k3) != 3 || k3[0].Value != "low" || k3[2].Value != "max" {
+		t.Fatalf("K3 options = %#v", k3)
+	}
+	for requested, want := range map[string]ThinkingEffort{
+		"": ThinkingEffortMax, "none": ThinkingEffortLow, "low": ThinkingEffortLow,
+		"high": ThinkingEffortHigh, "max": ThinkingEffortMax,
+	} {
+		if got := ResolveThinkingEffortForModel(ThinkingFormatKimiThinking, "kimi-k3", requested); got != want {
+			t.Fatalf("K3 effort %q = %q, want %q", requested, got, want)
+		}
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatKimiThinking, "kimi-k2.7-code"); len(got) != 0 {
+		t.Fatalf("K2.7 options = %#v, want none", got)
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatKimiThinking, "kimi-k2.7-code", "high"); got != ThinkingEffortAuto {
+		t.Fatalf("K2.7 effort = %q, want auto", got)
+	}
+	k26 := ThinkingEffortOptionsForModel(ThinkingFormatKimiThinking, "kimi-k2.6")
+	if len(k26) != 2 || k26[0].Value != "none" || k26[1].Value != "medium" {
+		t.Fatalf("K2.6 options = %#v", k26)
 	}
 }

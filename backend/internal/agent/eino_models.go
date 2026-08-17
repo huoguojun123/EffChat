@@ -44,6 +44,20 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		if err := model.ValidateOpenAIRequestProfile(openAIProfile); err != nil {
 			return nil, fmt.Errorf("invalid OpenAI-compatible request profile: %w", err)
 		}
+		thinkingFormat := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+		if thinkingFormat == modelbank.ThinkingFormatXAIGrok {
+			// xAI rejects both penalty fields on reasoning models. Preserve the
+			// administrator's stored profile, but omit incompatible wire fields for
+			// this request instead of turning a reusable gateway profile into a 400.
+			openAIProfile.PresencePenalty = nil
+			openAIProfile.FrequencyPenalty = nil
+		}
+		if modelbank.KimiOmitsSamplingParameters(req.ModelID) {
+			// Current Kimi thinking models require fixed sampling values. Omit the
+			// stored reusable profile on this wire request instead of overwriting it.
+			temperature = nil
+			openAIProfile = model.OpenAIRequestProfile{}
+		}
 		cfg := &openai.ChatModelConfig{
 			Model:            req.ModelID,
 			APIKey:           channel.APIKey,
@@ -65,6 +79,11 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		}
 		if openAIProfile.FrequencyPenalty != nil && *openAIProfile.FrequencyPenalty == 0 {
 			setOpenAIExtraField(cfg, "frequency_penalty", 0)
+		}
+		if searchDecision.UseModelNativeSearch && searchDecision.SearchImpl == modelbank.SearchImplParams {
+			// The OpenAI-compatible params contract is currently used by Qwen;
+			// Google native maps the same product decision to google_search below.
+			setOpenAIExtraField(cfg, "enable_search", true)
 		}
 		applyOpenAITokenLimit(req, cfg)
 		if channel.BaseURL != "" {
@@ -126,10 +145,12 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			return nil, fmt.Errorf("failed to create genai client: %w", err)
 		}
 		cfg := &gemini.Config{
-			Client:      client,
-			Model:       req.ModelID,
-			MaxTokens:   ptrIntPositive(req.MaxTokens),
-			Temperature: ptrFloat32(temperature),
+			Client:    client,
+			Model:     req.ModelID,
+			MaxTokens: ptrIntPositive(req.MaxTokens),
+		}
+		if !modelbank.GeminiOmitsSamplingParameters(req.ModelID) {
+			cfg.Temperature = ptrFloat32(temperature)
 		}
 		// params 型原生搜索：按统一决策挂载 google_search（grounding）。
 		if searchDecision.UseModelNativeSearch && searchDecision.SearchImpl == modelbank.SearchImplParams {
@@ -225,7 +246,12 @@ func applyOpenAITokenLimit(req *ChatRequest, cfg *openai.ChatModelConfig) {
 		return
 	}
 	limit := ptrIntPositive(req.MaxTokens)
-	switch modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning) {
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if format == modelbank.ThinkingFormatKimiThinking && modelbank.ResolveKimiThinkingContract(req.ModelID) == modelbank.KimiThinkingK3 {
+		cfg.MaxCompletionTokens = limit
+		return
+	}
+	switch format {
 	case modelbank.ThinkingFormatOpenAIReasoningEffort, modelbank.ThinkingFormatOpenAIGPT56:
 		cfg.MaxCompletionTokens = limit
 		return

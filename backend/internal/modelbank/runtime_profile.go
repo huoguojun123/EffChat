@@ -100,6 +100,8 @@ func inferRuntimeFamilyWithContext(provider, adapter, modelID, displayName strin
 		return "xai"
 	case isGLMThinkingModel(id):
 		return "glm"
+	case isKimiThinkingModel(id):
+		return "kimi"
 	case isMiniMaxThinkingModel(id):
 		return "minimax"
 	case isVolcengineThinkingModel(id):

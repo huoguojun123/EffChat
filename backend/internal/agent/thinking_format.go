@@ -30,6 +30,30 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 		if format == modelbank.ThinkingFormatDeepSeekV4 || format == modelbank.ThinkingFormatDeepSeekV4Disabled {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+		} else if format == modelbank.ThinkingFormatXAIGrok {
+			// Standard Grok reasoning cannot be disabled. Utilities request the
+			// lowest legal effort instead of omitting the field and inheriting high.
+			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+		} else if format == modelbank.ThinkingFormatDashScopeQwen {
+			if modelbank.QwenThinkingCanDisable(req.ModelID) {
+				setOpenAIExtraField(cfg, "enable_thinking", false)
+			} else {
+				setOpenAIExtraField(cfg, "thinking_budget", 1024)
+			}
+		} else if format == modelbank.ThinkingFormatGLMThinking {
+			if modelbank.GLMAlwaysUsesThinking(req.ModelID) {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "enabled"})
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			} else {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+			}
+		} else if format == modelbank.ThinkingFormatKimiThinking {
+			switch modelbank.ResolveKimiThinkingContract(req.ModelID) {
+			case modelbank.KimiThinkingK3:
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			case modelbank.KimiThinkingK26, modelbank.KimiThinkingK25:
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+			}
 		}
 		return
 	}
@@ -46,8 +70,13 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 	case modelbank.ThinkingFormatDeepSeekV4Disabled:
 		setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
 	case modelbank.ThinkingFormatDashScopeQwen:
-		setOpenAIExtraField(cfg, "enable_thinking", true)
+		if modelbank.QwenThinkingCanDisable(req.ModelID) {
+			setOpenAIExtraField(cfg, "enable_thinking", true)
+		}
 		setOpenAIExtraField(cfg, "thinking_budget", budgetForEffort(effort, 1024, 4096, 8192))
+		if modelbank.QwenPreservesThinkingHistory(req.ModelID) {
+			setOpenAIExtraField(cfg, "preserve_thinking", true)
+		}
 	case modelbank.ThinkingFormatXAIGrok:
 		// xAI's standard Grok reasoning models use the Chat Completions field
 		// directly. Do not use the OpenAI SDK enum here: it deliberately only
@@ -55,6 +84,9 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
 	case modelbank.ThinkingFormatGLMThinking:
 		setOpenAIExtraField(cfg, "thinking", map[string]any{"type": thinkingTypeForToggle(effort, "enabled")})
+		if effort != modelbank.ThinkingEffortNone && modelbank.GLMSupportsReasoningEffort(req.ModelID) {
+			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		}
 	case modelbank.ThinkingFormatMiniMaxThinking:
 		// MiniMax exposes reasoning in a separate field only with this switch.
 		// The OpenAI-compatible Eino adapter already maps reasoning_content into
@@ -69,6 +101,17 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		} else {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "enabled"})
 			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		}
+	case modelbank.ThinkingFormatKimiThinking:
+		switch modelbank.ResolveKimiThinkingContract(req.ModelID) {
+		case modelbank.KimiThinkingK3:
+			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		case modelbank.KimiThinkingK26, modelbank.KimiThinkingK25:
+			thinking := map[string]any{"type": thinkingTypeForToggle(effort, "enabled")}
+			if effort != modelbank.ThinkingEffortNone && modelbank.ResolveKimiThinkingContract(req.ModelID) == modelbank.KimiThinkingK26 {
+				thinking["keep"] = "all"
+			}
+			setOpenAIExtraField(cfg, "thinking", thinking)
 		}
 	}
 	logThinkingFormat(req, format, effort)
@@ -91,7 +134,8 @@ func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
 		modelbank.ThinkingEffortLow,
 		modelbank.ThinkingEffortMedium,
 		modelbank.ThinkingEffortHigh,
-		modelbank.ThinkingEffortXHigh:
+		modelbank.ThinkingEffortXHigh,
+		modelbank.ThinkingEffortMax:
 		return &responses.ReasoningParam{
 			Effort:  shared.ReasoningEffort(effort),
 			Summary: shared.ReasoningSummaryAuto,
@@ -102,10 +146,25 @@ func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
 }
 
 func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
-	if req != nil && req.SuppressThinking {
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if req.SuppressThinking {
+		if format == modelbank.ThinkingFormatAnthropicAdaptive {
+			// Adaptive models, including always-on Fable 5, need an explicit low
+			// effort to keep utility calls bounded. Omit display so summaries do
+			// not enter title, compaction, memory, or extraction outputs.
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
+			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
+		} else if format == modelbank.ThinkingFormatMiniMaxThinking && modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "disabled"}
+		}
 		return
 	}
-	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
 	case modelbank.ThinkingFormatAnthropicBudget:
@@ -121,21 +180,50 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 		if cfg.AdditionalRequestFields == nil {
 			cfg.AdditionalRequestFields = map[string]any{}
 		}
-		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
+		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 		cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
+	case modelbank.ThinkingFormatMiniMaxThinking:
+		if modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": thinkingTypeForToggle(effort, "adaptive")}
+		}
 	}
 	logThinkingFormat(req, format, effort)
 }
 
 func applyGeminiThinking(req *ChatRequest, cfg *gemini.Config) {
-	if req != nil && req.SuppressThinking {
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if format != modelbank.ThinkingFormatGeminiThinking {
+		logThinkingFormat(req, format, modelbank.ThinkingEffortAuto)
 		return
 	}
-	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	contract := modelbank.ResolveGeminiThinkingContract(req.ModelID)
+	if req.SuppressThinking {
+		// Gemini 3.x cannot disable thinking. Sending the lowest supported level
+		// keeps utility calls bounded; omitting the config would restore the
+		// provider default (currently medium) and defeat suppression.
+		if contract == modelbank.GeminiThinkingLevel {
+			cfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelLow}
+		}
+		logThinkingFormat(req, format, modelbank.ThinkingEffortLow)
+		return
+	}
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
-	if format == modelbank.ThinkingFormatGeminiThinking {
+	switch contract {
+	case modelbank.GeminiThinkingBudget:
 		budget := int32(budgetForEffort(effort, 1024, 4096, 8192))
 		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+	case modelbank.GeminiThinkingLevel:
+		level := genai.ThinkingLevelMedium
+		switch effort {
+		case modelbank.ThinkingEffortLow:
+			level = genai.ThinkingLevelLow
+		case modelbank.ThinkingEffortHigh:
+			level = genai.ThinkingLevelHigh
+		}
+		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingLevel: level}
 	}
 	logThinkingFormat(req, format, effort)
 }
@@ -159,6 +247,9 @@ func openAIReasoningEffort(effort modelbank.ThinkingEffort) openai.ReasoningEffo
 }
 
 func deepSeekReasoningEffort(effort modelbank.ThinkingEffort) string {
+	if effort == modelbank.ThinkingEffortLow {
+		return "low"
+	}
 	if effort == modelbank.ThinkingEffortMax {
 		return "max"
 	}

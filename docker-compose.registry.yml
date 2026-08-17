@@ -7,7 +7,7 @@ x-default-logging: &default-logging
     max-file: ${DOCKER_LOG_MAX_FILE:-5}
 
 x-effchat-app: &effchat-app
-  image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.0-beta.3}
+  image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.1-beta.1}
 
 x-database-env: &database-env
   DATABASE_URL: ${DATABASE_URL:-}

@@ -26,7 +26,7 @@ func TestRuntimeProfileSeparatesProviderAndFamily(t *testing.T) {
 	if profile.ThinkingFormat != string(ThinkingFormatDeepSeekV4) {
 		t.Fatalf("thinking_format = %q, want %q", profile.ThinkingFormat, ThinkingFormatDeepSeekV4)
 	}
-	if len(profile.ThinkingEffortOptions) == 0 || profile.DefaultThinkingEffort == "" {
+	if len(profile.ThinkingEffortOptions) != 3 || profile.DefaultThinkingEffort != "high" {
 		t.Fatalf("thinking effort metadata missing: %+v", profile)
 	}
 }
@@ -79,6 +79,18 @@ func TestRuntimeProfileUsesChannelAdapterAndDisplayName(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileKeepsMiniMaxFamilyOnAnthropicAdapter(t *testing.T) {
+	profile := RuntimeProfileForModelWithAdapter(&model.Model{
+		ID: "MiniMax-M3", Provider: "minimax", Reasoning: true, ThinkingFormat: "auto",
+	}, "anthropic")
+	if profile.WireProtocol != WireProtocolAnthropicNative || profile.Family != "minimax" {
+		t.Fatalf("profile = %+v, want anthropic-native MiniMax", profile)
+	}
+	if profile.ThinkingFormat != string(ThinkingFormatMiniMaxThinking) || len(profile.ThinkingEffortOptions) != 2 {
+		t.Fatalf("MiniMax thinking profile = %+v", profile)
+	}
+}
+
 func TestRuntimeProfileExposesOpenAIResponsesWireProtocol(t *testing.T) {
 	profile := RuntimeProfileForModelWithAdapter(&model.Model{
 		ID:             "gpt-5.1",
@@ -123,11 +135,18 @@ func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 		optionCount   int
 		defaultEffort string
 	}{
-		{name: "grok", provider: "xai", modelID: "grok-4.5", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 3, defaultEffort: "high"},
+		{name: "grok 4.5", provider: "xai", modelID: "grok-4.5", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 3, defaultEffort: "high"},
+		{name: "grok 4.6", provider: "xai", modelID: "grok-4.6", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 4, defaultEffort: "high"},
+		{name: "qwen 3.7", provider: "qwen", modelID: "qwen3.7-plus", family: "qwen", format: ThinkingFormatDashScopeQwen, optionCount: 3, defaultEffort: "medium"},
 		{name: "glm", provider: "zhipu", modelID: "glm-4.5", family: "glm", format: ThinkingFormatGLMThinking, optionCount: 2, defaultEffort: "high"},
+		{name: "glm 5.2", provider: "zhipu", modelID: "glm-5.2", family: "glm", format: ThinkingFormatGLMThinking, optionCount: 4, defaultEffort: "high"},
+		{name: "glm 5.3", provider: "zhipu", modelID: "glm-5.3", family: "glm", format: ThinkingFormatGLMThinking, optionCount: 3, defaultEffort: "high"},
 		{name: "minimax m3", provider: "minimax", modelID: "MiniMax-M3", family: "minimax", format: ThinkingFormatMiniMaxThinking, optionCount: 2, defaultEffort: "medium"},
 		{name: "minimax m2", provider: "minimax", modelID: "MiniMax-M2.7", family: "minimax", format: ThinkingFormatMiniMaxThinking, optionCount: 0, defaultEffort: ""},
 		{name: "doubao", provider: "volcengine", modelID: "doubao-seed-2-0-pro", family: "volcengine", format: ThinkingFormatVolcengineThinking, optionCount: 4, defaultEffort: "medium"},
+		{name: "kimi k3", provider: "moonshot", modelID: "kimi-k3", family: "kimi", format: ThinkingFormatKimiThinking, optionCount: 3, defaultEffort: "max"},
+		{name: "kimi k2.7", provider: "moonshot", modelID: "kimi-k2.7-code", family: "kimi", format: ThinkingFormatKimiThinking, optionCount: 0, defaultEffort: ""},
+		{name: "kimi k2.6", provider: "moonshot", modelID: "kimi-k2.6", family: "kimi", format: ThinkingFormatKimiThinking, optionCount: 2, defaultEffort: "medium"},
 	}
 
 	for _, tc := range cases {

@@ -45,7 +45,7 @@ func newScriptedAnthropicProvider(t *testing.T, steps ...func(http.ResponseWrite
 	return provider
 }
 
-func assertAnthropicThinkingRequest(t *testing.T, r *http.Request) {
+func assertAnthropicThinkingRequest(t *testing.T, r *http.Request, wantFormat modelbank.ThinkingFormat) {
 	t.Helper()
 	if got := r.Header.Get("x-api-key"); got != "test-key" {
 		t.Errorf("Anthropic x-api-key = %q, want test-key", got)
@@ -61,12 +61,34 @@ func assertAnthropicThinkingRequest(t *testing.T, r *http.Request) {
 	if payload["model"] != "claude-sonnet-4-6" || payload["stream"] != true {
 		t.Errorf("Anthropic model/stream request = %#v", payload)
 	}
-	thinking, _ := payload["thinking"].(map[string]interface{})
-	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(4096) {
-		t.Errorf("Anthropic thinking request = %#v", thinking)
-	}
-	if payload["max_tokens"] != float64(20000) {
-		t.Errorf("Anthropic max_tokens = %#v, want 20000 to contain thinking plus answer", payload["max_tokens"])
+	switch wantFormat {
+	case modelbank.ThinkingFormatAnthropicAdaptive:
+		for _, field := range []string{"temperature", "top_p", "top_k"} {
+			if _, exists := payload[field]; exists {
+				t.Errorf("Anthropic adaptive request must omit %s: %#v", field, payload)
+			}
+		}
+		thinking, _ := payload["thinking"].(map[string]interface{})
+		if thinking["type"] != "adaptive" || thinking["display"] != "summarized" {
+			t.Errorf("Anthropic adaptive thinking request = %#v", thinking)
+		}
+		outputConfig, _ := payload["output_config"].(map[string]interface{})
+		if outputConfig["effort"] != "low" {
+			t.Errorf("Anthropic adaptive output_config = %#v", outputConfig)
+		}
+		if payload["max_tokens"] != float64(4096) {
+			t.Errorf("Anthropic adaptive max_tokens = %#v, want 4096", payload["max_tokens"])
+		}
+	case modelbank.ThinkingFormatAnthropicBudget:
+		thinking, _ := payload["thinking"].(map[string]interface{})
+		if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(4096) {
+			t.Errorf("Anthropic budget thinking request = %#v", thinking)
+		}
+		if payload["max_tokens"] != float64(20000) {
+			t.Errorf("Anthropic budget max_tokens = %#v, want 20000", payload["max_tokens"])
+		}
+	default:
+		t.Fatalf("unsupported Anthropic thinking format %q", wantFormat)
 	}
 }
 
@@ -153,7 +175,7 @@ func newAnthropicADKHarness(t *testing.T, provider *scriptedAnthropicProvider) (
 	harness := newADKRunRegressionHarnessForProvider(t, env, adkProviderHarnessConfig{
 		Adapter: service.AdapterAnthropic, BaseURL: provider.server.URL,
 		ModelID: "claude-sonnet-4-6", DisplayName: "Anthropic native ADK regression",
-		Reasoning: true, ThinkingFormat: string(modelbank.ThinkingFormatAnthropicBudget),
+		Reasoning: true, ThinkingFormat: string(modelbank.ThinkingFormatAnthropicAdaptive),
 		ThinkingEffort: string(modelbank.ThinkingEffortLow),
 	})
 	return harness, env
@@ -161,7 +183,7 @@ func newAnthropicADKHarness(t *testing.T, provider *scriptedAnthropicProvider) (
 
 func TestAnthropicADKRunStreamsThinkingAndCompletesOnce(t *testing.T) {
 	provider := newScriptedAnthropicProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		assertAnthropicThinkingRequest(t, r)
+		assertAnthropicThinkingRequest(t, r, modelbank.ThinkingFormatAnthropicAdaptive)
 		writeAnthropicStreamingCompletion(w, "native thought", "native answer")
 	})
 	harness, env := newAnthropicADKHarness(t, provider)
@@ -185,13 +207,13 @@ func TestAnthropicADKRunStreamsThinkingAndCompletesOnce(t *testing.T) {
 func TestAnthropicADKRunRetriesOnlyZeroOutputTransientFailure(t *testing.T) {
 	provider := newScriptedAnthropicProvider(t,
 		func(w http.ResponseWriter, r *http.Request) {
-			assertAnthropicThinkingRequest(t, r)
+			assertAnthropicThinkingRequest(t, r, modelbank.ThinkingFormatAnthropicAdaptive)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = fmt.Fprint(w, `{"type":"error","error":{"type":"api_error","message":"temporarily unavailable"}}`)
 		},
 		func(w http.ResponseWriter, r *http.Request) {
-			assertAnthropicThinkingRequest(t, r)
+			assertAnthropicThinkingRequest(t, r, modelbank.ThinkingFormatAnthropicAdaptive)
 			writeAnthropicStreamingCompletion(w, "retry thought", "retry answer")
 		},
 	)
@@ -219,7 +241,7 @@ func TestAnthropicADKRunRetriesOnlyZeroOutputTransientFailure(t *testing.T) {
 
 func TestAnthropicADKRunPartialOutputTransportFailureDoesNotRetry(t *testing.T) {
 	provider := newScriptedAnthropicProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		assertAnthropicThinkingRequest(t, r)
+		assertAnthropicThinkingRequest(t, r, modelbank.ThinkingFormatAnthropicAdaptive)
 		writeAnthropicPartialTransportFailure(w, r)
 	})
 	harness, env := newAnthropicADKHarness(t, provider)
@@ -246,7 +268,7 @@ func TestAnthropicADKRunPartialOutputTransportFailureDoesNotRetry(t *testing.T) 
 
 func TestAnthropicADKRunThinkingDisarmsOnlyFirstOutputTimeout(t *testing.T) {
 	provider := newScriptedAnthropicProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		assertAnthropicThinkingRequest(t, r)
+		assertAnthropicThinkingRequest(t, r, modelbank.ThinkingFormatAnthropicBudget)
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeAnthropicStreamStart(w)
 		time.Sleep(20 * time.Millisecond)
@@ -274,7 +296,7 @@ func TestAnthropicADKRunThinkingDisarmsOnlyFirstOutputTimeout(t *testing.T) {
 
 func TestAnthropicADKRunEmptyMetadataDoesNotDisarmFirstOutputTimeout(t *testing.T) {
 	provider := newScriptedAnthropicProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		assertAnthropicThinkingRequest(t, r)
+		assertAnthropicThinkingRequest(t, r, modelbank.ThinkingFormatAnthropicBudget)
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeAnthropicStreamStart(w)
 		<-r.Context().Done()

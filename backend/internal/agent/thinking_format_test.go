@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"google.golang.org/genai"
 )
 
 func TestApplyOpenAICompatibleThinkingDeepSeekViaOpenAI(t *testing.T) {
@@ -40,6 +41,20 @@ func TestApplyOpenAICompatibleThinkingDeepSeekMax(t *testing.T) {
 	}
 }
 
+func TestApplyOpenAICompatibleThinkingDeepSeekLow(t *testing.T) {
+	cfg := &openai.ChatModelConfig{Model: "deepseek-v4-flash"}
+	applyOpenAICompatibleThinking(&ChatRequest{
+		Provider:       "openai",
+		ModelID:        "deepseek-v4-flash",
+		Reasoning:      true,
+		ThinkingEffort: string(modelbank.ThinkingEffortLow),
+	}, cfg)
+
+	if got := cfg.ExtraFields["reasoning_effort"]; got != "low" {
+		t.Fatalf("reasoning_effort = %#v, want low", got)
+	}
+}
+
 func TestApplyOpenAICompatibleThinkingOpenAIHigh(t *testing.T) {
 	cfg := &openai.ChatModelConfig{Model: "gpt-5.1"}
 	applyOpenAICompatibleThinking(&ChatRequest{
@@ -69,6 +84,65 @@ func TestApplyOpenAICompatibleThinkingSupportsGPT56ExtendedEfforts(t *testing.T)
 	}
 }
 
+func TestApplyOpenAICompatibleThinkingKimiFamilies(t *testing.T) {
+	t.Run("k3 max and utility low", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "kimi-k3"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true}, cfg)
+		if got := cfg.ExtraFields["reasoning_effort"]; got != "max" {
+			t.Fatalf("K3 reasoning_effort = %#v, want max", got)
+		}
+		utility := &openai.ChatModelConfig{Model: cfg.Model}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, SuppressThinking: true}, utility)
+		if got := utility.ExtraFields["reasoning_effort"]; got != "low" {
+			t.Fatalf("K3 utility effort = %#v, want low", got)
+		}
+	})
+
+	t.Run("k2.7 sends no control fields", func(t *testing.T) {
+		for _, suppressed := range []bool{false, true} {
+			cfg := &openai.ChatModelConfig{Model: "kimi-k2.7-code"}
+			applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, SuppressThinking: suppressed}, cfg)
+			if len(cfg.ExtraFields) != 0 {
+				t.Fatalf("K2.7 fields with suppressed=%t: %#v", suppressed, cfg.ExtraFields)
+			}
+		}
+	})
+
+	t.Run("k2.6 keeps or disables thinking", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "kimi-k2.6"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true}, cfg)
+		thinking, _ := cfg.ExtraFields["thinking"].(map[string]any)
+		if thinking["type"] != "enabled" || thinking["keep"] != "all" {
+			t.Fatalf("K2.6 thinking = %#v", thinking)
+		}
+		disabled := &openai.ChatModelConfig{Model: cfg.Model}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, ThinkingEffort: "none"}, disabled)
+		thinking, _ = disabled.ExtraFields["thinking"].(map[string]any)
+		if thinking["type"] != "disabled" || thinking["keep"] != nil {
+			t.Fatalf("K2.6 disabled thinking = %#v", thinking)
+		}
+		utility := &openai.ChatModelConfig{Model: cfg.Model}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "moonshot", ModelID: cfg.Model, Reasoning: true, SuppressThinking: true}, utility)
+		thinking, _ = utility.ExtraFields["thinking"].(map[string]any)
+		if thinking["type"] != "disabled" {
+			t.Fatalf("K2.6 utility thinking = %#v", thinking)
+		}
+	})
+}
+
+func TestOpenAIResponsesReasoningSupportsGPT56Max(t *testing.T) {
+	reasoning := openAIResponsesReasoning(&ChatRequest{
+		Provider:       "openai",
+		ModelID:        "gpt-5.6",
+		Reasoning:      true,
+		ThinkingFormat: string(modelbank.ThinkingFormatOpenAIGPT56),
+		ThinkingEffort: string(modelbank.ThinkingEffortMax),
+	})
+	if reasoning == nil || reasoning.Effort != "max" {
+		t.Fatalf("Responses reasoning = %#v, want max", reasoning)
+	}
+}
+
 func TestApplyOpenAITokenLimitUsesCompletionTokensForReasoning(t *testing.T) {
 	reasoning := &openai.ChatModelConfig{}
 	applyOpenAITokenLimit(&ChatRequest{Provider: "openai", ModelID: "gpt-5.6", Reasoning: true, ThinkingFormat: "auto", MaxTokens: 4096}, reasoning)
@@ -79,6 +153,11 @@ func TestApplyOpenAITokenLimitUsesCompletionTokensForReasoning(t *testing.T) {
 	applyOpenAITokenLimit(&ChatRequest{Provider: "openai", ModelID: "gpt-4o", MaxTokens: 2048}, regular)
 	if regular.MaxTokens == nil || *regular.MaxTokens != 2048 || regular.MaxCompletionTokens != nil {
 		t.Fatalf("regular token fields = max=%v completion=%v", regular.MaxTokens, regular.MaxCompletionTokens)
+	}
+	k3 := &openai.ChatModelConfig{}
+	applyOpenAITokenLimit(&ChatRequest{Provider: "moonshot", ModelID: "kimi-k3", MaxTokens: 8192}, k3)
+	if k3.MaxCompletionTokens == nil || *k3.MaxCompletionTokens != 8192 || k3.MaxTokens != nil {
+		t.Fatalf("K3 token fields = max=%v completion=%v", k3.MaxTokens, k3.MaxCompletionTokens)
 	}
 }
 
@@ -96,27 +175,61 @@ func TestApplyOpenAICompatibleThinkingManualNone(t *testing.T) {
 }
 
 func TestApplyOpenAICompatibleThinkingQwen(t *testing.T) {
-	cfg := &openai.ChatModelConfig{Model: "qwen3-max"}
-	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: "qwen3-max", Reasoning: true, ThinkingEffort: "high"}, cfg)
+	cfg := &openai.ChatModelConfig{Model: "qwen3.7-plus"}
+	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: "qwen3.7-plus", Reasoning: true, ThinkingEffort: "high"}, cfg)
 	if got := cfg.ExtraFields["enable_thinking"]; got != true {
 		t.Fatalf("enable_thinking = %#v, want true", got)
 	}
 	if got := cfg.ExtraFields["thinking_budget"]; got != 8192 {
 		t.Fatalf("thinking_budget = %#v, want 8192", got)
 	}
+	if got := cfg.ExtraFields["preserve_thinking"]; got != true {
+		t.Fatalf("preserve_thinking = %#v, want true", got)
+	}
+}
+
+func TestApplyOpenAICompatibleThinkingQwenUtilityLifecycle(t *testing.T) {
+	t.Run("hybrid disables thinking", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "qwen3.7-plus"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "qwen", ModelID: "qwen3.7-plus", Reasoning: true, SuppressThinking: true}, cfg)
+		if got := cfg.ExtraFields["enable_thinking"]; got != false {
+			t.Fatalf("enable_thinking = %#v, want false", got)
+		}
+	})
+
+	t.Run("thinking only uses minimum budget", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "qwen3.7-max-preview"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "qwen", ModelID: "qwen3.7-max-preview", Reasoning: true, SuppressThinking: true}, cfg)
+		if _, ok := cfg.ExtraFields["enable_thinking"]; ok {
+			t.Fatalf("thinking-only model must not receive enable_thinking: %#v", cfg.ExtraFields)
+		}
+		if got := cfg.ExtraFields["thinking_budget"]; got != 1024 {
+			t.Fatalf("thinking_budget = %#v, want 1024", got)
+		}
+	})
 }
 
 func TestApplyOpenAICompatibleThinkingVendorFormats(t *testing.T) {
 	t.Run("grok", func(t *testing.T) {
-		cfg := &openai.ChatModelConfig{Model: "grok-4.5"}
+		cfg := &openai.ChatModelConfig{Model: "grok-4.6"}
 		applyOpenAICompatibleThinking(&ChatRequest{
 			Provider:       "xai",
-			ModelID:        "grok-4.5",
+			ModelID:        "grok-4.6",
 			Reasoning:      true,
-			ThinkingEffort: "medium",
+			ThinkingEffort: "xhigh",
 		}, cfg)
-		if got := cfg.ExtraFields["reasoning_effort"]; got != "medium" {
-			t.Fatalf("reasoning_effort = %#v, want medium", got)
+		if got := cfg.ExtraFields["reasoning_effort"]; got != "xhigh" {
+			t.Fatalf("reasoning_effort = %#v, want xhigh", got)
+		}
+	})
+
+	t.Run("grok utility uses minimum effort", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "grok-4.6"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "xai", ModelID: "grok-4.6", Reasoning: true, SuppressThinking: true,
+		}, cfg)
+		if got := cfg.ExtraFields["reasoning_effort"]; got != "low" {
+			t.Fatalf("reasoning_effort = %#v, want low", got)
 		}
 	})
 
@@ -131,6 +244,31 @@ func TestApplyOpenAICompatibleThinkingVendorFormats(t *testing.T) {
 		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
 		if !ok || thinking["type"] != "disabled" {
 			t.Fatalf("thinking = %#v, want disabled", cfg.ExtraFields["thinking"])
+		}
+	})
+
+	t.Run("glm 5.3 always thinking", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "glm-5.3"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "zhipu", ModelID: "glm-5.3", Reasoning: true, ThinkingEffort: "none",
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "enabled" || cfg.ExtraFields["reasoning_effort"] != "low" {
+			t.Fatalf("GLM 5.3 fields = %#v, want enabled + low", cfg.ExtraFields)
+		}
+	})
+
+	t.Run("glm 5.2 can disable", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "glm-5.2"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "zhipu", ModelID: "glm-5.2", Reasoning: true, ThinkingEffort: "none",
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Fatalf("GLM 5.2 fields = %#v, want disabled", cfg.ExtraFields)
+		}
+		if _, ok := cfg.ExtraFields["reasoning_effort"]; ok {
+			t.Fatalf("disabled GLM 5.2 leaked effort: %#v", cfg.ExtraFields)
 		}
 	})
 
@@ -201,10 +339,10 @@ func TestApplyClaudeThinkingExplicitBudgetDefaultMedium(t *testing.T) {
 }
 
 func TestApplyClaudeThinkingAdaptiveHigh(t *testing.T) {
-	cfg := &claude.Config{Model: "claude-adaptive-compatible", MaxTokens: 0}
+	cfg := &claude.Config{Model: "claude-sonnet-5", MaxTokens: 0}
 	applyClaudeThinking(&ChatRequest{
 		Provider:       "anthropic",
-		ModelID:        "claude-adaptive-compatible",
+		ModelID:        "claude-sonnet-5",
 		Reasoning:      true,
 		ThinkingFormat: string(modelbank.ThinkingFormatAnthropicAdaptive),
 		ThinkingEffort: string(modelbank.ThinkingEffortHigh),
@@ -213,17 +351,76 @@ func TestApplyClaudeThinkingAdaptiveHigh(t *testing.T) {
 	if !ok || outputConfig["effort"] != "high" {
 		t.Fatalf("output_config = %#v, want effort high", cfg.AdditionalRequestFields["output_config"])
 	}
+	thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "adaptive" || thinking["display"] != "summarized" {
+		t.Fatalf("thinking = %#v, want adaptive summarized", cfg.AdditionalRequestFields["thinking"])
+	}
 }
 
-func TestApplyGeminiThinkingAuto(t *testing.T) {
-	cfg := &gemini.Config{Model: "gemini-2.5-pro"}
-	applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: "gemini-2.5-pro", Reasoning: true}, cfg)
-	if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts {
-		t.Fatalf("thinking config = %#v, want include thoughts", cfg.ThinkingConfig)
-	}
-	if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 4096 {
-		t.Fatalf("thinking budget = %#v, want 4096", cfg.ThinkingConfig.ThinkingBudget)
-	}
+func TestApplyClaudeThinkingUsesMiniMaxFamilyContract(t *testing.T) {
+	t.Run("m3 adaptive", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M3", MaxTokens: 8192}
+		applyClaudeThinking(&ChatRequest{
+			Provider: "minimax", ModelID: "MiniMax-M3", Reasoning: true, ThinkingEffort: "medium",
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "adaptive" || cfg.Thinking != nil {
+			t.Fatalf("MiniMax M3 Anthropic thinking = %#v manual=%#v", cfg.AdditionalRequestFields, cfg.Thinking)
+		}
+	})
+
+	t.Run("m3 disabled", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M3", MaxTokens: 8192}
+		applyClaudeThinking(&ChatRequest{
+			Provider: "minimax", ModelID: "MiniMax-M3", Reasoning: true, ThinkingEffort: "none",
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Fatalf("MiniMax M3 Anthropic thinking = %#v, want disabled", cfg.AdditionalRequestFields)
+		}
+	})
+
+	t.Run("m2 fixed thinking needs no control field", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M2.7", MaxTokens: 8192}
+		applyClaudeThinking(&ChatRequest{Provider: "minimax", ModelID: "MiniMax-M2.7", Reasoning: true}, cfg)
+		if len(cfg.AdditionalRequestFields) != 0 || cfg.Thinking != nil {
+			t.Fatalf("MiniMax M2.7 must not receive a thinking control: %#v manual=%#v", cfg.AdditionalRequestFields, cfg.Thinking)
+		}
+	})
+}
+
+func TestApplyGeminiThinkingUsesGenerationContract(t *testing.T) {
+	t.Run("2.5 budget", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-2.5-pro"}
+		applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: "gemini-2.5-pro", Reasoning: true}, cfg)
+		if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts {
+			t.Fatalf("thinking config = %#v, want include thoughts", cfg.ThinkingConfig)
+		}
+		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 4096 || cfg.ThinkingConfig.ThinkingLevel != "" {
+			t.Fatalf("thinking config = %#v, want budget 4096 only", cfg.ThinkingConfig)
+		}
+	})
+
+	t.Run("3.7 level", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.7-flash"}
+		applyGeminiThinking(&ChatRequest{
+			Provider:       "google",
+			ModelID:        "gemini-3.7-flash",
+			Reasoning:      true,
+			ThinkingEffort: string(modelbank.ThinkingEffortHigh),
+		}, cfg)
+		if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts || cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelHigh || cfg.ThinkingConfig.ThinkingBudget != nil {
+			t.Fatalf("thinking config = %#v, want HIGH level only", cfg.ThinkingConfig)
+		}
+	})
+
+	t.Run("unknown version is not guessed", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.8-unverified"}
+		applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: cfg.Model, Reasoning: true}, cfg)
+		if cfg.ThinkingConfig != nil {
+			t.Fatalf("unknown Gemini thinking config = %#v", cfg.ThinkingConfig)
+		}
+	})
 }
 
 func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.T) {
@@ -235,7 +432,7 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 			Reasoning:        true,
 			SuppressThinking: true,
 		}, cfg)
-		if len(cfg.ExtraFields) != 0 || cfg.ReasoningEffort != "" {
+		if len(cfg.ExtraFields) != 1 || cfg.ExtraFields["enable_thinking"] != false || cfg.ReasoningEffort != "" {
 			t.Fatalf("suppressed utility thinking fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
 		}
 	})
@@ -251,6 +448,17 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
 		if !ok || thinking["type"] != "disabled" || cfg.ReasoningEffort != "" {
 			t.Fatalf("suppressed DeepSeek fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
+		}
+	})
+
+	t.Run("glm 5.3 uses minimum legal effort", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "glm-5.3"}
+		applyOpenAICompatibleThinking(&ChatRequest{
+			Provider: "zhipu", ModelID: "glm-5.3", Reasoning: true, SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.ExtraFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "enabled" || cfg.ExtraFields["reasoning_effort"] != "low" {
+			t.Fatalf("suppressed GLM 5.3 fields = %#v", cfg.ExtraFields)
 		}
 	})
 
@@ -287,6 +495,38 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		}
 	})
 
+	t.Run("anthropic adaptive uses low without display", func(t *testing.T) {
+		cfg := &claude.Config{Model: "claude-fable-5", MaxTokens: 4096}
+		applyClaudeThinking(&ChatRequest{
+			Provider:         "anthropic",
+			ModelID:          cfg.Model,
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "adaptive" {
+			t.Fatalf("suppressed adaptive thinking = %#v", cfg.AdditionalRequestFields["thinking"])
+		}
+		if _, exists := thinking["display"]; exists {
+			t.Fatalf("utility thinking must omit display: %#v", thinking)
+		}
+		outputConfig, _ := cfg.AdditionalRequestFields["output_config"].(map[string]any)
+		if outputConfig["effort"] != "low" {
+			t.Fatalf("suppressed adaptive output config = %#v", outputConfig)
+		}
+	})
+
+	t.Run("minimax m3 anthropic disables thinking", func(t *testing.T) {
+		cfg := &claude.Config{Model: "MiniMax-M3", MaxTokens: 4096}
+		applyClaudeThinking(&ChatRequest{
+			Provider: "minimax", ModelID: "MiniMax-M3", Reasoning: true, SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "disabled" {
+			t.Fatalf("suppressed MiniMax M3 fields = %#v", cfg.AdditionalRequestFields)
+		}
+	})
+
 	t.Run("gemini", func(t *testing.T) {
 		cfg := &gemini.Config{Model: "gemini-2.5-pro"}
 		applyGeminiThinking(&ChatRequest{
@@ -297,6 +537,19 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		}, cfg)
 		if cfg.ThinkingConfig != nil {
 			t.Fatalf("suppressed Gemini thinking config = %#v", cfg.ThinkingConfig)
+		}
+	})
+
+	t.Run("gemini 3.x uses the lowest legal level", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.7-flash"}
+		applyGeminiThinking(&ChatRequest{
+			Provider:         "google",
+			ModelID:          cfg.Model,
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		if cfg.ThinkingConfig == nil || cfg.ThinkingConfig.IncludeThoughts || cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow || cfg.ThinkingConfig.ThinkingBudget != nil {
+			t.Fatalf("suppressed Gemini 3.x config = %#v", cfg.ThinkingConfig)
 		}
 	})
 }

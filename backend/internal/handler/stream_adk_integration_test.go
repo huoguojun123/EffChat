@@ -123,6 +123,8 @@ type adkProviderHarnessConfig struct {
 	Reasoning          bool
 	ThinkingFormat     string
 	ThinkingEffort     string
+	TemperaturePolicy  string
+	TemperatureValue   *float64
 	FirstOutputTimeout time.Duration
 }
 
@@ -139,6 +141,7 @@ func newADKRunRegressionHarnessForProvider(t *testing.T, env *testEnv, cfg adkPr
 	if err := repository.NewModelRepository(env.db).Upsert(&model.Model{
 		ID: cfg.ModelID, DisplayName: cfg.DisplayName, Provider: env.channelKey,
 		ContextWindow: 32768, MaxOutput: 4096, Enabled: true, Reasoning: cfg.Reasoning, ThinkingFormat: cfg.ThinkingFormat,
+		TemperaturePolicy: cfg.TemperaturePolicy, TemperatureValue: cfg.TemperatureValue,
 	}); err != nil {
 		t.Fatalf("configure scripted model capacity: %v", err)
 	}
@@ -146,8 +149,8 @@ func newADKRunRegressionHarnessForProvider(t *testing.T, env *testEnv, cfg adkPr
 	previous := modelbank.Get(cfg.ModelID)
 	modelbank.Register(&modelbank.ModelInfo{
 		ID: cfg.ModelID, DisplayName: cfg.DisplayName, Provider: env.channelKey, Enabled: true,
-		ThinkingFormat: cfg.ThinkingFormat,
-		Capabilities:   modelbank.ModelCapabilities{ContextWindow: 32768, MaxOutput: 4096, Reasoning: cfg.Reasoning},
+		ThinkingFormat: cfg.ThinkingFormat, TemperaturePolicy: cfg.TemperaturePolicy, TemperatureValue: cfg.TemperatureValue,
+		Capabilities: modelbank.ModelCapabilities{ContextWindow: 32768, MaxOutput: 4096, Reasoning: cfg.Reasoning},
 	})
 	if previous != nil {
 		t.Cleanup(func() { modelbank.Register(previous) })

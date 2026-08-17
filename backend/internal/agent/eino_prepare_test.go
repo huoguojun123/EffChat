@@ -177,6 +177,203 @@ func TestBuildChatModelAppliesTypedOpenAIRequestProfile(t *testing.T) {
 	}
 }
 
+func TestBuildChatModelOmitsUnsupportedGrokReasoningPenalties(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-grok\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"grok-4.6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	presence, frequency := 0.5, -0.5
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "grok-4.6", Provider: "xai", Reasoning: true, ThinkingEffort: "xhigh",
+		OpenAIRequestProfile: model.OpenAIRequestProfile{
+			PresencePenalty: &presence, FrequencyPenalty: &frequency,
+		},
+		RuntimeChannel: &model.AIChannel{Key: "xai", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{})
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	body := <-requestBodies
+	if body["reasoning_effort"] != "xhigh" {
+		t.Fatalf("reasoning_effort = %#v, want xhigh; body=%#v", body["reasoning_effort"], body)
+	}
+	for _, key := range []string{"presence_penalty", "frequency_penalty", "stop"} {
+		if _, ok := body[key]; ok {
+			t.Fatalf("unsupported Grok reasoning field %q leaked: %#v", key, body)
+		}
+	}
+}
+
+func TestBuildChatModelPreservesDeepSeekReasoningForToolContinuation(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-deepseek\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "deepseek-v4-flash", Provider: "deepseek", Reasoning: true, ThinkingEffort: "low",
+		RuntimeChannel: &model.AIChannel{Key: "deepseek", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{})
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	idx := 0
+	messages := []*schema.Message{
+		schema.UserMessage("look it up"),
+		{
+			Role: schema.Assistant, ReasoningContent: "I should use the tool",
+			ToolCalls: []schema.ToolCall{{
+				Index: &idx, ID: "call_1", Type: "function",
+				Function: schema.FunctionCall{Name: "web_search", Arguments: `{"query":"fixture"}`},
+			}},
+		},
+		{Role: schema.Tool, Content: `{"result":"ok"}`, ToolCallID: "call_1", ToolName: "web_search"},
+	}
+	if _, err := modelstream.Collect(t.Context(), chatModel, messages, time.Second); err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	body := <-requestBodies
+	wireMessages, ok := body["messages"].([]any)
+	if !ok || len(wireMessages) != 3 {
+		t.Fatalf("messages = %#v, want three wire messages", body["messages"])
+	}
+	assistant, ok := wireMessages[1].(map[string]any)
+	if !ok || assistant["reasoning_content"] != "I should use the tool" {
+		t.Fatalf("assistant tool continuation lost reasoning_content: %#v", wireMessages[1])
+	}
+	tool, ok := wireMessages[2].(map[string]any)
+	if !ok || tool["tool_call_id"] != "call_1" {
+		t.Fatalf("tool result lost call id: %#v", wireMessages[2])
+	}
+}
+
+func TestBuildChatModelAppliesQwenThinkingAndNativeSearch(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-qwen\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen3.7-plus\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "qwen3.7-plus", Provider: "qwen", Reasoning: true, ThinkingEffort: "high",
+		RuntimeChannel: &model.AIChannel{Key: "qwen", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{UseModelNativeSearch: true, SearchImpl: modelbank.SearchImplParams})
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	body := <-requestBodies
+	for key, want := range map[string]any{
+		"enable_thinking":   true,
+		"thinking_budget":   float64(8192),
+		"preserve_thinking": true,
+		"enable_search":     true,
+	} {
+		if body[key] != want {
+			t.Fatalf("%s = %#v, want %#v; body=%#v", key, body[key], want, body)
+		}
+	}
+}
+
+func TestBuildChatModelAppliesKimiGenerationContracts(t *testing.T) {
+	requestBodies := make(chan map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-kimi\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"kimi-fixture\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	temperature, topP, presence, frequency := 0.5, 0.8, 0.2, -0.2
+	n := 2
+	for _, tc := range []struct {
+		name       string
+		modelID    string
+		maxTokens  int
+		wantLimit  string
+		wantEffort string
+		wantKeep   bool
+	}{
+		{name: "K3", modelID: "kimi-k3", maxTokens: 8192, wantLimit: "max_completion_tokens", wantEffort: "max"},
+		{name: "K2.6", modelID: "kimi-k2.6", maxTokens: 4096, wantLimit: "max_tokens", wantKeep: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+			chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+				ModelID: tc.modelID, Provider: "moonshot", MaxTokens: tc.maxTokens, Reasoning: true,
+				TemperaturePolicy: model.TemperaturePolicyFixed, TemperatureValue: &temperature,
+				OpenAIRequestProfile: model.OpenAIRequestProfile{TopP: &topP, N: &n, PresencePenalty: &presence, FrequencyPenalty: &frequency},
+				RuntimeChannel:       &model.AIChannel{Key: "moonshot", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+			}, modelbank.SearchDecision{})
+			if err != nil {
+				t.Fatalf("build model: %v", err)
+			}
+			if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+				t.Fatalf("collect stream: %v", err)
+			}
+			body := <-requestBodies
+			if body[tc.wantLimit] != float64(tc.maxTokens) {
+				t.Fatalf("%s = %#v; body=%#v", tc.wantLimit, body[tc.wantLimit], body)
+			}
+			for _, key := range []string{"temperature", "top_p", "n", "presence_penalty", "frequency_penalty"} {
+				if _, ok := body[key]; ok {
+					t.Fatalf("fixed Kimi field %q leaked: %#v", key, body)
+				}
+			}
+			if tc.wantEffort != "" && body["reasoning_effort"] != tc.wantEffort {
+				t.Fatalf("reasoning_effort = %#v, want %q", body["reasoning_effort"], tc.wantEffort)
+			}
+			if tc.wantKeep {
+				thinking, _ := body["thinking"].(map[string]any)
+				if thinking["type"] != "enabled" || thinking["keep"] != "all" {
+					t.Fatalf("thinking = %#v", thinking)
+				}
+			}
+		})
+	}
+}
+
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

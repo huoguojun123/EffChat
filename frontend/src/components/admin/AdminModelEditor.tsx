@@ -314,7 +314,7 @@ export function AdminModelEditor({
                               </span>
                             ))}
                           </div>
-                        ) : runtimeProfile.thinking_format === "minimax_thinking" ? (
+                        ) : runtimeProfile.thinking_format === "minimax_thinking" || runtimeProfile.thinking_format === "kimi_thinking" ? (
                           <p className="mt-1.5 text-xs text-muted-foreground">该模型固定开启思考</p>
                         ) : null}
                       </div>

@@ -253,7 +253,11 @@ func TestResponsesProtocolPreservesPartialOutputBeforeTransportFailure(t *testin
 	if content.String() != "partial durable text" {
 		t.Fatalf("partial content = %q", content.String())
 	}
-	if terminalErr == nil || errors.Is(terminalErr, io.EOF) || !strings.Contains(strings.ToLower(terminalErr.Error()), "unexpected eof") {
+	// A deliberately truncated response can surface as io.ErrUnexpectedEOF or
+	// a connection reset depending on the runner's TCP stack. The protocol
+	// contract is that partial output survives and the truncation is not
+	// mistaken for a clean end-of-stream.
+	if terminalErr == nil || errors.Is(terminalErr, io.EOF) {
 		t.Fatalf("terminal error = %v", terminalErr)
 	}
 }

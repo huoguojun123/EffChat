@@ -78,14 +78,17 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		provider string
 		context  int
 		output   int
+		vision   bool
 	}{
-		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000},
-		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000},
-		{id: "claude-opus-4-8", provider: "anthropic", context: 1000000, output: 128000},
-		{id: "claude-sonnet-4-7", provider: "anthropic", context: 1000000, output: 128000},
-		{id: "gemini-3.7-flash", provider: "google", context: 1048576, output: 65536},
-		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536},
-		{id: "grok-4.6", provider: "xai", context: 500000, output: 0},
+		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-opus-4-8", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-sonnet-4-7", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "gemini-3.7-flash", provider: "google", context: 1048576, output: 65536, vision: true},
+		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536, vision: true},
+		{id: "qwen3.7-max", provider: "qwen", context: 1000000, output: 65536},
+		{id: "qwen3.7-plus", provider: "qwen", context: 1000000, output: 65536, vision: true},
+		{id: "grok-4.6", provider: "xai", context: 500000, output: 0, vision: true},
 	}
 	for _, tc := range cases {
 		info := Get(tc.id)
@@ -95,7 +98,7 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		if info.Provider != tc.provider || info.Capabilities.ContextWindow != tc.context || info.Capabilities.MaxOutput != tc.output {
 			t.Fatalf("%s profile = provider:%q limits:%d/%d", tc.id, info.Provider, info.Capabilities.ContextWindow, info.Capabilities.MaxOutput)
 		}
-		if !info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+		if info.Capabilities.Vision != tc.vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
 			t.Fatalf("%s lost required capability evidence: %+v", tc.id, info.Capabilities)
 		}
 	}

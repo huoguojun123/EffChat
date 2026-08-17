@@ -468,6 +468,23 @@ func isDashScopeQwenThinkingModel(id string) bool {
 		strings.Contains(id, "qwen-3")
 }
 
+// QwenThinkingCanDisable distinguishes hybrid models from the published
+// thinking-only variants. Utilities must not send an unsupported off switch.
+func QwenThinkingCanDisable(modelID string) bool {
+	id := normalizeModelID(modelID)
+	return !strings.Contains(id, "qwq") &&
+		!strings.Contains(id, "-thinking") &&
+		!strings.Contains(id, "qwen3.7-max-preview") &&
+		!strings.Contains(id, "qwen3.7-max-2026-05-17")
+}
+
+// QwenPreservesThinkingHistory is intentionally limited to model generations
+// whose OpenAI-compatible API explicitly accepts preserve_thinking.
+func QwenPreservesThinkingHistory(modelID string) bool {
+	id := normalizeModelID(modelID)
+	return strings.Contains(id, "qwen3.6") || strings.Contains(id, "qwen3.7")
+}
+
 func isOpenAIReasoningModel(provider, id string) bool {
 	if provider == "anthropic" || provider == "google" {
 		return false

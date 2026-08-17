@@ -73,6 +73,11 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		if openAIProfile.FrequencyPenalty != nil && *openAIProfile.FrequencyPenalty == 0 {
 			setOpenAIExtraField(cfg, "frequency_penalty", 0)
 		}
+		if searchDecision.UseModelNativeSearch && searchDecision.SearchImpl == modelbank.SearchImplParams {
+			// The OpenAI-compatible params contract is currently used by Qwen;
+			// Google native maps the same product decision to google_search below.
+			setOpenAIExtraField(cfg, "enable_search", true)
+		}
 		applyOpenAITokenLimit(req, cfg)
 		if channel.BaseURL != "" {
 			cfg.BaseURL = channel.BaseURL

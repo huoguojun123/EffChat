@@ -189,6 +189,22 @@ func TestKnownThinkingModelDetection(t *testing.T) {
 	}
 }
 
+func TestQwenThinkingLifecycleCapabilities(t *testing.T) {
+	for _, id := range []string{"qwen3.7-plus", "qwen3.6-plus"} {
+		if !QwenThinkingCanDisable(id) || !QwenPreservesThinkingHistory(id) {
+			t.Fatalf("%s should support toggle and preserve_thinking", id)
+		}
+	}
+	for _, id := range []string{"qwq-plus", "qwen3.7-max-preview", "qwen3-next-80b-a3b-thinking"} {
+		if QwenThinkingCanDisable(id) {
+			t.Fatalf("thinking-only model %s must not expose disable", id)
+		}
+	}
+	if QwenPreservesThinkingHistory("qwen3.5-plus") {
+		t.Fatal("Qwen 3.5 must not receive the newer preserve_thinking field")
+	}
+}
+
 func TestResolveThinkingEffortPerFormat(t *testing.T) {
 	cases := []struct {
 		name      string

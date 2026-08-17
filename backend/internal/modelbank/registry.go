@@ -203,6 +203,22 @@ func builtinModels() map[string]*ModelInfo {
 			},
 		},
 
+		// ============ Qwen ============
+		"qwen3.7-max": {
+			ID: "qwen3.7-max", DisplayName: "Qwen3.7 Max", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 65536,
+			},
+		},
+		"qwen3.7-plus": {
+			ID: "qwen3.7-plus", DisplayName: "Qwen3.7 Plus", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 65536,
+			},
+		},
+
 		// ============ xAI ============
 		"grok-4.6": {
 			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,

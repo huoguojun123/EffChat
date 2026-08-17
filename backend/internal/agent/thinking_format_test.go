@@ -124,14 +124,38 @@ func TestApplyOpenAICompatibleThinkingManualNone(t *testing.T) {
 }
 
 func TestApplyOpenAICompatibleThinkingQwen(t *testing.T) {
-	cfg := &openai.ChatModelConfig{Model: "qwen3-max"}
-	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: "qwen3-max", Reasoning: true, ThinkingEffort: "high"}, cfg)
+	cfg := &openai.ChatModelConfig{Model: "qwen3.7-plus"}
+	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: "qwen3.7-plus", Reasoning: true, ThinkingEffort: "high"}, cfg)
 	if got := cfg.ExtraFields["enable_thinking"]; got != true {
 		t.Fatalf("enable_thinking = %#v, want true", got)
 	}
 	if got := cfg.ExtraFields["thinking_budget"]; got != 8192 {
 		t.Fatalf("thinking_budget = %#v, want 8192", got)
 	}
+	if got := cfg.ExtraFields["preserve_thinking"]; got != true {
+		t.Fatalf("preserve_thinking = %#v, want true", got)
+	}
+}
+
+func TestApplyOpenAICompatibleThinkingQwenUtilityLifecycle(t *testing.T) {
+	t.Run("hybrid disables thinking", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "qwen3.7-plus"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "qwen", ModelID: "qwen3.7-plus", Reasoning: true, SuppressThinking: true}, cfg)
+		if got := cfg.ExtraFields["enable_thinking"]; got != false {
+			t.Fatalf("enable_thinking = %#v, want false", got)
+		}
+	})
+
+	t.Run("thinking only uses minimum budget", func(t *testing.T) {
+		cfg := &openai.ChatModelConfig{Model: "qwen3.7-max-preview"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "qwen", ModelID: "qwen3.7-max-preview", Reasoning: true, SuppressThinking: true}, cfg)
+		if _, ok := cfg.ExtraFields["enable_thinking"]; ok {
+			t.Fatalf("thinking-only model must not receive enable_thinking: %#v", cfg.ExtraFields)
+		}
+		if got := cfg.ExtraFields["thinking_budget"]; got != 1024 {
+			t.Fatalf("thinking_budget = %#v, want 1024", got)
+		}
+	})
 }
 
 func TestApplyOpenAICompatibleThinkingVendorFormats(t *testing.T) {
@@ -300,7 +324,7 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 			Reasoning:        true,
 			SuppressThinking: true,
 		}, cfg)
-		if len(cfg.ExtraFields) != 0 || cfg.ReasoningEffort != "" {
+		if len(cfg.ExtraFields) != 1 || cfg.ExtraFields["enable_thinking"] != false || cfg.ReasoningEffort != "" {
 			t.Fatalf("suppressed utility thinking fields = %#v effort=%q", cfg.ExtraFields, cfg.ReasoningEffort)
 		}
 	})

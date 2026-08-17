@@ -271,6 +271,45 @@ func TestBuildChatModelPreservesDeepSeekReasoningForToolContinuation(t *testing.
 	}
 }
 
+func TestBuildChatModelAppliesQwenThinkingAndNativeSearch(t *testing.T) {
+	requestBodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestBodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-qwen\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"qwen3.7-plus\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	chatModel, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "qwen3.7-plus", Provider: "qwen", Reasoning: true, ThinkingEffort: "high",
+		RuntimeChannel: &model.AIChannel{Key: "qwen", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{UseModelNativeSearch: true, SearchImpl: modelbank.SearchImplParams})
+	if err != nil {
+		t.Fatalf("build model: %v", err)
+	}
+	if _, err := modelstream.Collect(t.Context(), chatModel, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+		t.Fatalf("collect stream: %v", err)
+	}
+	body := <-requestBodies
+	for key, want := range map[string]any{
+		"enable_thinking":   true,
+		"thinking_budget":   float64(8192),
+		"preserve_thinking": true,
+		"enable_search":     true,
+	} {
+		if body[key] != want {
+			t.Fatalf("%s = %#v, want %#v; body=%#v", key, body[key], want, body)
+		}
+	}
+}
+
 func (w *preparedChatEventWriter) WriteEvent(event string, _ interface{}) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

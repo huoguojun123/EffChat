@@ -34,6 +34,12 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			// Standard Grok reasoning cannot be disabled. Utilities request the
 			// lowest legal effort instead of omitting the field and inheriting high.
 			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+		} else if format == modelbank.ThinkingFormatDashScopeQwen {
+			if modelbank.QwenThinkingCanDisable(req.ModelID) {
+				setOpenAIExtraField(cfg, "enable_thinking", false)
+			} else {
+				setOpenAIExtraField(cfg, "thinking_budget", 1024)
+			}
 		}
 		return
 	}
@@ -50,8 +56,13 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 	case modelbank.ThinkingFormatDeepSeekV4Disabled:
 		setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
 	case modelbank.ThinkingFormatDashScopeQwen:
-		setOpenAIExtraField(cfg, "enable_thinking", true)
+		if modelbank.QwenThinkingCanDisable(req.ModelID) {
+			setOpenAIExtraField(cfg, "enable_thinking", true)
+		}
 		setOpenAIExtraField(cfg, "thinking_budget", budgetForEffort(effort, 1024, 4096, 8192))
+		if modelbank.QwenPreservesThinkingHistory(req.ModelID) {
+			setOpenAIExtraField(cfg, "preserve_thinking", true)
+		}
 	case modelbank.ThinkingFormatXAIGrok:
 		// xAI's standard Grok reasoning models use the Chat Completions field
 		// directly. Do not use the OpenAI SDK enum here: it deliberately only

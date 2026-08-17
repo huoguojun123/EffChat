@@ -128,14 +128,36 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 }
 
 func applyGeminiThinking(req *ChatRequest, cfg *gemini.Config) {
-	if req != nil && req.SuppressThinking {
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if format != modelbank.ThinkingFormatGeminiThinking {
+		logThinkingFormat(req, format, modelbank.ThinkingEffortAuto)
 		return
 	}
-	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	contract := modelbank.ResolveGeminiThinkingContract(req.ModelID)
+	if req.SuppressThinking {
+		// Gemini 3.x cannot disable thinking. Sending the lowest supported level
+		// keeps utility calls bounded; omitting the config would restore the
+		// provider default (currently medium) and defeat suppression.
+		if contract == modelbank.GeminiThinkingLevel {
+			cfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelLow}
+		}
+		logThinkingFormat(req, format, modelbank.ThinkingEffortLow)
+		return
+	}
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
-	if format == modelbank.ThinkingFormatGeminiThinking {
+	switch contract {
+	case modelbank.GeminiThinkingBudget:
 		budget := int32(budgetForEffort(effort, 1024, 4096, 8192))
 		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+	case modelbank.GeminiThinkingLevel:
+		level := genai.ThinkingLevelMedium
+		switch effort {
+		case modelbank.ThinkingEffortLow:
+			level = genai.ThinkingLevelLow
+		case modelbank.ThinkingEffortHigh:
+			level = genai.ThinkingLevelHigh
+		}
+		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingLevel: level}
 	}
 	logThinkingFormat(req, format, effort)
 }

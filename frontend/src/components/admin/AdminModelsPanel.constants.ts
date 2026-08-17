@@ -10,7 +10,7 @@ export const thinkingFormatOptions = [
   { value: "openai_gpt_5_6", label: "GPT-5.6 reasoning", hint: "适用 GPT-5.6 系列；下发独立的六档 reasoning_effort 和 max_completion_tokens。" },
   { value: "anthropic_budget", label: "Claude thinking", hint: "适用 Claude 4.5 及更早 manual thinking；下发 thinking.type=enabled + budget_tokens。" },
   { value: "anthropic_adaptive", label: "Claude adaptive thinking", hint: "适用 Claude 4.6+、Claude 5、Fable/Mythos；下发 thinking.type=adaptive + output_config.effort。" },
-  { value: "gemini_thinking", label: "Gemini thinking", hint: "适用 Gemini 2.5/3/3.1/3.5；当前用 ThinkingConfig.thinkingBudget 控制预算。" },
+  { value: "gemini_thinking", label: "Gemini thinking", hint: "Gemini 2.5 使用 thinkingBudget；Gemini 3.x 使用 thinkingLevel。" },
   { value: "dashscope_qwen", label: "Qwen thinking", hint: "适用 QwQ、Qwen3/3.5/3.6/3.7；下发 enable_thinking + thinking_budget。" },
   { value: "deepseek_v4", label: "DeepSeek thinking", hint: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=high/max。" },
   { value: "deepseek_v4_disabled", label: "DeepSeek 关闭思考", hint: "适用 DeepSeek V4 双模式模型；下发 thinking.type=disabled，不展示思考预算。" },

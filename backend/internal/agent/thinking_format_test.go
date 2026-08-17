@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/eino-ext/components/model/gemini"
 	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/huoguojun123/EffChat/internal/modelbank"
+	"google.golang.org/genai"
 )
 
 func TestApplyOpenAICompatibleThinkingDeepSeekViaOpenAI(t *testing.T) {
@@ -215,15 +216,38 @@ func TestApplyClaudeThinkingAdaptiveHigh(t *testing.T) {
 	}
 }
 
-func TestApplyGeminiThinkingAuto(t *testing.T) {
-	cfg := &gemini.Config{Model: "gemini-2.5-pro"}
-	applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: "gemini-2.5-pro", Reasoning: true}, cfg)
-	if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts {
-		t.Fatalf("thinking config = %#v, want include thoughts", cfg.ThinkingConfig)
-	}
-	if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 4096 {
-		t.Fatalf("thinking budget = %#v, want 4096", cfg.ThinkingConfig.ThinkingBudget)
-	}
+func TestApplyGeminiThinkingUsesGenerationContract(t *testing.T) {
+	t.Run("2.5 budget", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-2.5-pro"}
+		applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: "gemini-2.5-pro", Reasoning: true}, cfg)
+		if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts {
+			t.Fatalf("thinking config = %#v, want include thoughts", cfg.ThinkingConfig)
+		}
+		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 4096 || cfg.ThinkingConfig.ThinkingLevel != "" {
+			t.Fatalf("thinking config = %#v, want budget 4096 only", cfg.ThinkingConfig)
+		}
+	})
+
+	t.Run("3.7 level", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.7-flash"}
+		applyGeminiThinking(&ChatRequest{
+			Provider:       "google",
+			ModelID:        "gemini-3.7-flash",
+			Reasoning:      true,
+			ThinkingEffort: string(modelbank.ThinkingEffortHigh),
+		}, cfg)
+		if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts || cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelHigh || cfg.ThinkingConfig.ThinkingBudget != nil {
+			t.Fatalf("thinking config = %#v, want HIGH level only", cfg.ThinkingConfig)
+		}
+	})
+
+	t.Run("unknown version is not guessed", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.8-unverified"}
+		applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: cfg.Model, Reasoning: true}, cfg)
+		if cfg.ThinkingConfig != nil {
+			t.Fatalf("unknown Gemini thinking config = %#v", cfg.ThinkingConfig)
+		}
+	})
 }
 
 func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.T) {
@@ -297,6 +321,19 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		}, cfg)
 		if cfg.ThinkingConfig != nil {
 			t.Fatalf("suppressed Gemini thinking config = %#v", cfg.ThinkingConfig)
+		}
+	})
+
+	t.Run("gemini 3.x uses the lowest legal level", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.7-flash"}
+		applyGeminiThinking(&ChatRequest{
+			Provider:         "google",
+			ModelID:          cfg.Model,
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		if cfg.ThinkingConfig == nil || cfg.ThinkingConfig.IncludeThoughts || cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow || cfg.ThinkingConfig.ThinkingBudget != nil {
+			t.Fatalf("suppressed Gemini 3.x config = %#v", cfg.ThinkingConfig)
 		}
 	})
 }

@@ -139,6 +139,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Google Gemini ============
+		"gemini-3.7-flash": {
+			ID: "gemini-3.7-flash", DisplayName: "Gemini 3.7 Flash", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
 		"gemini-3.6-flash": {
 			ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{

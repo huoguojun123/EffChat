@@ -229,6 +229,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 	cases := []struct {
 		name     string
 		format   ThinkingFormat
+		modelID  string
 		contains []string
 	}{
 		{
@@ -247,9 +248,16 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 			contains: []string{"QwQ", "Qwen3/3.5/3.6/3.7", "enable_thinking", "thinking_budget"},
 		},
 		{
-			name:     "gemini",
+			name:     "gemini 2.5",
 			format:   ThinkingFormatGeminiThinking,
-			contains: []string{"Gemini 2.5/3/3.1/3.5", "ThinkingConfig.thinkingBudget", "thinkingLevel"},
+			modelID:  "gemini-2.5-pro",
+			contains: []string{"Gemini 2.5", "ThinkingConfig.thinkingBudget"},
+		},
+		{
+			name:     "gemini 3.7",
+			format:   ThinkingFormatGeminiThinking,
+			modelID:  "gemini-3.7-flash",
+			contains: []string{"Gemini 3.x", "ThinkingConfig.thinkingLevel"},
 		},
 		{
 			name:     "anthropic manual budget",
@@ -286,7 +294,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var joined strings.Builder
-			for _, opt := range ThinkingEffortOptions(tc.format) {
+			for _, opt := range ThinkingEffortOptionsForModel(tc.format, tc.modelID) {
 				joined.WriteString(opt.Description)
 				joined.WriteString("\n")
 			}
@@ -295,6 +303,32 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Fatalf("description for %s does not contain %q:\n%s", tc.format, want, got)
 				}
+			}
+		})
+	}
+}
+
+func TestResolveGeminiThinkingContract(t *testing.T) {
+	cases := []struct {
+		modelID string
+		want    GeminiThinkingContract
+		omit    bool
+	}{
+		{modelID: "gemini-2.5-pro", want: GeminiThinkingBudget},
+		{modelID: "models/gemini-3-flash-preview", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.5-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.6-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.7-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-3.8-unverified", want: GeminiThinkingUnknown},
+		{modelID: "custom-google-model", want: GeminiThinkingUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID, func(t *testing.T) {
+			if got := ResolveGeminiThinkingContract(tc.modelID); got != tc.want {
+				t.Fatalf("contract = %v, want %v", got, tc.want)
+			}
+			if got := GeminiOmitsSamplingParameters(tc.modelID); got != tc.omit {
+				t.Fatalf("omit sampling = %t, want %t", got, tc.omit)
 			}
 		})
 	}

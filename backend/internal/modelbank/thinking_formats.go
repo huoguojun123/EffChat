@@ -54,6 +54,17 @@ const (
 	ThinkingEffortMax    ThinkingEffort = "max"
 )
 
+// GeminiThinkingContract separates the two incompatible generateContent
+// request shapes used by supported Gemini generations. Keep this decision in
+// modelbank so the adapter, utility calls, and UI options cannot drift apart.
+type GeminiThinkingContract uint8
+
+const (
+	GeminiThinkingUnknown GeminiThinkingContract = iota
+	GeminiThinkingBudget
+	GeminiThinkingLevel
+)
+
 var validThinkingFormats = map[string]bool{
 	string(ThinkingFormatAuto):                  true,
 	string(ThinkingFormatNone):                  true,
@@ -257,10 +268,6 @@ func ApplyThinkingRuntimeMetadataWithAdapter(m *model.Model, adapter string) *mo
 	return ApplyRuntimeProfileWithAdapter(m, adapter)
 }
 
-func ThinkingEffortOptions(format ThinkingFormat) []model.ThinkingEffortOption {
-	return ThinkingEffortOptionsForModel(format, "")
-}
-
 func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []model.ThinkingEffortOption {
 	switch format {
 	case ThinkingFormatOpenAIGPT56:
@@ -290,10 +297,21 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			{Value: string(ThinkingEffortHigh), Label: "长", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7；下发 enable_thinking + thinking_budget=8192。"},
 		}
 	case ThinkingFormatGeminiThinking:
-		return []model.ThinkingEffortOption{
-			{Value: string(ThinkingEffortLow), Label: "短", Description: "适用 Gemini 2.5/3/3.1/3.5；当前下发 ThinkingConfig.thinkingBudget=1024，暂不迁移 thinkingLevel。"},
-			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Gemini 2.5/3/3.1/3.5；当前下发 ThinkingConfig.thinkingBudget=4096，暂不迁移 thinkingLevel。"},
-			{Value: string(ThinkingEffortHigh), Label: "长", Description: "适用 Gemini 2.5/3/3.1/3.5；当前下发 ThinkingConfig.thinkingBudget=8192，暂不迁移 thinkingLevel。"},
+		switch ResolveGeminiThinkingContract(modelID) {
+		case GeminiThinkingBudget:
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortLow), Label: "短", Description: "适用 Gemini 2.5；下发 ThinkingConfig.thinkingBudget=1024。"},
+				{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Gemini 2.5；下发 ThinkingConfig.thinkingBudget=4096。"},
+				{Value: string(ThinkingEffortHigh), Label: "长", Description: "适用 Gemini 2.5；下发 ThinkingConfig.thinkingBudget=8192。"},
+			}
+		case GeminiThinkingLevel:
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Gemini 3.x；下发 ThinkingConfig.thinkingLevel=LOW。"},
+				{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Gemini 3.x；下发 ThinkingConfig.thinkingLevel=MEDIUM。"},
+				{Value: string(ThinkingEffortHigh), Label: "高", Description: "适用 Gemini 3.x；下发 ThinkingConfig.thinkingLevel=HIGH。"},
+			}
+		default:
+			return nil
 		}
 	case ThinkingFormatAnthropicBudget:
 		return []model.ThinkingEffortOption{
@@ -478,6 +496,29 @@ func IsKnownThinkingModel(provider, modelID, displayName string) bool {
 
 func isGeminiThinkingModel(id string) bool {
 	return strings.Contains(id, "gemini")
+}
+
+// ResolveGeminiThinkingContract returns only contracts verified for the
+// current generateContent API. Unknown future versions intentionally receive
+// no inferred control field instead of inheriting an incompatible request.
+func ResolveGeminiThinkingContract(modelID string) GeminiThinkingContract {
+	id := normalizeModelID(modelID)
+	if strings.Contains(id, "gemini-2.5") {
+		return GeminiThinkingBudget
+	}
+	for _, version := range []string{"gemini-3-", "gemini-3.1", "gemini-3.5", "gemini-3.6", "gemini-3.7"} {
+		if strings.Contains(id, version) {
+			return GeminiThinkingLevel
+		}
+	}
+	return GeminiThinkingUnknown
+}
+
+// GeminiOmitsSamplingParameters identifies Google-native models whose current
+// API rejects or deprecates temperature/top-p/top-k controls. OpenAI-compatible
+// gateways retain their independently configured request profile.
+func GeminiOmitsSamplingParameters(modelID string) bool {
+	return ResolveGeminiThinkingContract(modelID) == GeminiThinkingLevel
 }
 
 func isAnthropicThinkingModel(provider, id string) bool {

@@ -26,10 +26,14 @@ type scriptedGoogleProvider struct {
 }
 
 func newScriptedGoogleProvider(t *testing.T, steps ...func(http.ResponseWriter, *http.Request)) *scriptedGoogleProvider {
+	return newScriptedGoogleProviderForModel(t, "gemini-2.5-pro", steps...)
+}
+
+func newScriptedGoogleProviderForModel(t *testing.T, modelID string, steps ...func(http.ResponseWriter, *http.Request)) *scriptedGoogleProvider {
 	t.Helper()
 	provider := &scriptedGoogleProvider{steps: steps}
 	provider.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1beta/models/gemini-2.5-pro:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
+		if r.URL.Path != "/v1beta/models/"+modelID+":streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
 			http.NotFound(w, r)
 			return
 		}
@@ -131,15 +135,51 @@ func writeGooglePartialTransportFailure(w http.ResponseWriter, _ *http.Request) 
 }
 
 func newGoogleADKHarness(t *testing.T, provider *scriptedGoogleProvider) (*adkRunRegressionHarness, *testEnv) {
+	return newGoogleADKHarnessForModel(t, provider, "gemini-2.5-pro", nil)
+}
+
+func newGoogleADKHarnessForModel(t *testing.T, provider *scriptedGoogleProvider, modelID string, temperature *float64) (*adkRunRegressionHarness, *testEnv) {
 	t.Helper()
 	env := setupTestEnv(t)
+	temperaturePolicy := ""
+	if temperature != nil {
+		temperaturePolicy = "fixed"
+	}
 	harness := newADKRunRegressionHarnessForProvider(t, env, adkProviderHarnessConfig{
 		Adapter: service.AdapterGoogle, BaseURL: provider.server.URL,
-		ModelID: "gemini-2.5-pro", DisplayName: "Google native ADK regression",
+		ModelID: modelID, DisplayName: "Google native ADK regression",
 		Reasoning: true, ThinkingFormat: string(modelbank.ThinkingFormatGeminiThinking),
-		ThinkingEffort: string(modelbank.ThinkingEffortLow),
+		ThinkingEffort: string(modelbank.ThinkingEffortLow), TemperaturePolicy: temperaturePolicy, TemperatureValue: temperature,
 	})
 	return harness, env
+}
+
+func TestGoogleADKRunUsesGemini37RequestContract(t *testing.T) {
+	provider := newScriptedGoogleProviderForModel(t, "gemini-3.7-flash", func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode Google request: %v", err)
+		}
+		generation, _ := payload["generationConfig"].(map[string]interface{})
+		if _, ok := generation["temperature"]; ok {
+			t.Fatalf("Gemini 3.7 request must omit temperature: %#v", generation)
+		}
+		thinking, _ := generation["thinkingConfig"].(map[string]interface{})
+		if thinking["includeThoughts"] != true || thinking["thinkingLevel"] != "LOW" {
+			t.Fatalf("Gemini 3.7 thinking request = %#v", thinking)
+		}
+		if _, ok := thinking["thinkingBudget"]; ok {
+			t.Fatalf("Gemini 3.7 request must omit thinkingBudget: %#v", thinking)
+		}
+		writeGoogleStreamingCompletion(w, "native thought", "native answer")
+	})
+	temperature := 0.7
+	harness, _ := newGoogleADKHarnessForModel(t, provider, "gemini-3.7-flash", &temperature)
+	session := harness.createSession(t, "Gemini 3.7 request contract")
+	stream := harness.send(t, session.ID, "google-37-contract", "exercise Gemini 3.7 request fields")
+	if stream.Code != http.StatusOK || !strings.Contains(stream.Body.String(), "event: "+streaming.EventMessageComplete) {
+		t.Fatalf("Google stream status=%d body=%s", stream.Code, stream.Body.String())
+	}
 }
 
 func TestGoogleADKRunStreamsThinkingAndCompletesOnce(t *testing.T) {

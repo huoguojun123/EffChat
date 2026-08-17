@@ -126,10 +126,12 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			return nil, fmt.Errorf("failed to create genai client: %w", err)
 		}
 		cfg := &gemini.Config{
-			Client:      client,
-			Model:       req.ModelID,
-			MaxTokens:   ptrIntPositive(req.MaxTokens),
-			Temperature: ptrFloat32(temperature),
+			Client:    client,
+			Model:     req.ModelID,
+			MaxTokens: ptrIntPositive(req.MaxTokens),
+		}
+		if !modelbank.GeminiOmitsSamplingParameters(req.ModelID) {
+			cfg.Temperature = ptrFloat32(temperature)
 		}
 		// params 型原生搜索：按统一决策挂载 google_search（grounding）。
 		if searchDecision.UseModelNativeSearch && searchDecision.SearchImpl == modelbank.SearchImplParams {

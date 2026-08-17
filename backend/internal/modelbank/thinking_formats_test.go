@@ -101,6 +101,9 @@ func TestResolveThinkingFormatKnownFamilies(t *testing.T) {
 		{name: "gemini uppercase fuzzy thinking", provider: "gemini", modelID: "Gemini-3.5-Flash", reasoning: false, want: ThinkingFormatGeminiThinking},
 		{name: "claude fuzzy thinking", provider: "claude", modelID: "Claude-Sonnet-4.5", reasoning: false, want: ThinkingFormatAnthropicBudget},
 		{name: "claude adaptive fuzzy thinking", provider: "anthropic", modelID: "claude-5-sonnet", reasoning: false, want: ThinkingFormatAnthropicAdaptive},
+		{name: "claude canonical sonnet 5", provider: "anthropic", modelID: "claude-sonnet-5", reasoning: false, want: ThinkingFormatAnthropicAdaptive},
+		{name: "claude canonical opus 4.8", provider: "anthropic", modelID: "claude-opus-4-8", reasoning: false, want: ThinkingFormatAnthropicAdaptive},
+		{name: "claude 3.5 remains manual budget", provider: "anthropic", modelID: "claude-3-5-haiku-latest", reasoning: false, want: ThinkingFormatAnthropicBudget},
 		{name: "openai reasoning through custom gateway", provider: "my-gateway", modelID: "gpt-5.1", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "grok reasoning", provider: "xai", modelID: "grok-4.5", reasoning: true, want: ThinkingFormatXAIGrok},
 		{name: "grok multi agent remains unsupported", provider: "xai", modelID: "grok-4.20-multi-agent", reasoning: true, want: ThinkingFormatNone},
@@ -331,5 +334,36 @@ func TestResolveGeminiThinkingContract(t *testing.T) {
 				t.Fatalf("omit sampling = %t, want %t", got, tc.omit)
 			}
 		})
+	}
+}
+
+func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
+	cases := []struct {
+		modelID string
+		want    []ThinkingEffort
+	}{
+		{modelID: "claude-sonnet-4-6", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortMax}},
+		{modelID: "claude-opus-4-8", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+		{modelID: "claude-sonnet-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+		{modelID: "claude-fable-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.modelID, func(t *testing.T) {
+			options := ThinkingEffortOptionsForModel(ThinkingFormatAnthropicAdaptive, tc.modelID)
+			if len(options) != len(tc.want) {
+				t.Fatalf("options = %#v, want %v entries", options, len(tc.want))
+			}
+			for i, want := range tc.want {
+				if options[i].Value != string(want) {
+					t.Fatalf("option[%d] = %q, want %q", i, options[i].Value, want)
+				}
+				if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, tc.modelID, string(want)); got != want {
+					t.Fatalf("resolved %q = %q, want %q", want, got, want)
+				}
+			}
+		})
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, "claude-sonnet-4-6", "xhigh"); got != ThinkingEffortMedium {
+		t.Fatalf("Claude 4.6 xhigh = %q, want medium fallback", got)
 	}
 }

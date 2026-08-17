@@ -223,8 +223,19 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 			return ThinkingEffortMax
 		}
 		return ThinkingEffortHigh
-	case ThinkingFormatDashScopeQwen, ThinkingFormatGeminiThinking, ThinkingFormatAnthropicBudget, ThinkingFormatAnthropicAdaptive:
+	case ThinkingFormatDashScopeQwen, ThinkingFormatGeminiThinking, ThinkingFormatAnthropicBudget:
 		if effort == ThinkingEffortLow || effort == ThinkingEffortMedium || effort == ThinkingEffortHigh {
+			return effort
+		}
+		return ThinkingEffortMedium
+	case ThinkingFormatAnthropicAdaptive:
+		if effort == ThinkingEffortLow || effort == ThinkingEffortMedium || effort == ThinkingEffortHigh {
+			return effort
+		}
+		if effort == ThinkingEffortXHigh && anthropicSupportsXHighEffort(modelID) {
+			return effort
+		}
+		if effort == ThinkingEffortMax && anthropicSupportsMaxEffort(modelID) {
 			return effort
 		}
 		return ThinkingEffortMedium
@@ -320,11 +331,18 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			{Value: string(ThinkingEffortHigh), Label: "16k", Description: "适用 Claude 4.5 及更早 manual budget_tokens；设置 thinking.budget_tokens=16000。"},
 		}
 	case ThinkingFormatAnthropicAdaptive:
-		return []model.ThinkingEffortOption{
+		options := []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Claude 4.6+/5/Fable/Mythos；下发 thinking.type=adaptive + output_config.effort=low。"},
 			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Claude 4.6+/5/Fable/Mythos；下发 thinking.type=adaptive + output_config.effort=medium。"},
 			{Value: string(ThinkingEffortHigh), Label: "高", Description: "适用 Claude 4.6+/5/Fable/Mythos；下发 thinking.type=adaptive + output_config.effort=high。"},
 		}
+		if anthropicSupportsXHighEffort(modelID) {
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "当前 Claude 型号支持 output_config.effort=xhigh。"})
+		}
+		if anthropicSupportsMaxEffort(modelID) {
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortMax), Label: "最大", Description: "当前 Claude 型号支持 output_config.effort=max。"})
+		}
+		return options
 	case ThinkingFormatXAIGrok:
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Grok 4.5 等标准推理模型；下发 reasoning_effort=low。"},
@@ -526,10 +544,29 @@ func isAnthropicThinkingModel(provider, id string) bool {
 }
 
 func isAnthropicAdaptiveModel(id string) bool {
-	return strings.Contains(id, "claude-4.6") ||
-		strings.Contains(id, "claude4.6") ||
-		strings.Contains(id, "claude-5") ||
-		strings.Contains(id, "claude5") ||
-		strings.Contains(id, "fable") ||
-		strings.Contains(id, "mythos")
+	if strings.Contains(id, "fable") || strings.Contains(id, "mythos") {
+		return true
+	}
+	if !strings.Contains(id, "claude") {
+		return false
+	}
+	return strings.Contains(id, "4.6") || strings.Contains(id, "4-6") ||
+		strings.Contains(id, "4.7") || strings.Contains(id, "4-7") ||
+		strings.Contains(id, "4.8") || strings.Contains(id, "4-8") ||
+		strings.Contains(id, "claude-5") || strings.Contains(id, "claude5") ||
+		strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5")
+}
+
+func anthropicSupportsXHighEffort(modelID string) bool {
+	id := normalizeModelID(modelID)
+	if strings.Contains(id, "fable") || strings.Contains(id, "mythos") {
+		return true
+	}
+	return strings.Contains(id, "claude") && (strings.Contains(id, "4.7") || strings.Contains(id, "4-7") ||
+		strings.Contains(id, "4.8") || strings.Contains(id, "4-8") || strings.Contains(id, "claude-5") ||
+		strings.Contains(id, "claude5") || strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5"))
+}
+
+func anthropicSupportsMaxEffort(modelID string) bool {
+	return isAnthropicAdaptiveModel(normalizeModelID(modelID))
 }

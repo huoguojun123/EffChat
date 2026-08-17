@@ -116,6 +116,13 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 128000,
 			},
 		},
+		"claude-sonnet-4-7": {
+			ID: "claude-sonnet-4-7", DisplayName: "Claude Sonnet 4.7", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-sonnet-4-6": {
 			ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{

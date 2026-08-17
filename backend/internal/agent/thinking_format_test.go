@@ -215,10 +215,10 @@ func TestApplyClaudeThinkingExplicitBudgetDefaultMedium(t *testing.T) {
 }
 
 func TestApplyClaudeThinkingAdaptiveHigh(t *testing.T) {
-	cfg := &claude.Config{Model: "claude-adaptive-compatible", MaxTokens: 0}
+	cfg := &claude.Config{Model: "claude-sonnet-5", MaxTokens: 0}
 	applyClaudeThinking(&ChatRequest{
 		Provider:       "anthropic",
-		ModelID:        "claude-adaptive-compatible",
+		ModelID:        "claude-sonnet-5",
 		Reasoning:      true,
 		ThinkingFormat: string(modelbank.ThinkingFormatAnthropicAdaptive),
 		ThinkingEffort: string(modelbank.ThinkingEffortHigh),
@@ -226,6 +226,10 @@ func TestApplyClaudeThinkingAdaptiveHigh(t *testing.T) {
 	outputConfig, ok := cfg.AdditionalRequestFields["output_config"].(map[string]any)
 	if !ok || outputConfig["effort"] != "high" {
 		t.Fatalf("output_config = %#v, want effort high", cfg.AdditionalRequestFields["output_config"])
+	}
+	thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "adaptive" || thinking["display"] != "summarized" {
+		t.Fatalf("thinking = %#v, want adaptive summarized", cfg.AdditionalRequestFields["thinking"])
 	}
 }
 
@@ -321,6 +325,27 @@ func TestSuppressThinkingKeepsUtilityAdaptersWithinTheirOutputBudget(t *testing.
 		}, cfg)
 		if cfg.Thinking != nil || len(cfg.AdditionalRequestFields) != 0 || cfg.MaxTokens != 4096 {
 			t.Fatalf("suppressed Claude config = thinking:%#v additional:%#v max:%d", cfg.Thinking, cfg.AdditionalRequestFields, cfg.MaxTokens)
+		}
+	})
+
+	t.Run("anthropic adaptive uses low without display", func(t *testing.T) {
+		cfg := &claude.Config{Model: "claude-fable-5", MaxTokens: 4096}
+		applyClaudeThinking(&ChatRequest{
+			Provider:         "anthropic",
+			ModelID:          cfg.Model,
+			Reasoning:        true,
+			SuppressThinking: true,
+		}, cfg)
+		thinking, ok := cfg.AdditionalRequestFields["thinking"].(map[string]any)
+		if !ok || thinking["type"] != "adaptive" {
+			t.Fatalf("suppressed adaptive thinking = %#v", cfg.AdditionalRequestFields["thinking"])
+		}
+		if _, exists := thinking["display"]; exists {
+			t.Fatalf("utility thinking must omit display: %#v", thinking)
+		}
+		outputConfig, _ := cfg.AdditionalRequestFields["output_config"].(map[string]any)
+		if outputConfig["effort"] != "low" {
+			t.Fatalf("suppressed adaptive output config = %#v", outputConfig)
 		}
 	})
 

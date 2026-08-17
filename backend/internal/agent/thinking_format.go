@@ -103,10 +103,20 @@ func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
 }
 
 func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
-	if req != nil && req.SuppressThinking {
+	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
+	if req.SuppressThinking {
+		if format == modelbank.ThinkingFormatAnthropicAdaptive {
+			// Adaptive models, including always-on Fable 5, need an explicit low
+			// effort to keep utility calls bounded. Omit display so summaries do
+			// not enter title, compaction, memory, or extraction outputs.
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
+			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
+		}
 		return
 	}
-	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
 	case modelbank.ThinkingFormatAnthropicBudget:
@@ -122,7 +132,7 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 		if cfg.AdditionalRequestFields == nil {
 			cfg.AdditionalRequestFields = map[string]any{}
 		}
-		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
+		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 		cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
 	}
 	logThinkingFormat(req, format, effort)

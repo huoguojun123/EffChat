@@ -61,12 +61,21 @@ func assertAnthropicThinkingRequest(t *testing.T, r *http.Request) {
 	if payload["model"] != "claude-sonnet-4-6" || payload["stream"] != true {
 		t.Errorf("Anthropic model/stream request = %#v", payload)
 	}
+	for _, field := range []string{"temperature", "top_p", "top_k"} {
+		if _, exists := payload[field]; exists {
+			t.Errorf("Anthropic adaptive request must omit %s: %#v", field, payload)
+		}
+	}
 	thinking, _ := payload["thinking"].(map[string]interface{})
-	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(4096) {
+	if thinking["type"] != "adaptive" || thinking["display"] != "summarized" {
 		t.Errorf("Anthropic thinking request = %#v", thinking)
 	}
-	if payload["max_tokens"] != float64(20000) {
-		t.Errorf("Anthropic max_tokens = %#v, want 20000 to contain thinking plus answer", payload["max_tokens"])
+	outputConfig, _ := payload["output_config"].(map[string]interface{})
+	if outputConfig["effort"] != "low" {
+		t.Errorf("Anthropic output_config = %#v", outputConfig)
+	}
+	if payload["max_tokens"] != float64(4096) {
+		t.Errorf("Anthropic max_tokens = %#v, want 4096", payload["max_tokens"])
 	}
 }
 
@@ -153,7 +162,7 @@ func newAnthropicADKHarness(t *testing.T, provider *scriptedAnthropicProvider) (
 	harness := newADKRunRegressionHarnessForProvider(t, env, adkProviderHarnessConfig{
 		Adapter: service.AdapterAnthropic, BaseURL: provider.server.URL,
 		ModelID: "claude-sonnet-4-6", DisplayName: "Anthropic native ADK regression",
-		Reasoning: true, ThinkingFormat: string(modelbank.ThinkingFormatAnthropicBudget),
+		Reasoning: true, ThinkingFormat: string(modelbank.ThinkingFormatAnthropicAdaptive),
 		ThinkingEffort: string(modelbank.ThinkingEffortLow),
 	})
 	return harness, env

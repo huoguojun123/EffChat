@@ -7,7 +7,6 @@ import { MarkdownContent } from "./MarkdownContent"
 import { ToolCallTree } from "./ToolCallTree"
 import { ReasoningPanel } from "./ReasoningPanel"
 import { useTypewriter } from "@/hooks/useTypewriter"
-import { compactReasoningText } from "@/lib/reasoningText"
 import { groupAssistantSegments } from "./assistantSegments"
 
 export function StreamingMessage() {
@@ -110,7 +109,13 @@ const StreamingReasoningSummary = memo(function StreamingReasoningSummary({
         {segments.map((segment, index) => (
           <div key={index} className="space-y-1.5">
             {segment.thinking?.trim() ? (
-              <div className="whitespace-pre-wrap text-xs leading-[1.45] text-muted-foreground">{compactReasoningText(segment.thinking)}</div>
+              <MarkdownContent
+                content={segment.thinking.trim()}
+                streaming
+                ownerKey={`${reasoningKey}:${index}:thinking`}
+                allowArtifactPreviews={false}
+                variant="reasoning"
+              />
             ) : null}
             {segment.tool_calls?.length ? <ToolCallTree toolCalls={segment.tool_calls} streaming /> : null}
           </div>

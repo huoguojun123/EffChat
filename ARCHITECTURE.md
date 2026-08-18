@@ -61,7 +61,7 @@ backend (Gin)
 ## 前端分层
 
 - `src/components/chat`：聊天区、输入框、模型选择、文件抽屉和附件上传。
-- `src/components/message`：用户/助手消息、Markdown、代码块、思考过程、工具调用树。
+- `src/components/message`：用户/助手消息、Markdown、代码块、思考过程、工具调用树；助手正文与思考过程复用同一安全 Markdown 渲染器，思考过程保持紧凑字号并关闭 artifact 预览。
 - `src/components/workspace`：HTML/SVG/Mermaid/Graphviz/思维导图预览器，以及保留但不再由普通入口触发的旧右侧工作区。
 - `src/components/admin`：受权限保护的 `/admin/:section` 独立页面；按模型与服务、治理与用量、提示与知识、系统分组，按当前栏目懒加载数据。
 - `src/stores`：Zustand 状态，包括认证、会话消息、模型列表、UI 状态和系统信息。

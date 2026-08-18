@@ -7,6 +7,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.2] - 2026-08-18
+
+### Fixed
+
+- Render persisted and streaming reasoning content with the existing safe
+  Markdown renderer, preserving headings, lists, emphasis, code, and paragraph
+  structure while keeping the compact reasoning density and disabling artifact
+  previews.
+
 ## [0.4.1-beta.1] - 2026-08-17
 
 ### Added
@@ -173,7 +182,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.1...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.2...HEAD
+[0.4.1-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.2
 [0.4.1-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.1
 [0.4.0-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.3
 [0.4.0-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.2

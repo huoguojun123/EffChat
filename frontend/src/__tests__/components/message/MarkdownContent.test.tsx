@@ -54,6 +54,22 @@ describe("MarkdownContent rendering", () => {
     expect(html).not.toContain("cdn.jsdelivr.net")
   })
 
+  it("renders reasoning as compact markdown without artifact previews", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content={"## 判断\n\n- **证据一**\n- 证据二"}
+        variant="reasoning"
+        allowArtifactPreviews={false}
+      />
+    )
+
+    expect(html).toContain("<h2>判断</h2>")
+    expect(html).toContain("<strong>证据一</strong>")
+    expect(html).toContain("<ul>")
+    expect(html).toContain("--md-font-size:12px")
+    expect(html).toContain("text-muted-foreground")
+  })
+
   it("disables artifact previews for parsed documents", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent content={"```mermaid\ngraph TD; A-->B\n```"} allowArtifactPreviews={false} />

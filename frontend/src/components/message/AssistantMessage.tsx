@@ -10,7 +10,6 @@ import { ToolCallTree } from "./ToolCallTree"
 import { ReasoningPanel } from "./ReasoningPanel"
 import { assistantErrorDetail, assistantErrorDiagnostic, isErrorAssistant } from "@/lib/chatMessages"
 import { isStreamingInteractionBusy } from "@/lib/streamingStatus"
-import { compactReasoningText } from "@/lib/reasoningText"
 import { getCachedTokens, getCacheHitRate, getReasoningTokens } from "@/lib/usage"
 import { formatTokens } from "@/lib/format"
 import { groupAssistantSegments } from "./assistantSegments"
@@ -309,7 +308,12 @@ const ReasoningSummary = memo(function ReasoningSummary({
         {segments.map((segment, index) => (
           <div key={index} className="space-y-1.5">
             {segment.thinking?.trim() ? (
-              <div className="whitespace-pre-wrap text-xs leading-[1.45] text-muted-foreground">{compactReasoningText(segment.thinking)}</div>
+              <MarkdownContent
+                content={segment.thinking.trim()}
+                ownerKey={`${reasoningKey}:${index}:thinking`}
+                allowArtifactPreviews={false}
+                variant="reasoning"
+              />
             ) : null}
             {segment.tool_calls?.length ? <ToolCallTree toolCalls={segment.tool_calls} /> : null}
           </div>

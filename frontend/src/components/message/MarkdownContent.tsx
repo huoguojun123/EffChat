@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -14,7 +14,7 @@ interface Props {
   streaming?: boolean
   ownerKey?: string
   allowArtifactPreviews?: boolean
-  variant?: "chat" | "document"
+  variant?: "chat" | "document" | "reasoning"
 }
 
 export const MarkdownContent = memo(function MarkdownContent({
@@ -39,6 +39,10 @@ export const MarkdownContent = memo(function MarkdownContent({
   const coordinatesPreviews = allowArtifactPreviews && !streaming && markdownHasDefaultInlinePreview(normalizedContent)
   const collecting = coordinatesPreviews && collectedIdentity !== preparationIdentity
   const preparing = collecting || pendingKeys.size > 0
+  const markdownStyle = variant === "reasoning" ? {
+    "--md-font-size": "12px",
+    "--md-line-height": "1.45",
+  } as CSSProperties : undefined
 
   useLayoutEffect(() => {
     if (!coordinatesPreviews || collectedIdentity === preparationIdentity) return
@@ -90,7 +94,8 @@ export const MarkdownContent = memo(function MarkdownContent({
         <LoadingIndicator label="正在准备图表" className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24" />
       ) : null}
       <div
-        className={`markdown-body transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${preparing ? "opacity-0" : "opacity-100"}`}
+        className={`markdown-body transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${variant === "reasoning" ? "text-muted-foreground" : ""} ${preparing ? "opacity-0" : "opacity-100"}`}
+        style={markdownStyle}
         aria-busy={preparing}
         aria-hidden={preparing || undefined}
         inert={preparing || undefined}

@@ -104,7 +104,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
   }
 
   return (
-    <div className="group py-8">
+    <div className="group py-5 sm:py-6">
       <div className="flex items-start gap-0 sm:gap-4">
         <div className="hidden w-11 shrink-0 justify-center pt-1 sm:flex">
           <AppLogo className="h-8 w-8 text-foreground/80" />

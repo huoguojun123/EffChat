@@ -16,7 +16,7 @@ export function StreamingMessage() {
   const rows = groupAssistantSegments(segments)
 
   return (
-    <div className="py-8">
+    <div className="py-5 sm:py-6">
       <div className="flex items-start gap-0 sm:gap-4">
         <div className="hidden w-11 shrink-0 justify-center pt-1 sm:flex">
           <AppLogo className="h-8 w-8 text-foreground/80" />
@@ -53,12 +53,12 @@ export function StreamingMessage() {
 
             {retryTrace ? (
               <div className="flex h-7 items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 <span>第 {retryTrace.attempt} 次请求暂时失败，{formatRetryDelay(retryTrace.delayMs)}后自动重试</span>
               </div>
             ) : !content && !thinking && toolCalls.length === 0 ? (
               <div className="flex h-7 items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
               </div>
             ) : null}
           </div>

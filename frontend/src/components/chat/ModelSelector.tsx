@@ -91,7 +91,7 @@ export function ModelSelector() {
                 key={modelSelectionKey(model)}
                 role="option"
                 aria-selected={active}
-                className={`flex w-full items-start gap-2.5 rounded-[8px] px-3 py-2 text-left outline-none transition-[background-color,color,box-shadow] duration-200 motion-control ${
+                className={`flex w-full items-start gap-2.5 rounded-[8px] px-3 py-2 text-left outline-none transition-[background-color,color,box-shadow] duration-200 motion-control focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 ${
                   active ? "bg-accent/80 shadow-[0_1px_2px_rgba(0,0,0,0.03)]" : "hover:bg-accent/50"
                 }`}
                 onClick={() => handleSelect(modelSelectionKey(model))}

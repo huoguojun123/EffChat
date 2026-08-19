@@ -33,6 +33,7 @@ const messages = [
     message_data: {
       role: "assistant",
       content: "桌面密度回归内容。",
+      runtime: { duration_ms: 1200, tokens_per_second: 12.3 },
       segments: [
         { thinking: "读取页面结构并检查共享 token。" },
         {
@@ -118,7 +119,7 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await page.locator('[aria-label="侧边栏"]').boundingBox()).not.toBeNull()
   expect(Math.round((await page.locator('[aria-label="侧边栏"]').boundingBox())?.width || 0)).toBe(expected.sidebar)
   expect(Math.round((await page.getByTestId("chat-input").boundingBox())?.height || 0)).toBe(expected.composer)
-  expect(await computed(page, ".markdown-body", "font-size")).toBe("15px")
+  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   await assertNoSmallChromeText(page, ["aside", '[data-testid="composer-toolbar"]'])
 
   const reasoning = page.getByRole("button", { name: /思考过程与工具调用/ })
@@ -126,6 +127,19 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await reasoning.locator(".text-xs").first().evaluate((element) => getComputedStyle(element).fontSize)).toBe("12px")
   await reasoning.click()
   await expect(page.getByRole("button", { name: /联网搜索/ })).toBeVisible()
+
+  const usageToggle = page.getByRole("button", { name: /12\.3\/s/ })
+  await expect(usageToggle).toBeVisible()
+  await usageToggle.click()
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toBeVisible()
+  await expect(page.getByText("1.2秒", { exact: true })).toBeVisible()
+  await page.getByText("桌面密度回归内容。", { exact: true }).click()
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toHaveCount(0)
+  await usageToggle.click()
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toHaveCount(0)
+  await expect(usageToggle).toBeFocused()
 
   await page.getByRole("button", { name: /Fixture Admin/ }).click()
   const slider = page.getByRole("slider", { name: "对话字号" })
@@ -157,11 +171,24 @@ test("standard and compact desktop density keep chat chrome consistent", async (
     await page.goto("/chat/1")
     const dialog = await assertChatDensity(page, density)
     const expectedDialog = density.name === "standard" ? 600 : 560
-    expect(Math.round((await dialog.boundingBox())?.width || 0)).toBe(expectedDialog)
+    await expect.poll(async () => Math.round((await dialog.boundingBox())?.width || 0)).toBe(expectedDialog)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     expect(errors).toEqual([])
     await context.close()
   }
+})
+
+test("protected pages expose a keyboard skip link to the main content", async ({ page }) => {
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  const skipLink = page.getByRole("link", { name: "跳到主要内容" })
+  await page.keyboard.press("Tab")
+  await expect(skipLink).toBeFocused()
+  await skipLink.press("Enter")
+  await expect(page.locator("main#main-content")).toBeFocused()
 })
 
 test("admin density stays readable and mobile touch targets do not shrink", async ({ browser }) => {

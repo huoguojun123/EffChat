@@ -5,6 +5,7 @@ import { useUIStore } from "@/stores/ui"
 import { useChatStore } from "@/stores/chat"
 import { useModelStore } from "@/stores/models"
 import { Sidebar } from "@/components/sidebar/Sidebar"
+import { SkipLink } from "@/components/ui/skip-link"
 import { ChatArea } from "@/components/chat/ChatArea"
 
 export function Layout() {
@@ -106,6 +107,7 @@ export function Layout() {
 
   return (
     <div className="flex h-full overflow-hidden overscroll-none bg-background">
+      <SkipLink />
       {/* Mobile overlay */}
       <div
         data-state={sidebarOpen && isMobile ? "open" : "closed"}
@@ -138,7 +140,7 @@ export function Layout() {
       </aside>
 
       {/* Main */}
-      <main className="flex min-w-0 flex-1 overflow-hidden overscroll-none">
+      <main id="main-content" tabIndex={-1} className="flex min-w-0 flex-1 overflow-hidden overscroll-none focus:outline-none">
         <section className="flex h-full min-w-0 flex-1 flex-col overflow-hidden overscroll-none">
           <ChatArea
             sidebarOpen={sidebarOpen}

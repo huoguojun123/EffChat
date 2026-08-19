@@ -45,7 +45,7 @@ export function AdminModelChannelSidebar({
               key={provider}
               onClick={() => onSelectProvider(provider)}
               aria-pressed={selectedProvider === provider}
-              className={`mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm outline-none transition-colors motion-control ${
+              className={`mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm outline-none transition-colors motion-control focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 ${
                 selectedProvider === provider
                   ? "bg-accent/80 text-accent-foreground"
                   : isMissingGroup

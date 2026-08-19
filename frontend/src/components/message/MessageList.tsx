@@ -595,7 +595,7 @@ function ConversationTurnRail({
           followResumeTimerRef.current = window.setTimeout(() => setFollowRevision((value) => value + 1), 1200)
         }}
         onScroll={(event) => { if (virtual) setScrollTop(event.currentTarget.scrollTop) }}
-        className={`pointer-events-auto outline-none ${scrollable ? "overflow-y-auto overscroll-contain [scrollbar-width:none]" : "flex flex-col justify-center"}`}
+        className={`pointer-events-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${scrollable ? "overflow-y-auto overscroll-contain [scrollbar-width:none]" : "flex flex-col justify-center"}`}
         style={{ height: scrollable ? "min(60vh, 520px)" : "auto" }}
       >
         <div className={scrollable ? "relative" : "flex flex-col justify-center gap-[3px]"} style={virtual ? { height: `${turns.length * rowHeight}px` } : undefined}>
@@ -612,7 +612,7 @@ function ConversationTurnRail({
               onPointerEnter={() => setInteractionIndex(index)}
               onFocus={() => setInteractionIndex(index)}
               onClick={() => void onSelect(turn)}
-              className={`group relative flex items-center outline-none ${scrollable ? "h-2.5" : "h-1.5"} ${virtual ? "absolute left-0" : ""}`}
+              className={`group relative flex items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${scrollable ? "h-2.5" : "h-1.5"} ${virtual ? "absolute left-0" : ""}`}
               style={virtual ? { top: `${index * rowHeight}px` } : undefined}
             >
               <span

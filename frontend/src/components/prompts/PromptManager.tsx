@@ -4,6 +4,7 @@ import { promptsApi, type PromptInput } from "@/api/prompts"
 import { useAuthStore } from "@/stores/auth"
 import type { Prompt, PromptGroup } from "@/types"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MotionView } from "@/components/ui/motion"
 import { Check, ChevronLeft, CopyPlus, Folder, FolderPlus, Globe, Lock, Pencil, Plus, Trash2, X } from "lucide-react"
 import { BusyOwnership, EditorOwnership } from "@/components/admin/editorOwnership"
@@ -14,6 +15,12 @@ interface Props {
 }
 
 const defaultGroupName = "默认分组"
+
+type GroupNameDialogState = { mode: "create" | "rename"; groupId: number | null; name: string }
+type ConfirmDialogState =
+  | { kind: "leave"; title: string; description: string; confirmLabel: string; action: () => void }
+  | { kind: "delete-prompt"; title: string; description: string; confirmLabel: string }
+  | { kind: "delete-group"; title: string; description: string; confirmLabel: string; groupId: number }
 
 const emptyDraft: PromptInput = {
   title: "",
@@ -35,10 +42,13 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState("")
   const [mobileListOpen, setMobileListOpen] = useState(true)
+  const [groupNameDialog, setGroupNameDialog] = useState<GroupNameDialogState | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null)
   const [editorOwner] = useState(() => new EditorOwnership())
   const [loadOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
   const mountedRef = useRef(true)
+  const dialogTriggerRef = useRef<HTMLElement | null>(null)
   const panelDirty = editorOwner.isDirty()
 
   useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
@@ -92,10 +102,42 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
     return id === "new" ? "new-prompt" : `prompt:${id}`
   }
 
-  function canLeavePrompt(nextKey: string) {
-    if (!editorOwner.isDirty()) return true
-    if (editorOwner.currentEntityKey() === nextKey) return false
-    return window.confirm("放弃当前提示词的未保存修改？")
+  function requestPromptChange(nextKey: string, action: () => void) {
+    if (editorOwner.currentEntityKey() === nextKey) return
+    if (!editorOwner.isDirty()) {
+      action()
+      return
+    }
+    rememberDialogTrigger()
+    setConfirmDialog({
+      kind: "leave",
+      title: "放弃未保存的修改？",
+      description: "当前提示词的修改尚未保存。继续后，这些修改将丢失。",
+      confirmLabel: "放弃修改",
+      action,
+    })
+  }
+
+  function rememberDialogTrigger() {
+    dialogTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }
+
+  function restoreDialogTrigger() {
+    const trigger = dialogTriggerRef.current
+    dialogTriggerRef.current = null
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus()
+    })
+  }
+
+  function dismissConfirmDialog() {
+    setConfirmDialog(null)
+    restoreDialogTrigger()
+  }
+
+  function closeGroupNameDialog() {
+    setGroupNameDialog(null)
+    restoreDialogTrigger()
   }
 
   function changeDraft(update: SetStateAction<PromptInput>) {
@@ -107,46 +149,48 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
   function selectPrompt(prompt: Prompt) {
     const key = promptKey(prompt.id)
     if (editorOwner.currentEntityKey() === key && selectedId === prompt.id) return
-    if (!canLeavePrompt(key)) return
-    invalidateBusy("prompt-editor")
-    invalidateBusy("prompt-group")
-    editorOwner.activate(key)
-    setSelectedId(prompt.id)
-    setDraft({
-      title: prompt.title,
-      content: prompt.content,
-      description: prompt.description || "",
-      group_id: prompt.group_id ?? null,
-      group_name: prompt.group_name || defaultGroupName,
-      tags: [],
-      is_public: scope === "admin",
+    requestPromptChange(key, () => {
+      invalidateBusy("prompt-editor")
+      invalidateBusy("prompt-group")
+      editorOwner.activate(key)
+      setSelectedId(prompt.id)
+      setDraft({
+        title: prompt.title,
+        content: prompt.content,
+        description: prompt.description || "",
+        group_id: prompt.group_id ?? null,
+        group_name: prompt.group_name || defaultGroupName,
+        tags: [],
+        is_public: scope === "admin",
+      })
+      setFeedback("")
+      setMobileListOpen(false)
     })
-    setFeedback("")
-    setMobileListOpen(false)
   }
 
   function startNew(base?: Prompt) {
     const key = "new-prompt"
     if (!base && editorOwner.currentEntityKey() === key && selectedId === "new") return
-    if (!canLeavePrompt(key)) return
-    const reusableGroupId = base?.group_id && currentUserGroupIds.has(base.group_id) ? base.group_id : null
-    const reusableGroup = reusableGroupId ? groups.find((group) => group.id === reusableGroupId) : null
-    invalidateBusy("prompt-editor")
-    invalidateBusy("prompt-group")
-    editorOwner.activate(key)
-    if (base) editorOwner.change()
-    setSelectedId("new")
-    setMobileListOpen(false)
-    setDraft(base ? {
-      title: `${base.title} - 我的版本`,
-      content: base.content,
-      description: base.description || "",
-      group_id: reusableGroup?.id ?? null,
-      group_name: reusableGroup?.name ?? defaultGroupName,
-      tags: [],
-      is_public: false,
-    } : { ...emptyDraft })
-    setFeedback("")
+    requestPromptChange(key, () => {
+      const reusableGroupId = base?.group_id && currentUserGroupIds.has(base.group_id) ? base.group_id : null
+      const reusableGroup = reusableGroupId ? groups.find((group) => group.id === reusableGroupId) : null
+      invalidateBusy("prompt-editor")
+      invalidateBusy("prompt-group")
+      editorOwner.activate(key)
+      if (base) editorOwner.change()
+      setSelectedId("new")
+      setMobileListOpen(false)
+      setDraft(base ? {
+        title: `${base.title} - 我的版本`,
+        content: base.content,
+        description: base.description || "",
+        group_id: reusableGroup?.id ?? null,
+        group_name: reusableGroup?.name ?? defaultGroupName,
+        tags: [],
+        is_public: false,
+      } : { ...emptyDraft })
+      setFeedback("")
+    })
   }
 
   const loadData = useCallback(async () => {
@@ -258,7 +302,7 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
     }
   }
 
-  async function handleDelete() {
+  async function deletePrompt() {
     if (selectedId === "new") return
     const targetID = selectedId
     const operation = editorOwner.beginOperation()
@@ -286,15 +330,13 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
     }
   }
 
-  async function createGroup() {
-    const name = window.prompt("输入新分组名称")
-    if (!name?.trim()) return
+  async function createGroup(name: string) {
     const operation = editorOwner.beginOperation()
     const busy = beginBusy("prompt-group")
     setFeedback("")
     try {
       if (scope === "admin") return
-      const group = await promptsApi.createGroup(name.trim())
+      const group = await promptsApi.createGroup(name)
       setGroups((prev) => sortGroups([...prev, group]))
       if (editorOwner.owns(operation)) {
         editorOwner.change()
@@ -310,19 +352,13 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
     }
   }
 
-  async function renameGroup() {
-    const groupID = draft.group_id
-    if (groupID == null) return
-    const group = groups.find((item) => item.id === groupID)
-    if (!group) return
-    const name = window.prompt("输入新的分组名称", group.name)
-    if (!name?.trim() || name.trim() === group.name) return
+  async function renameGroup(groupID: number, name: string) {
     const operation = editorOwner.beginOperation()
     const busy = beginBusy("prompt-group")
     setFeedback("")
     try {
       if (scope === "admin") return
-      const updated = await promptsApi.updateGroup(groupID, name.trim())
+      const updated = await promptsApi.updateGroup(groupID, name)
       setGroups((prev) => sortGroups(prev.map((item) => (item.id === groupID ? updated : item))))
       setPrompts((prev) => prev.map((item) => (item.group_id === groupID ? { ...item, group_name: updated.name } : item)))
       if (editorOwner.owns(operation)) {
@@ -338,11 +374,7 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
     }
   }
 
-  async function deleteGroup() {
-    const groupID = draft.group_id
-    if (groupID == null) return
-    const group = groups.find((item) => item.id === groupID)
-    if (!group || !window.confirm(`删除分组“${group.name}”？提示词会移动到默认分组。`)) return
+  async function deleteGroup(groupID: number) {
     const operation = editorOwner.beginOperation()
     const busy = beginBusy("prompt-group")
     setFeedback("")
@@ -364,6 +396,62 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
     } finally {
       finishBusy(busy)
     }
+  }
+
+  function openCreateGroupDialog() {
+    rememberDialogTrigger()
+    setGroupNameDialog({ mode: "create", groupId: null, name: "" })
+  }
+
+  function openRenameGroupDialog() {
+    const groupID = draft.group_id
+    if (groupID == null) return
+    const group = groups.find((item) => item.id === groupID)
+    if (!group) return
+    rememberDialogTrigger()
+    setGroupNameDialog({ mode: "rename", groupId: group.id, name: group.name })
+  }
+
+  function openDeleteGroupDialog() {
+    const groupID = draft.group_id
+    if (groupID == null) return
+    const group = groups.find((item) => item.id === groupID)
+    if (!group) return
+    rememberDialogTrigger()
+    setConfirmDialog({
+      kind: "delete-group",
+      title: `删除分组“${group.name}”？`,
+      description: "分组会被删除，其中的提示词会移动到默认分组。提示词内容不会被删除。",
+      confirmLabel: "删除分组",
+      groupId: group.id,
+    })
+  }
+
+  async function submitGroupNameDialog() {
+    if (!groupNameDialog) return
+    const name = groupNameDialog.name.trim()
+    if (!name) return
+    if (groupNameDialog.mode === "rename") {
+      const group = groups.find((item) => item.id === groupNameDialog.groupId)
+      if (!group || name === group.name) {
+        setGroupNameDialog(null)
+        return
+      }
+    }
+    const dialog = groupNameDialog
+    closeGroupNameDialog()
+    if (dialog.mode === "create") await createGroup(name)
+    else if (dialog.groupId != null) await renameGroup(dialog.groupId, name)
+  }
+
+  function confirmPendingAction() {
+    const pending = confirmDialog
+    setConfirmDialog(null)
+    dialogTriggerRef.current = null
+    if (!pending) return
+    if (pending.kind === "leave") pending.action()
+    else if (pending.kind === "delete-prompt") void deletePrompt()
+    else void deleteGroup(pending.groupId)
   }
 
   return (
@@ -471,9 +559,9 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
                     </select>
                     {canEdit ? (
                       <div className="flex shrink-0 gap-1">
-                        <IconButton title="新建分组" onClick={createGroup}><FolderPlus className="h-3.5 w-3.5" /></IconButton>
-                        <IconButton title="重命名分组" onClick={renameGroup} disabled={draft.group_id == null}><Pencil className="h-3.5 w-3.5" /></IconButton>
-                        <IconButton title="删除分组" onClick={deleteGroup} disabled={draft.group_id == null}><X className="h-3.5 w-3.5" /></IconButton>
+                        <IconButton title="新建分组" onClick={openCreateGroupDialog}><FolderPlus className="h-3.5 w-3.5" /></IconButton>
+                        <IconButton title="重命名分组" onClick={openRenameGroupDialog} disabled={draft.group_id == null}><Pencil className="h-3.5 w-3.5" /></IconButton>
+                        <IconButton title="删除分组" onClick={openDeleteGroupDialog} disabled={draft.group_id == null}><X className="h-3.5 w-3.5" /></IconButton>
                       </div>
                     ) : null}
                   </div>
@@ -515,7 +603,21 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
             {feedback ? <span className="flex items-center gap-1 text-sm text-muted-foreground"><Check className="h-3.5 w-3.5" />{feedback}</span> : null}
             <div className="ml-auto flex shrink-0 gap-2">
               {selectedId !== "new" && canEdit ? (
-                <Button variant="ghost" size="sm" className="rounded-lg" onClick={handleDelete} disabled={saving}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="rounded-lg text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground"
+                  onClick={() => {
+                    rememberDialogTrigger()
+                    setConfirmDialog({
+                      kind: "delete-prompt",
+                      title: `删除提示词“${draft.title.trim() || "未命名提示词"}”？`,
+                      description: "删除后无法恢复。此操作只影响当前提示词，不会删除分组。",
+                      confirmLabel: "删除提示词",
+                    })
+                  }}
+                  disabled={saving}
+                >
                   <Trash2 className="h-3.5 w-3.5" />
                   删除
                 </Button>
@@ -527,6 +629,20 @@ export function PromptManager({ scope, onDirtyChange }: Props) {
           </div>
         </div>
       </div>
+
+      <TextInputDialog
+        state={groupNameDialog}
+        busy={saving}
+        onStateChange={setGroupNameDialog}
+        onClose={closeGroupNameDialog}
+        onSubmit={() => void submitGroupNameDialog()}
+      />
+      <ConfirmationDialog
+        state={confirmDialog}
+        busy={saving}
+        onClose={dismissConfirmDialog}
+        onConfirm={confirmPendingAction}
+      />
 
       <style>{`
         .prompt-input{height:36px;width:100%;border-radius:8px;border:1px solid var(--border);background:var(--background);padding:0 11px;font-size:var(--text-sm);outline:none}
@@ -568,6 +684,91 @@ function IconButton({
     >
       {children}
     </button>
+  )
+}
+
+function TextInputDialog({
+  state,
+  busy,
+  onStateChange,
+  onClose,
+  onSubmit,
+}: {
+  state: GroupNameDialogState | null
+  busy: boolean
+  onStateChange: (state: GroupNameDialogState | null) => void
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  const title = state?.mode === "rename" ? "重命名分组" : "新建分组"
+  const normalized = state?.name.trim() || ""
+  return (
+    <Dialog open={state !== null} onOpenChange={(open) => { if (!open && !busy) onClose() }}>
+      <DialogContent className="max-w-sm">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSubmit()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>分组名称会显示在个人提示词列表中。</DialogDescription>
+          </DialogHeader>
+          <label className="mt-4 block">
+            <span className="mb-1.5 block text-sm font-medium">分组名称</span>
+            <input
+              autoFocus
+              name="prompt-group-name"
+              autoComplete="off"
+              value={state?.name || ""}
+              onChange={(event) => state && onStateChange({ ...state, name: event.target.value })}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition-[border-color,box-shadow] motion-control focus-visible:border-ring/60 focus-visible:ring-2 focus-visible:ring-ring/15"
+              disabled={busy}
+            />
+          </label>
+          <DialogFooter className="mt-5">
+            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>取消</Button>
+            <Button type="submit" disabled={busy || !normalized}>{busy ? "处理中" : "确认"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ConfirmationDialog({
+  state,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  state: ConfirmDialogState | null
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const destructive = state?.kind === "delete-prompt" || state?.kind === "delete-group"
+  return (
+    <Dialog open={state !== null} onOpenChange={(open) => { if (!open && !busy) onClose() }}>
+      <DialogContent className="max-w-sm" showClose={!busy}>
+        <DialogHeader>
+          <DialogTitle>{state?.title}</DialogTitle>
+          <DialogDescription>{state?.description}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy}>取消</Button>
+          <Button
+            type="button"
+            variant={destructive ? "destructive" : "default"}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? "处理中" : state?.confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -78,6 +78,8 @@ backend (Gin)
 
 移动端高频管理、文件和暂存附件动作使用至少约 44 CSS px 的实际命中盒，同时保持 14–16 px 图标视觉尺寸；原生 list/范围按钮显式复用 `focus-visible` ring，搜索输入提供稳定 accessible name。Radix Dialog 要么提供 `DialogDescription`，要么显式关闭描述关联，避免把 console warning 当作无害噪声。会话记忆继续保存英文 section key 与原始 title，但已知分区在中文界面使用中文展示标签，所有记忆时间统一以 `zh-CN` 24 小时格式显示。
 
+产品 Dialog 按行为区分短确认、文本输入、持续工作窗口和移动 Drawer；危险操作必须先显示影响范围并由用户确认，取消不得发起请求。嵌套在 `WorkspaceWindow` 内的短 Dialog 使用更高 overlay/content 层级，保证遮罩不会拦截子 Dialog；受控 Dialog 调用方负责保存触发元素并在取消时恢复焦点。该契约不替换浏览器级 `beforeunload`，也不引入全局 modal manager。
+
 桌面侧栏宽度由 `--desktop-sidebar-width` 单一 token 所有组件共享。无 `sidebar_width` 浏览器偏好时继续使用标准/紧凑 CSS 默认值；用户调整后只保存 240–360px 的本地偏好，运行时根据 viewport 为主区保留至少约 560px 的空间。`Layout` 内的垂直 separator 支持 Pointer Events、方向键、Home/End 和可见焦点，拖动期间暂停宽度过渡；窄窗口只临时 clamp，窗口变宽后恢复用户目标值。移动端抽屉继续使用 `min(84vw, 300px)`，不显示或读取桌面 separator 交互。
 
 ## 发送消息链路

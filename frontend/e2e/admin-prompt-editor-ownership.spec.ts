@@ -57,13 +57,14 @@ test("prompt save and delete callbacks stay with their editor generation", async
   await expect(content).toHaveValue("Prompt A newer revision")
 
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByText("Prompt B", { exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(content).toHaveValue("Content B")
   await page.waitForTimeout(350)
   await expect(content).toHaveValue("Content B")
 
   await page.getByRole("button", { name: "删除", exact: true }).click()
+  await page.getByRole("dialog", { name: /删除提示词/ }).getByRole("button", { name: "删除提示词" }).click()
   await page.getByText("Prompt A", { exact: true }).click()
   await expect(content).toHaveValue("Prompt A newer revision")
   await page.waitForTimeout(350)

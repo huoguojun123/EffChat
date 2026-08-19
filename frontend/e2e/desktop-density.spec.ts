@@ -51,11 +51,12 @@ const messages = [
   },
 ]
 
-async function installRoutes(page: Page) {
-  await page.addInitScript(() => {
+async function installRoutes(page: Page, theme?: "light" | "dark") {
+  await page.addInitScript((appearance) => {
     localStorage.setItem("token", "density-fixture-token")
     localStorage.setItem("sidebar_open", "true")
-  })
+    if (appearance) localStorage.setItem("theme", appearance)
+  }, theme)
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -120,6 +121,19 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(Math.round((await page.locator('[aria-label="侧边栏"]').boundingBox())?.width || 0)).toBe(expected.sidebar)
   expect(Math.round((await page.getByTestId("chat-input").boundingBox())?.height || 0)).toBe(expected.composer)
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
+  expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
+  expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
+  const messageSurfaces = await page.evaluate(() => {
+    const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
+    const assistant = document.querySelector<HTMLElement>('[data-testid="message-item"][data-role="assistant"] .markdown-body')
+    return {
+      user: user ? getComputedStyle(user).backgroundColor : "",
+      assistant: assistant ? getComputedStyle(assistant).backgroundColor : "",
+    }
+  })
+  expect(messageSurfaces.user).not.toBe("")
+  expect(messageSurfaces.user).not.toBe("rgba(0, 0, 0, 0)")
+  expect(messageSurfaces.user).not.toBe(messageSurfaces.assistant)
   await assertNoSmallChromeText(page, ["aside", '[data-testid="composer-toolbar"]'])
 
   const reasoning = page.getByRole("button", { name: /思考过程与工具调用/ })
@@ -218,4 +232,56 @@ test("admin density stays readable and mobile touch targets do not shrink", asyn
   }
   expect(await mobilePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await mobile.close()
+})
+
+test("mobile composer keeps its primary controls touchable", async ({ browser }) => {
+  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await mobile.newPage()
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  for (const button of await page.getByTestId("composer-toolbar").getByRole("button").all()) {
+    const box = await button.boundingBox()
+    expect(box?.width || 0).toBeGreaterThanOrEqual(44)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(44)
+  }
+  const send = await page.getByTestId("send-button").boundingBox()
+  expect(send?.width || 0).toBeGreaterThanOrEqual(44)
+  expect(send?.height || 0).toBeGreaterThanOrEqual(44)
+  expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
+
+  await mobile.close()
+})
+
+test("composer and message surfaces stay distinct in light and dark themes", async ({ browser }) => {
+  for (const theme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25 })
+    const page = await context.newPage()
+    await installRoutes(page, theme)
+    await page.goto("/chat/1")
+    await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+    await waitForFonts(page)
+
+    expect(await page.locator("html").evaluate((element) => element.classList.contains("dark"))).toBe(theme === "dark")
+    expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
+    const surfaces = await page.evaluate(() => {
+      const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
+      const assistant = document.querySelector<HTMLElement>('[data-testid="message-item"][data-role="assistant"] .markdown-body')
+      const composer = document.querySelector<HTMLElement>('[data-testid="composer-surface"]')
+      return {
+        user: user ? getComputedStyle(user).backgroundColor : "",
+        assistant: assistant ? getComputedStyle(assistant).backgroundColor : "",
+        composer: composer ? getComputedStyle(composer).backgroundColor : "",
+      }
+    })
+    expect(surfaces.user).not.toBe("")
+    expect(surfaces.composer).not.toBe("")
+    expect(surfaces.user).not.toBe(surfaces.assistant)
+    expect(surfaces.composer).not.toBe(surfaces.assistant)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+
+    await context.close()
+  }
 })

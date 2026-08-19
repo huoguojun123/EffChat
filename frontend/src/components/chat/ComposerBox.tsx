@@ -66,23 +66,24 @@ export function ComposerBox({
   return (
     <div className="min-w-0">
       <div
+        data-testid="composer-surface"
         className={cn(
-          "relative rounded-[18px] border border-white/40 bg-popover/52 px-3 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.34),0_14px_38px_-12px_rgba(0,0,0,0.14),0_3px_10px_rgba(0,0,0,0.05)] backdrop-blur-2xl backdrop-saturate-150 transition-[background-color,border-color,box-shadow] motion-control focus-within:border-ring/45 focus-within:bg-popover/60 dark:border-white/10"
+          "relative rounded-[18px] border border-border/80 bg-popover/96 px-3 py-1 shadow-[0_12px_32px_-20px_rgba(0,0,0,0.32),0_2px_8px_rgba(0,0,0,0.06)] transition-[background-color,border-color,box-shadow] motion-control focus-within:border-ring/55 focus-within:bg-popover focus-within:ring-3 focus-within:ring-ring/12"
         )}
       >
         {showStatus && (
-          <div className="mb-1 space-y-1.5 pt-1.5 animate-msg-in">
-            {stagedCount > 0 && <button type="button" onClick={onOpenStaging} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><Paperclip className="h-3.5 w-3.5" />本次已选 {attachments.length} 个附件，暂存 {stagedCount} 个</button>}
+          <div role="status" aria-live="polite" className="mb-1 space-y-1.5 pt-1.5 animate-msg-in">
+            {stagedCount > 0 && <button type="button" onClick={onOpenStaging} className="flex min-h-8 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground transition-colors motion-control hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><Paperclip className="h-3.5 w-3.5" aria-hidden="true" />本次已选 {attachments.length} 个附件，暂存 {stagedCount} 个</button>}
             {imageUnsupported && (
               <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>当前模型不支持图片输入；发送后会作为附件说明处理，不会读图。</span>
               </div>
             )}
             {uploadError && <p className="text-xs text-destructive-foreground">{uploadError}</p>}
             {attachmentNotice && (
               <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>{attachmentNotice}</span>
               </div>
             )}
@@ -102,7 +103,7 @@ export function ComposerBox({
                     type="button"
                     variant="secondary"
                     size="sm"
-                    className="h-6 rounded-[8px] px-2 text-xs"
+                    className="h-8 rounded-[8px] px-2 text-xs"
                     onClick={noticeAction.onClick}
                   >
                     {noticeAction.label}
@@ -121,19 +122,21 @@ export function ComposerBox({
           onPaste={onPaste}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
+          name="message"
+          autoComplete="off"
           aria-label="消息输入"
           placeholder="输入消息…"
-          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[5.6rem] text-sm leading-6 outline-none [font-family:var(--chat-font-family,var(--font-serif))] placeholder:text-muted-foreground/40"
+          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[6.25rem] text-[15px] leading-6 outline-none [font-family:var(--chat-font-family,var(--font-serif))] placeholder:text-muted-foreground/50 sm:pr-[5.6rem]"
           data-testid="chat-input"
         />
 
-        <div className="absolute bottom-2.5 right-2 flex items-center gap-1.5">
+        <div className="absolute bottom-1.5 right-2 flex items-center gap-1.5 sm:bottom-2.5">
           <ContextStatusButton messages={messages} model={currentModel} />
           <Button
             size="icon"
             variant={isAbortable ? "ghost" : "default"}
             className={cn(
-              "h-9 w-9 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control",
+              "h-11 w-11 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control sm:h-9 sm:w-9",
               isAbortable && "text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground",
               isStreaming && !isAbortable && "cursor-wait"
             )}
@@ -143,9 +146,9 @@ export function ComposerBox({
             aria-label={isAbortable ? "停止生成" : isStreaming ? "正在确认结果" : "发送消息"}
           >
             {isStreaming && !isAbortable ? (
-              <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+              <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
             ) : (
-              <span className="relative block h-4 w-4">
+              <span className="relative block h-4 w-4" aria-hidden="true">
               <Send
                 className={cn(
                   "absolute inset-0 h-4 w-4 transition-[opacity,transform] motion-surface",

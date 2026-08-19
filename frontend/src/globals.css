@@ -953,6 +953,26 @@ html.app-route-leaving #root {
   font-weight: 400;
 }
 
+.message-user-surface {
+  background: var(--popover);
+  border-color: var(--border);
+}
+
+.message-user-fade {
+  background: linear-gradient(to top, var(--popover), transparent);
+}
+
+@supports (color: color-mix(in oklch, red, blue)) {
+  .message-user-surface {
+    background: color-mix(in oklch, var(--popover) 93%, var(--primary) 7%);
+    border-color: color-mix(in oklch, var(--border) 78%, var(--primary) 22%);
+  }
+
+  .message-user-fade {
+    background: linear-gradient(to top, color-mix(in oklch, var(--popover) 93%, var(--primary) 7%), transparent);
+  }
+}
+
 .shiki-code-block {
   max-width: 100%;
   overflow: visible;

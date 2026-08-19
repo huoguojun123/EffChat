@@ -8,12 +8,14 @@ import {
   type AppearanceMode,
   type ColorThemeId,
 } from "@/lib/themes"
+import { applyDesktopSidebarWidth, normalizeDesktopSidebarPreference } from "@/lib/sidebarWidth"
 
 // 字号档位：85%–125%，步长 5%，共 9 档。滑块连续拖动但吸附到这些档位。
 // 必须声明在 create() 之前：store 工厂在模块加载时立即执行并读取这些常量。
 export const CHAT_FONT_STEPS = [0.85, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.2, 1.25]
 const DEFAULT_FONT_SCALE = 1
 const SIDEBAR_OPEN_KEY = "sidebar_open"
+const SIDEBAR_WIDTH_KEY = "sidebar_width"
 
 // 把任意数值吸附到最近的档位。
 function snapFontScale(scale: number): number {
@@ -47,8 +49,23 @@ function writeSidebarOpen(open: boolean) {
   storageSet(SIDEBAR_OPEN_KEY, String(open))
 }
 
+function readInitialSidebarWidth() {
+  const raw = storageGet(SIDEBAR_WIDTH_KEY)
+  if (raw === null) return null
+  const width = normalizeDesktopSidebarPreference(Number(raw))
+  if (width === null && typeof localStorage !== "undefined") localStorage.removeItem(SIDEBAR_WIDTH_KEY)
+  return width
+}
+
+function writeSidebarWidth(width: number | null) {
+  if (typeof localStorage === "undefined") return
+  if (width === null) localStorage.removeItem(SIDEBAR_WIDTH_KEY)
+  else localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width))
+}
+
 interface UIState {
   sidebarOpen: boolean
+  sidebarWidth: number | null
   codeBlockStates: Record<string, CodeBlockViewState>
   reasoningOpenStates: Record<string, ReasoningViewState>
   theme: AppearanceMode
@@ -58,6 +75,7 @@ interface UIState {
   chatFontScale: number
   toggleSidebar: () => void
   setSidebarOpen: (open: boolean, persist?: boolean) => void
+  setSidebarWidth: (width: number | null) => void
   setCodeBlockMode: (key: string, mode: CodeBlockMode) => void
   setCodeBlockExpanded: (key: string, expanded: boolean) => void
   resetCodeBlockStatesForSession: (sessionId: number) => void
@@ -74,6 +92,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>()((set, get) => ({
   sidebarOpen: readInitialSidebarOpen(),
+  sidebarWidth: readInitialSidebarWidth(),
   codeBlockStates: {},
   reasoningOpenStates: {},
   theme: readAppearanceMode(),
@@ -90,6 +109,12 @@ export const useUIStore = create<UIState>()((set, get) => ({
   setSidebarOpen: (open: boolean, persist = true) => {
     if (persist) writeSidebarOpen(open)
     set({ sidebarOpen: open })
+  },
+  setSidebarWidth: (width: number | null) => {
+    const normalized = width === null ? null : normalizeDesktopSidebarPreference(width)
+    writeSidebarWidth(normalized)
+    applyDesktopSidebarWidth(normalized)
+    set({ sidebarWidth: normalized })
   },
   setCodeBlockMode: (key: string, mode: CodeBlockMode) => set((s) => ({
     codeBlockStates: {
@@ -247,6 +272,7 @@ function storageSet(key: string, value: string) {
 }
 
 const initialUIState = useUIStore.getState()
+applyDesktopSidebarWidth(initialUIState.sidebarWidth)
 applyAppearance(initialUIState.theme, initialUIState.lightColorTheme, initialUIState.darkColorTheme, initialUIState.accentColor)
 applyChatFontScale(useUIStore.getState().chatFontScale)
 watchSystemTheme()

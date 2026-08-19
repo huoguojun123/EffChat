@@ -51,12 +51,15 @@ const messages = [
   },
 ]
 
-async function installRoutes(page: Page, theme?: "light" | "dark") {
-  await page.addInitScript((appearance) => {
+async function installRoutes(page: Page, options: { theme?: "light" | "dark"; sidebarWidth?: number } = {}) {
+  await page.addInitScript((settings) => {
     localStorage.setItem("token", "density-fixture-token")
     localStorage.setItem("sidebar_open", "true")
-    if (appearance) localStorage.setItem("theme", appearance)
-  }, theme)
+    if (settings.theme) localStorage.setItem("theme", settings.theme)
+    if (settings.sidebarWidth !== undefined && localStorage.getItem("sidebar_width") === null) {
+      localStorage.setItem("sidebar_width", String(settings.sidebarWidth))
+    }
+  }, options)
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -259,7 +262,7 @@ test("composer and message surfaces stay distinct in light and dark themes", asy
   for (const theme of ["light", "dark"] as const) {
     const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25 })
     const page = await context.newPage()
-    await installRoutes(page, theme)
+    await installRoutes(page, { theme })
     await page.goto("/chat/1")
     await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
     await waitForFonts(page)
@@ -284,4 +287,58 @@ test("composer and message surfaces stay distinct in light and dark themes", asy
 
     await context.close()
   }
+})
+
+test("desktop sidebar resize is bounded, keyboard accessible, and persistent", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const page = await context.newPage()
+  await installRoutes(page, { sidebarWidth: 320 })
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  const sidebar = page.getByRole("complementary", { name: "侧边栏" })
+  let separator = page.getByRole("separator", { name: "调整侧边栏宽度" })
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(320)
+  await expect(separator).toHaveAttribute("aria-valuemin", "240")
+  await expect(separator).toHaveAttribute("aria-valuemax", "360")
+  await expect(separator).toHaveAttribute("aria-valuenow", "320")
+
+  await separator.focus()
+  await separator.press("ArrowRight")
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(336)
+  await page.reload()
+  separator = page.getByRole("separator", { name: "调整侧边栏宽度" })
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(336)
+
+  await separator.press("Home")
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(240)
+  await separator.press("End")
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(360)
+
+  const handle = await separator.boundingBox()
+  expect(handle).not.toBeNull()
+  await page.mouse.move((handle?.x || 0) + 2, (handle?.y || 0) + 80)
+  await page.mouse.down()
+  await page.mouse.move(120, (handle?.y || 0) + 80)
+  await page.mouse.up()
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(240)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await context.close()
+})
+
+test("mobile sidebar ignores the desktop width preference", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await installRoutes(page, { sidebarWidth: 340 })
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+
+  await expect(page.getByRole("separator", { name: "调整侧边栏宽度" })).toHaveCount(0)
+  await page.getByRole("button", { name: "打开侧边栏" }).click()
+  const sidebar = page.getByRole("complementary", { name: "侧边栏" })
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(300)
+  await expect(page.getByRole("separator", { name: "调整侧边栏宽度" })).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await context.close()
 })

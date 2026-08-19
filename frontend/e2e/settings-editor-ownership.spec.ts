@@ -52,32 +52,32 @@ test("dirty settings guard tab switches, close, and Prompt Manager navigation", 
   const email = page.getByLabel("邮箱")
   await email.fill("dirty-profile@example.invalid")
 
-  page.once("dialog", (dialog) => dialog.dismiss())
   await page.getByRole("button", { name: "密码", exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "继续编辑" }).click()
   await expect(email).toHaveValue("dirty-profile@example.invalid")
 
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByRole("button", { name: "密码", exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "放弃修改" }).click()
   const currentPassword = page.getByLabel("当前密码")
   await expect(currentPassword).toBeVisible()
   await currentPassword.fill("old-secret")
 
-  page.once("dialog", (dialog) => dialog.dismiss())
   await page.keyboard.press("Escape")
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "继续编辑" }).click()
   await expect(currentPassword).toHaveValue("old-secret")
 
-  page.once("dialog", (dialog) => dialog.accept())
   await page.keyboard.press("Escape")
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(page.getByRole("dialog", { name: "设置" })).toHaveCount(0)
 
   await openSettings(page)
   await page.getByLabel("昵称").fill("New Fixture Name")
-  page.once("dialog", (dialog) => dialog.dismiss())
   await page.getByRole("button", { name: "提示词", exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "继续编辑" }).click()
   await expect(page.getByLabel("昵称")).toHaveValue("New Fixture Name")
 
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByRole("button", { name: "提示词", exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存的修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(page.getByRole("dialog", { name: "提示词管理" })).toBeVisible()
 })
 

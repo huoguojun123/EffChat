@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react"
 import { useNavigate, useParams } from "react-router"
 import { getSession } from "@/api/sessions"
 import { useUIStore } from "@/stores/ui"
@@ -7,12 +7,21 @@ import { useModelStore } from "@/stores/models"
 import { Sidebar } from "@/components/sidebar/Sidebar"
 import { SkipLink } from "@/components/ui/skip-link"
 import { ChatArea } from "@/components/chat/ChatArea"
+import {
+  DESKTOP_SIDEBAR_MIN_WIDTH,
+  DESKTOP_SIDEBAR_STEP,
+  applyDesktopSidebarWidth,
+  clampDesktopSidebarWidth,
+  desktopSidebarMaxWidth,
+} from "@/lib/sidebarWidth"
 
 export function Layout() {
   const navigate = useNavigate()
   const { sessionId } = useParams()
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
+  const sidebarWidth = useUIStore((s) => s.sidebarWidth)
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
+  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth)
   const loadSessions = useChatStore((s) => s.loadSessions)
   const loadSessionFolders = useChatStore((s) => s.loadSessionFolders)
   const loadSessionCreateReadiness = useChatStore((s) => s.loadSessionCreateReadiness)
@@ -23,7 +32,14 @@ export function Layout() {
   const loadModels = useModelStore((s) => s.loadModels)
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 768px)").matches)
   const [sessionsLoaded, setSessionsLoaded] = useState(false)
+  const [sidebarRenderedWidth, setSidebarRenderedWidth] = useState(DESKTOP_SIDEBAR_MIN_WIDTH)
+  const [sidebarMaxWidth, setSidebarMaxWidth] = useState(() => desktopSidebarMaxWidth(window.innerWidth))
+  const [resizingSidebar, setResizingSidebar] = useState(false)
   const routeLookupRef = useRef<number | null>(null)
+  const sidebarRef = useRef<HTMLElement | null>(null)
+  const resizePointerRef = useRef<number | null>(null)
+  const resizeWidthRef = useRef(DESKTOP_SIDEBAR_MIN_WIDTH)
+  const previousUserSelectRef = useRef("")
 
   useEffect(() => {
     let cancelled = false
@@ -105,6 +121,78 @@ export function Layout() {
     return () => mq.removeEventListener("change", handler)
   }, [setSidebarOpen])
 
+  useEffect(() => {
+    const update = () => {
+      applyDesktopSidebarWidth(sidebarWidth)
+      setSidebarMaxWidth(desktopSidebarMaxWidth(window.innerWidth))
+    }
+    update()
+    window.addEventListener("resize", update)
+    return () => window.removeEventListener("resize", update)
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    const sidebar = sidebarRef.current
+    if (!sidebar || typeof ResizeObserver === "undefined") return
+    const update = () => {
+      const width = Math.round(sidebar.getBoundingClientRect().width)
+      if (width >= DESKTOP_SIDEBAR_MIN_WIDTH) {
+        resizeWidthRef.current = width
+        setSidebarRenderedWidth(width)
+      }
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(sidebar)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => () => {
+    document.body.style.userSelect = previousUserSelectRef.current
+    applyDesktopSidebarWidth(useUIStore.getState().sidebarWidth)
+  }, [])
+
+  const updateSidebarWidth = useCallback((requestedWidth: number) => {
+    const width = clampDesktopSidebarWidth(requestedWidth, window.innerWidth)
+    resizeWidthRef.current = width
+    setSidebarRenderedWidth(width)
+    applyDesktopSidebarWidth(width)
+    return width
+  }, [])
+
+  function finishSidebarResize(pointerId: number) {
+    if (resizePointerRef.current !== pointerId) return
+    resizePointerRef.current = null
+    document.body.style.userSelect = previousUserSelectRef.current
+    setResizingSidebar(false)
+    setSidebarWidth(resizeWidthRef.current)
+  }
+
+  function handleSidebarPointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    resizePointerRef.current = event.pointerId
+    previousUserSelectRef.current = document.body.style.userSelect
+    document.body.style.userSelect = "none"
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setResizingSidebar(true)
+  }
+
+  function handleSidebarPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (resizePointerRef.current !== event.pointerId) return
+    updateSidebarWidth(event.clientX)
+  }
+
+  function handleSidebarKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    let nextWidth: number | null = null
+    if (event.key === "ArrowLeft") nextWidth = sidebarRenderedWidth - DESKTOP_SIDEBAR_STEP
+    if (event.key === "ArrowRight") nextWidth = sidebarRenderedWidth + DESKTOP_SIDEBAR_STEP
+    if (event.key === "Home") nextWidth = DESKTOP_SIDEBAR_MIN_WIDTH
+    if (event.key === "End") nextWidth = sidebarMaxWidth
+    if (nextWidth === null) return
+    event.preventDefault()
+    setSidebarWidth(updateSidebarWidth(nextWidth))
+  }
+
   return (
     <div className="flex h-full overflow-hidden overscroll-none bg-background">
       <SkipLink />
@@ -122,6 +210,7 @@ export function Layout() {
 
       {/* Sidebar */}
       <aside
+        ref={sidebarRef}
         id="app-sidebar"
         data-state={sidebarOpen ? "open" : "closed"}
         aria-label="侧边栏"
@@ -129,7 +218,7 @@ export function Layout() {
         inert={!sidebarOpen ? true : undefined}
         className={`
           ${isMobile ? "fixed inset-y-0 left-0 z-50" : "relative"}
-          ${isMobile ? "w-[min(84vw,300px)] transform-gpu transition-transform motion-surface" : `${sidebarOpen ? "w-[var(--desktop-sidebar-width)]" : "w-0"} transition-[width,border-color] motion-panel`}
+          ${isMobile ? "w-[min(84vw,300px)] transform-gpu transition-transform motion-surface" : `${sidebarOpen ? "w-[var(--desktop-sidebar-width)]" : "w-0"} ${resizingSidebar ? "transition-none" : "transition-[width,border-color] motion-panel"}`}
           shrink-0 overflow-hidden overscroll-none
           border-r will-change-transform
           ${isMobile ? (sidebarOpen ? "pointer-events-auto translate-x-0 border-border" : "pointer-events-none -translate-x-[calc(100%+1px)] border-transparent") : ""}
@@ -137,6 +226,28 @@ export function Layout() {
         `}
       >
         <Sidebar />
+        {!isMobile && sidebarOpen && sidebarMaxWidth > DESKTOP_SIDEBAR_MIN_WIDTH ? (
+          <div
+            role="separator"
+            aria-label="调整侧边栏宽度"
+            aria-controls="app-sidebar"
+            aria-orientation="vertical"
+            aria-valuemin={DESKTOP_SIDEBAR_MIN_WIDTH}
+            aria-valuemax={sidebarMaxWidth}
+            aria-valuenow={sidebarRenderedWidth}
+            tabIndex={0}
+            title="拖动或使用方向键调整侧边栏宽度"
+            className="group absolute inset-y-0 right-0 z-20 flex w-2 cursor-col-resize touch-none select-none items-stretch justify-center focus-visible:bg-sidebar-accent/70 focus-visible:outline-none"
+            onPointerDown={handleSidebarPointerDown}
+            onPointerMove={handleSidebarPointerMove}
+            onPointerUp={(event) => finishSidebarResize(event.pointerId)}
+            onPointerCancel={(event) => finishSidebarResize(event.pointerId)}
+            onLostPointerCapture={(event) => finishSidebarResize(event.pointerId)}
+            onKeyDown={handleSidebarKeyDown}
+          >
+            <span aria-hidden="true" className="w-px bg-transparent transition-colors motion-control group-hover:bg-sidebar-border group-focus-visible:bg-sidebar-ring" />
+          </div>
+        ) : null}
       </aside>
 
       {/* Main */}

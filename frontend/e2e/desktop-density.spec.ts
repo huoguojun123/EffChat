@@ -335,6 +335,18 @@ test("light and dark semantic text tokens meet the representative contrast floor
   }
 })
 
+test("icon-only chat controls expose a keyboard-visible tooltip", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1536, height: 864 } })
+  const page = await context.newPage()
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  const sidebarToggle = page.getByRole("button", { name: "收起侧边栏" })
+  await expect(sidebarToggle).toBeVisible()
+  await sidebarToggle.focus()
+  await expect(page.getByRole("tooltip")).toHaveText("收起侧边栏", { timeout: 1200 })
+  await context.close()
+})
+
 test("desktop sidebar resize is bounded, keyboard accessible, and persistent", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   const page = await context.newPage()

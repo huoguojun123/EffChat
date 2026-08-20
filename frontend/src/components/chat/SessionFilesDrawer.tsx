@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { AlertTriangle, Download, FileText, ImageIcon, Loader2, RefreshCw, Search, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { canRetryOCR, filesApi, isOCRPending, isOCRRefreshable, type FileInfo } from "@/api/files"
 import { cn } from "@/lib/utils"
 import { formatBytes, formatTokens } from "@/lib/format"
@@ -174,9 +175,14 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
       defaultWidth={1240}
       defaultHeight={820}
       toolbar={(
-        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={loadFiles} disabled={loading} aria-label="刷新文件列表">
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={loadFiles} disabled={loading} aria-label="刷新文件列表">
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>刷新文件列表</TooltipContent>
+        </Tooltip>
       )}
     >
       <div role="region" aria-label="会话文件" className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[15rem_minmax(0,1fr)]">

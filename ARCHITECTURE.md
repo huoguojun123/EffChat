@@ -84,6 +84,8 @@ backend (Gin)
 
 产品 Dialog 按行为区分短确认、文本输入、持续工作窗口和移动 Drawer；危险操作必须先显示影响范围并由用户确认，取消不得发起请求。嵌套在 `WorkspaceWindow` 内的短 Dialog 使用更高 overlay/content 层级，保证遮罩不会拦截子 Dialog；受控 Dialog 调用方负责保存触发元素并在取消时恢复焦点。该契约不替换浏览器级 `beforeunload`，也不引入全局 modal manager。
 
+语义不透明的 icon-only 控件使用共享 Radix Tooltip（Provider 延迟 500ms、focus 快速显示、Portal、碰撞内边距 8px），同时保留原有 `aria-label` 作为无障碍名称。当前已覆盖 Chat 侧栏/文件入口、Composer 发送/停止、暂存附件操作、会话文件刷新和 Admin 用户分页；普通截断文本继续使用 `title`，不把 tooltip 当作唯一功能或把所有文字机械包装。
+
 桌面侧栏宽度由 `--desktop-sidebar-width` 单一 token 所有组件共享。无 `sidebar_width` 浏览器偏好时继续使用标准/紧凑 CSS 默认值；用户调整后只保存 240–360px 的本地偏好，运行时根据 viewport 为主区保留至少约 560px 的空间。`Layout` 内的垂直 separator 支持 Pointer Events、方向键、Home/End 和可见焦点，拖动期间暂停宽度过渡；窄窗口只临时 clamp，窗口变宽后恢复用户目标值。移动端抽屉继续使用 `min(84vw, 300px)`，不显示或读取桌面 separator 交互。
 
 ## 发送消息链路

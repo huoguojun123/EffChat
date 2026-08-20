@@ -3,6 +3,7 @@ import { AlertTriangle, LoaderCircle, Paperclip, Send, Square } from "lucide-rea
 import type { FileInfo } from "@/api/files"
 import type { Message, Model, StreamLifecycleState } from "@/types"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { ContextStatusButton } from "./ChatInputParts"
 
@@ -132,23 +133,25 @@ export function ComposerBox({
 
         <div className="absolute bottom-1.5 right-2 flex items-center gap-1.5 sm:bottom-2.5">
           <ContextStatusButton messages={messages} model={currentModel} />
-          <Button
-            size="icon"
-            variant={isAbortable ? "ghost" : "default"}
-            className={cn(
-              "h-11 w-11 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control sm:h-9 sm:w-9",
-              isAbortable && "text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground",
-              isStreaming && !isAbortable && "cursor-wait"
-            )}
-            disabled={isStreaming ? !isAbortable : !canSend}
-            onClick={isAbortable ? onAbort : onSubmit}
-            data-testid={isAbortable ? "stop-button" : "send-button"}
-            aria-label={isAbortable ? "停止生成" : isStreaming ? "正在确认结果" : "发送消息"}
-          >
-            {isStreaming && !isAbortable ? (
-              <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            ) : (
-              <span className="relative block h-4 w-4" aria-hidden="true">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant={isAbortable ? "ghost" : "default"}
+                className={cn(
+                  "h-11 w-11 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control sm:h-9 sm:w-9",
+                  isAbortable && "text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground",
+                  isStreaming && !isAbortable && "cursor-wait"
+                )}
+                disabled={isStreaming ? !isAbortable : !canSend}
+                onClick={isAbortable ? onAbort : onSubmit}
+                data-testid={isAbortable ? "stop-button" : "send-button"}
+                aria-label={isAbortable ? "停止生成" : isStreaming ? "正在确认结果" : "发送消息"}
+              >
+                {isStreaming && !isAbortable ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                ) : (
+                  <span className="relative block h-4 w-4" aria-hidden="true">
               <Send
                 className={cn(
                   "absolute inset-0 h-4 w-4 transition-[opacity,transform] motion-surface",
@@ -161,9 +164,12 @@ export function ComposerBox({
                   isAbortable ? "scale-100 rotate-0 opacity-100" : "scale-75 -rotate-45 opacity-0"
                 )}
               />
-              </span>
-            )}
-          </Button>
+                  </span>
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isAbortable ? "停止生成" : isStreaming ? "正在确认结果" : "发送消息"}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>

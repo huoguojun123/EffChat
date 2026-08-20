@@ -72,6 +72,26 @@
   --accent-green: #1a7f4b;
   --accent-amber: #9a6700;
   --accent-rose: #cf3f6f;
+  --status-success-fg: #166534;
+  --status-success-bg: color-mix(in srgb, #22c55e 10%, transparent);
+  --status-success-border: color-mix(in srgb, #16a34a 30%, transparent);
+  --status-success-solid: #16a34a;
+  --status-warning-fg: #92400e;
+  --status-warning-bg: color-mix(in srgb, #f59e0b 12%, transparent);
+  --status-warning-border: color-mix(in srgb, #d97706 32%, transparent);
+  --status-warning-solid: #d97706;
+  --status-error-fg: #b91c1c;
+  --status-error-bg: color-mix(in srgb, #ef4444 10%, transparent);
+  --status-error-border: color-mix(in srgb, #dc2626 30%, transparent);
+  --status-error-solid: #dc2626;
+  --status-info-fg: #075985;
+  --status-info-bg: color-mix(in srgb, #0ea5e9 10%, transparent);
+  --status-info-border: color-mix(in srgb, #0284c7 30%, transparent);
+  --status-info-solid: #0284c7;
+  --status-running-fg: #1d4ed8;
+  --status-running-bg: color-mix(in srgb, #3b82f6 10%, transparent);
+  --status-running-border: color-mix(in srgb, #2563eb 30%, transparent);
+  --status-running-solid: #2563eb;
 }
 
 select:not(.appearance-none) {
@@ -228,6 +248,26 @@ select:not(.appearance-none):focus-visible {
 .dark {
   --destructive: #ef4444;
   --destructive-fg: #fca5a5;
+  --status-success-fg: #86efac;
+  --status-success-bg: color-mix(in srgb, #22c55e 16%, transparent);
+  --status-success-border: color-mix(in srgb, #4ade80 28%, transparent);
+  --status-success-solid: #4ade80;
+  --status-warning-fg: #fde68a;
+  --status-warning-bg: color-mix(in srgb, #f59e0b 16%, transparent);
+  --status-warning-border: color-mix(in srgb, #fbbf24 28%, transparent);
+  --status-warning-solid: #fbbf24;
+  --status-error-fg: #fca5a5;
+  --status-error-bg: color-mix(in srgb, #ef4444 16%, transparent);
+  --status-error-border: color-mix(in srgb, #f87171 28%, transparent);
+  --status-error-solid: #f87171;
+  --status-info-fg: #7dd3fc;
+  --status-info-bg: color-mix(in srgb, #0ea5e9 16%, transparent);
+  --status-info-border: color-mix(in srgb, #38bdf8 28%, transparent);
+  --status-info-solid: #38bdf8;
+  --status-running-fg: #93c5fd;
+  --status-running-bg: color-mix(in srgb, #3b82f6 16%, transparent);
+  --status-running-border: color-mix(in srgb, #60a5fa 28%, transparent);
+  --status-running-solid: #60a5fa;
 }
 
 @layer base {
@@ -260,6 +300,16 @@ select:not(.appearance-none):focus-visible {
 }
 
 @layer utilities {
+  .status-success { color: var(--status-success-fg); background-color: var(--status-success-bg); border-color: var(--status-success-border); }
+  .status-warning { color: var(--status-warning-fg); background-color: var(--status-warning-bg); border-color: var(--status-warning-border); }
+  .status-error { color: var(--status-error-fg); background-color: var(--status-error-bg); border-color: var(--status-error-border); }
+  .status-info { color: var(--status-info-fg); background-color: var(--status-info-bg); border-color: var(--status-info-border); }
+  .status-running { color: var(--status-running-fg); background-color: var(--status-running-bg); border-color: var(--status-running-border); }
+  .status-success-solid { color: var(--status-success-solid); }
+  .status-warning-solid { color: var(--status-warning-solid); }
+  .status-error-solid { color: var(--status-error-solid); }
+  .status-info-solid { color: var(--status-info-solid); }
+  .status-running-solid { color: var(--status-running-solid); }
   .motion-control {
     transition-duration: var(--motion-duration-control);
     transition-timing-function: var(--motion-ease-standard);

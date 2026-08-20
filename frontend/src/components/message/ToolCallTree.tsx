@@ -99,11 +99,11 @@ function ToolCallNode({
 
 function ToolFailureView({ failure }: { failure: ToolFailure }) {
   return (
-    <div className="rounded-md border border-rose-200/70 bg-rose-50 px-2 py-1.5 text-xs leading-5 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-300">
+    <div className="status-error rounded-md border px-2 py-1.5 text-xs leading-5">
       <div className="font-medium">工具调用失败</div>
       <div>{failure.error || failure.message || "未知错误"}</div>
-      {failure.source === "tool_quota" && failure.code ? <div className="mt-1 text-rose-600/80 dark:text-rose-300/80">限额：{failure.code}</div> : null}
-      {failure.retryable ? <div className="mt-1 text-rose-600/80 dark:text-rose-300/80">可稍后重试</div> : null}
+      {failure.source === "tool_quota" && failure.code ? <div className="mt-1 opacity-80">限额：{failure.code}</div> : null}
+      {failure.retryable ? <div className="mt-1 opacity-80">可稍后重试</div> : null}
     </div>
   )
 }
@@ -118,10 +118,10 @@ function StatusBadge({ status }: { status: string }) {
   return (
     <span className={cn(
       "inline-flex items-center gap-1 text-xs",
-      status === "done" && "text-emerald-600 dark:text-emerald-400",
-      status === "warning" && "text-amber-700 dark:text-amber-300",
-      status === "error" && "text-rose-600 dark:text-rose-400",
-      status === "running" && "text-blue-600 dark:text-blue-400"
+      status === "done" && "status-success-solid",
+      status === "warning" && "status-warning-solid",
+      status === "error" && "status-error-solid",
+      status === "running" && "status-running-solid"
     )}>
       {status === "done" ? <Check className="h-3 w-3" /> : null}
       {status === "warning" ? <><AlertTriangle className="h-3 w-3" /><span>内容受限</span></> : null}

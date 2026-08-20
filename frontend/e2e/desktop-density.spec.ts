@@ -283,6 +283,10 @@ test("composer and message surfaces stay distinct in light and dark themes", asy
     expect(surfaces.composer).not.toBe("")
     expect(surfaces.user).not.toBe(surfaces.assistant)
     expect(surfaces.composer).not.toBe(surfaces.assistant)
+    const statusColor = await page.locator(".status-success-solid").first().evaluate((element) => getComputedStyle(element).color)
+    const statusToken = await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--status-success-solid").trim())
+    expect(statusColor).not.toBe("")
+    expect(statusToken).toMatch(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 
     await context.close()

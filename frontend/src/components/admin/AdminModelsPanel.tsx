@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { adminApi, type ModelTestResponse, type UpdateModelInput } from "@/api/admin"
 import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ArrowLeft } from "lucide-react"
 import { AdminChannelOverviewPanel } from "./AdminChannelOverviewPanel"
 import { AdminModelChannelSidebar } from "./AdminModelChannelSidebar"
@@ -25,6 +26,13 @@ import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 
 const unconfiguredProviderKey = "__unconfigured__"
 const newChannelKey = "__new_channel__"
+
+type ModelConfirmation = {
+  title: string
+  description: string
+  confirmLabel: string
+  action: () => void
+}
 
 export function AdminModelsPanel({ models, setModels, groups, channels = [], setChannels, setError, onDirtyChange }: AdminModelsPanelProps) {
   const loadSessionCreateReadiness = useChatStore((state) => state.loadSessionCreateReadiness)
@@ -53,6 +61,8 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   const [editorOwner] = useState(() => new EditorOwnership())
   const [importOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
+  const [confirmation, setConfirmation] = useState<ModelConfirmation | null>(null)
+  const confirmationTriggerRef = useRef<HTMLElement | null>(null)
   const panelDirty = editorOwner.isDirty() || channelDirty
 
   useEffect(() => onDirtyChange?.(panelDirty), [onDirtyChange, panelDirty])
@@ -153,10 +163,42 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     setSaving(busyOwner.invalidate(scope))
   }
 
-  function canLeaveModelEditor(nextEntityKey: string) {
+  function requestConfirmation(action: () => void, description: string, confirmLabel = "放弃修改") {
+    confirmationTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setConfirmation({
+      title: "放弃未保存修改？",
+      description,
+      confirmLabel,
+      action,
+    })
+  }
+
+  function cancelConfirmation() {
+    setConfirmation(null)
+    const trigger = confirmationTriggerRef.current
+    confirmationTriggerRef.current = null
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus()
+    })
+  }
+
+  function confirmPendingAction() {
+    const pending = confirmation
+    setConfirmation(null)
+    confirmationTriggerRef.current = null
+    if (!pending) return
+    // The confirmed action owns the next navigation; invalidate the discarded
+    // draft first so it cannot re-open the same guard recursively.
+    editorOwner.invalidate()
+    setChannelDirty(false)
+    pending.action()
+  }
+
+  function canLeaveModelEditor(nextEntityKey: string, action: () => void) {
     if (!editorOwner.isDirty()) return true
     if (editorOwner.currentEntityKey() === nextEntityKey) return false
-    return window.confirm("放弃当前模型的未保存修改？")
+    requestConfirmation(action, "当前模型的修改尚未保存。继续后，这些修改将丢失。")
+    return false
   }
 
   function invalidateModelTest() {
@@ -175,7 +217,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
       setError("请先添加一个模型渠道，再添加模型")
       return
     }
-    if (!canLeaveModelEditor(`new:${targetProvider}`)) return
+    if (!canLeaveModelEditor(`new:${targetProvider}`, () => startCreate(provider))) return
     invalidateBusy("model-editor")
     invalidateCatalogRequests()
     editorOwner.activate(`new:${targetProvider}`)
@@ -189,7 +231,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
 
   function startEdit(model: Model) {
     if (editorOwner.currentEntityKey() === model.id && editingId === model.id && !creating) return
-    if (!canLeaveModelEditor(model.id)) return
+    if (!canLeaveModelEditor(model.id, () => startEdit(model))) return
     invalidateBusy("model-editor")
     invalidateCatalogRequests()
     editorOwner.activate(model.id)
@@ -202,8 +244,11 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function changeProvider(provider: string, allowDirty = false) {
-    if (modelManagementOpen && !canLeaveModelEditor(`provider:${provider}`)) return
-    if (!modelManagementOpen && channelDirty && provider !== selectedProvider && !allowDirty && !window.confirm("放弃当前渠道的未保存修改？")) return
+    if (modelManagementOpen && !allowDirty && !canLeaveModelEditor(`provider:${provider}`, () => changeProvider(provider, true))) return
+    if (!modelManagementOpen && channelDirty && provider !== selectedProvider && !allowDirty) {
+      requestConfirmation(() => changeProvider(provider, true), "当前渠道的修改尚未保存。继续后，这些修改将丢失。")
+      return
+    }
     invalidateBusy("model-editor")
     invalidateCatalogRequests()
     editorOwner.invalidate()
@@ -384,8 +429,11 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     await runModelTest(model.id, model.provider, model.temperature_policy, model.temperature_value, model.openai_request_profile)
   }
 
-  function openModelManager(model?: Model) {
-    if (channelDirty && !window.confirm("放弃当前渠道的未保存修改？")) return
+  function openModelManager(model?: Model, allowDirty = false) {
+    if (channelDirty && !allowDirty) {
+      requestConfirmation(() => openModelManager(model, true), "当前渠道的修改尚未保存。继续后，这些修改将丢失。")
+      return
+    }
     setChannelDirty(false)
     setMobileWorkspaceOpen(true)
     setModelManagementOpen(true)
@@ -395,7 +443,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
   }
 
   function prepareImportModel(model: Model) {
-    if (!canLeaveModelEditor(`new:${model.provider}`)) return
+    if (!canLeaveModelEditor(`new:${model.provider}`, () => prepareImportModel(model))) return
     invalidateBusy("model-editor")
     invalidateCatalogRequests()
     editorOwner.activate(`new:${model.provider}`)
@@ -458,8 +506,8 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
     }
   }
 
-  function leaveModelManager() {
-    if (!canLeaveModelEditor("channel-overview")) return
+  function leaveModelManager(allowDirty = false) {
+    if (!allowDirty && !canLeaveModelEditor("channel-overview", () => leaveModelManager(true))) return
     invalidateBusy("model-editor")
     invalidateCatalogRequests()
     editorOwner.invalidate()
@@ -516,7 +564,7 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
         ) : (
           <>
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-3 py-2">
-              <Button variant="ghost" size="sm" onClick={leaveModelManager}>
+              <Button variant="ghost" size="sm" onClick={() => leaveModelManager()}>
                 <ArrowLeft className="h-3.5 w-3.5" />
                 返回渠道
               </Button>
@@ -573,6 +621,18 @@ export function AdminModelsPanel({ models, setModels, groups, channels = [], set
           </>
         )}
       </AdminModelChannelWorkspace>
+      <Dialog open={confirmation !== null} onOpenChange={(open) => { if (!open) cancelConfirmation() }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{confirmation?.title}</DialogTitle>
+            <DialogDescription>{confirmation?.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={cancelConfirmation}>继续编辑</Button>
+            <Button type="button" variant="destructive" onClick={confirmPendingAction}>{confirmation?.confirmLabel}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

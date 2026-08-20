@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { adminApi, type GovernanceEvent } from "@/api/admin"
 import type { SkillDefinition } from "@/types"
 import { Loader2, RotateCcw } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { governanceActionLabel } from "./adminGovernance"
 import { skillEventChange } from "./adminSkillGovernance"
 
@@ -15,6 +17,8 @@ export function AdminSkillHistoryPanel({ skill, onRollback, setError }: Props) {
   const [events, setEvents] = useState<GovernanceEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [rollbackEventID, setRollbackEventID] = useState(0)
+  const [pendingRollback, setPendingRollback] = useState<GovernanceEvent | null>(null)
+  const rollbackTriggerRef = useRef<HTMLButtonElement | null>(null)
   const rolledBack = useMemo(() => new Set(events.flatMap((event) => event.rollback_of_event_id ? [event.rollback_of_event_id] : [])), [events])
 
   useEffect(() => {
@@ -30,7 +34,6 @@ export function AdminSkillHistoryPanel({ skill, onRollback, setError }: Props) {
   }, [setError, skill.id])
 
   async function rollback(event: GovernanceEvent) {
-    if (!window.confirm(`确定回滚 Skill「${skill.name}」的事件 #${event.id} 吗？`)) return
     setRollbackEventID(event.id)
     setError("")
     try {
@@ -43,6 +46,11 @@ export function AdminSkillHistoryPanel({ skill, onRollback, setError }: Props) {
     } finally {
       setRollbackEventID(0)
     }
+  }
+
+  function requestRollback(event: GovernanceEvent, trigger: MouseEvent<HTMLButtonElement>) {
+    rollbackTriggerRef.current = trigger.currentTarget
+    setPendingRollback(event)
   }
 
   if (loading) {
@@ -68,19 +76,48 @@ export function AdminSkillHistoryPanel({ skill, onRollback, setError }: Props) {
               <div className="mt-1 font-mono text-xs text-muted-foreground">{skillEventChange(event)}</div>
             </div>
             {canRollback ? (
-              <button
+              <Button
                 type="button"
-                onClick={() => void rollback(event)}
+                ref={rollbackTriggerRef}
+                onClick={(trigger) => requestRollback(event, trigger)}
                 disabled={Boolean(rollbackEventID)}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-50"
+                variant="outline"
+                size="sm"
+                className="h-7 shrink-0 gap-1 px-2 text-muted-foreground hover:bg-background hover:text-foreground"
               >
                 {rollbackEventID === event.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
                 回滚
-              </button>
+              </Button>
             ) : null}
           </div>
         )
       })}
+      <Dialog open={!!pendingRollback} onOpenChange={(nextOpen) => !nextOpen && setPendingRollback(null)}>
+        <DialogContent
+          className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+          onCloseAutoFocus={(event) => {
+            const trigger = rollbackTriggerRef.current
+            if (!trigger?.isConnected) return
+            event.preventDefault()
+            trigger.focus()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>回滚 Skill 变更？</DialogTitle>
+            <DialogDescription>
+              将为 Skill“{skill.name}”创建一次新的回滚事件，恢复事件 #{pendingRollback?.id} 记录的状态。现有历史不会被删除。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setPendingRollback(null)}>取消</Button>
+            <Button type="button" variant="destructive" onClick={() => {
+              const event = pendingRollback
+              setPendingRollback(null)
+              if (event) void rollback(event)
+            }}>确认回滚</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

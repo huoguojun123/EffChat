@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type SetStateAction } from "react"
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type SetStateAction } from "react"
 import { adminApi, type AdminUser, type CreateAdminUserInput, type UpdateAdminUserInput } from "@/api/admin"
 import type { UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { MotionView } from "@/components/ui/motion"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ChevronLeft, ChevronRight, Plus, Search, Shield, X } from "lucide-react"
 import { BusyOwnership, EditorOwnership } from "./editorOwnership"
 
@@ -34,12 +35,16 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
   const [resetPassword, setResetPassword] = useState("")
   const [resetPasswordOpen, setResetPasswordOpen] = useState(false)
   const [resetPasswordDirty, setResetPasswordDirty] = useState(false)
+  const [pendingDiscard, setPendingDiscard] = useState<{ proceed: () => void } | null>(null)
+  const [pendingPasswordDiscard, setPendingPasswordDiscard] = useState(false)
   const [query, setQuery] = useState("")
   const [page, setPage] = useState(1)
   const [editorOwner] = useState(() => new EditorOwnership())
   const [passwordOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
   const mountedRef = useRef(true)
+  const discardTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const passwordDiscardTriggerRef = useRef<HTMLButtonElement | null>(null)
   const activeUserId = draft?.id
   const editedUser = activeUserId ? users.find((user) => user.id === activeUserId) : undefined
   const defaultGroup = groups.find((group) => group.is_default)
@@ -83,10 +88,12 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
     return id ? `user:${id}` : "new-user"
   }
 
-  function canLeaveUserEditor(nextKey: string) {
+  function canLeaveUserEditor(nextKey: string, trigger: HTMLButtonElement | null, proceed: () => void) {
     if (!editorOwner.isDirty() && !passwordOwner.isDirty()) return true
     if (editorOwner.currentEntityKey() === nextKey) return false
-    return window.confirm("放弃当前用户的未保存修改？")
+    discardTriggerRef.current = trigger
+    setPendingDiscard({ proceed })
+    return false
   }
 
   function activateUserEditor(nextDraft: UserDraft) {
@@ -106,8 +113,8 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
     setDraft(update)
   }
 
-  function closeEditor() {
-    if (!canLeaveUserEditor("")) return
+  function closeEditor(event?: MouseEvent<HTMLButtonElement>) {
+    if (!canLeaveUserEditor("", event?.currentTarget || null, () => closeEditor())) return
     invalidateBusy("user-editor")
     invalidateBusy("password-editor")
     editorOwner.invalidate()
@@ -151,15 +158,15 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
     }
   }
 
-  function startCreate() {
-    if (!canLeaveUserEditor("new-user")) return
+  function startCreate(event?: MouseEvent<HTMLButtonElement>) {
+    if (!canLeaveUserEditor("new-user", event?.currentTarget || null, () => startCreate())) return
     activateUserEditor({ ...emptyUser })
   }
 
-  function startEdit(user: AdminUser) {
+  function startEdit(user: AdminUser, event?: MouseEvent<HTMLButtonElement>) {
     const key = userKey(user.id)
     if (editorOwner.currentEntityKey() === key && draft?.id === user.id) return
-    if (!canLeaveUserEditor(key)) return
+    if (!canLeaveUserEditor(key, event?.currentTarget || null, () => startEdit(user))) return
     activateUserEditor({
       id: user.id,
       username: user.username,
@@ -281,8 +288,12 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
     }
   }
 
-  function closePasswordReset() {
-    if (passwordOwner.isDirty() && !window.confirm("放弃未保存的新密码？")) return
+  function closePasswordReset(event?: MouseEvent<HTMLButtonElement>) {
+    if (passwordOwner.isDirty()) {
+      passwordDiscardTriggerRef.current = event?.currentTarget || null
+      setPendingPasswordDiscard(true)
+      return
+    }
     invalidateBusy("password-editor")
     passwordOwner.activate(editorOwner.currentEntityKey())
     setResetPassword("")
@@ -291,6 +302,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
   }
 
   return (
+    <>
     <div className="flex h-full min-h-0 overflow-hidden lg:grid lg:grid-cols-[minmax(0,1fr)_380px]">
       <div className={`min-h-0 flex-1 flex-col overflow-hidden border-b border-border/70 lg:flex lg:border-b-0 lg:border-r ${draft ? "hidden lg:flex" : "flex"}`}>
           <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
@@ -337,7 +349,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                     : "border-border/60 hover:bg-muted/30"
                 }`}
               >
-                <button className="min-w-0 text-left" onClick={() => startEdit(user)}>
+                <button className="min-w-0 text-left" onClick={(event) => startEdit(user, event)}>
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-medium">{user.nickname || user.username}</span>
                     {user.role === "admin" && <Shield className="h-3.5 w-3.5 text-amber-500" />}
@@ -542,6 +554,60 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
           </MotionView>
       </div>
     </div>
+    <Dialog open={!!pendingDiscard} onOpenChange={(nextOpen) => !nextOpen && setPendingDiscard(null)}>
+      <DialogContent
+        className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+        onCloseAutoFocus={(event) => {
+          const trigger = discardTriggerRef.current
+          if (!trigger?.isConnected) return
+          event.preventDefault()
+          trigger.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>放弃未保存修改？</DialogTitle>
+          <DialogDescription>当前用户资料或密码修改还没有保存，继续操作会丢失这些内容。</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPendingDiscard(null)}>继续编辑</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            const pending = pendingDiscard
+            setPendingDiscard(null)
+            editorOwner.invalidate()
+            passwordOwner.invalidate()
+            pending?.proceed()
+          }}>放弃修改</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={pendingPasswordDiscard} onOpenChange={(nextOpen) => !nextOpen && setPendingPasswordDiscard(false)}>
+      <DialogContent
+        className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+        onCloseAutoFocus={(event) => {
+          const trigger = passwordDiscardTriggerRef.current
+          if (!trigger?.isConnected) return
+          event.preventDefault()
+          trigger.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>放弃未保存的新密码？</DialogTitle>
+          <DialogDescription>当前输入的新密码还没有提交，取消会清除这次输入。</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPendingPasswordDiscard(false)}>继续编辑</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            setPendingPasswordDiscard(false)
+            passwordOwner.invalidate()
+            invalidateBusy("password-editor")
+            setResetPassword("")
+            setResetPasswordOpen(false)
+            setResetPasswordDirty(false)
+          }}>放弃密码</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }
 

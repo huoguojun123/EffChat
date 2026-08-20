@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { AlertTriangle, Download, FileText, ImageIcon, Loader2, RefreshCw, Search, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { canRetryOCR, filesApi, isOCRPending, isOCRRefreshable, type FileInfo } from "@/api/files"
@@ -8,6 +8,7 @@ import { useAuthedBlobUrl } from "@/hooks/useAuthedBlobUrl"
 import { ImageLightbox } from "@/components/message/ImageLightbox"
 import { DocumentPreview } from "@/components/files/DocumentPreview"
 import { WorkspaceWindow } from "@/components/ui/workspace-window"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { LatestOperationOwner } from "@/lib/latestOperation"
 
 interface Props {
@@ -24,12 +25,14 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [retryingID, setRetryingID] = useState<number | null>(null)
   const [query, setQuery] = useState("")
+  const [pendingDelete, setPendingDelete] = useState<FileInfo | null>(null)
   const ocrRefreshInFlightRef = useRef<Set<number>>(new Set())
   const sessionRef = useRef(sessionId)
   const loadedSessionRef = useRef<number | null>(null)
   const requestRef = useRef(0)
   const downloadOwnerRef = useRef(new LatestOperationOwner())
   const selectionRef = useRef<number | null>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   useLayoutEffect(() => {
     sessionRef.current = sessionId
@@ -96,6 +99,11 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
     }
   }
 
+  function requestDelete(file: FileInfo, event: MouseEvent<HTMLButtonElement>) {
+    deleteTriggerRef.current = event.currentTarget
+    setPendingDelete(file)
+  }
+
   async function retryOCR(file: FileInfo) {
     if (!sessionId || loadedSessionRef.current !== sessionId || !files.some((item) => item.id === file.id)) return
     const requestedSession = sessionId
@@ -158,6 +166,7 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
   const selected = files.find((file) => file.id === selectedId) || null
 
   return (
+    <>
     <WorkspaceWindow
       open={open}
       onOpenChange={onOpenChange}
@@ -251,9 +260,7 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                   <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md sm:h-8 sm:w-8" onClick={() => void downloadFile(selected)} aria-label={`${downloadLabel(selected)}：${selected.filename}`} title={downloadLabel(selected)}>
                     <Download className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md text-rose-500 hover:text-rose-600 sm:h-8 sm:w-8" onClick={() => {
-                    if (window.confirm("删除后，历史消息中的预览、下载和重新发送将不可用。确定删除吗？")) void deleteFile(selected)
-                  }} aria-label={`删除文件：${selected.filename}`}>
+                  <Button ref={deleteTriggerRef} variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md text-rose-500 hover:text-rose-600 sm:h-8 sm:w-8" onClick={(event) => requestDelete(selected, event)} aria-label={`删除文件：${selected.filename}`}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
@@ -288,6 +295,33 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
           </main>
       </div>
     </WorkspaceWindow>
+      <Dialog open={!!pendingDelete} onOpenChange={(nextOpen) => !nextOpen && setPendingDelete(null)}>
+        <DialogContent
+          className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+          onCloseAutoFocus={(event) => {
+            const trigger = deleteTriggerRef.current
+            if (!trigger?.isConnected) return
+            event.preventDefault()
+            trigger.focus()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>删除已发送附件？</DialogTitle>
+            <DialogDescription>
+              删除后，“{pendingDelete?.filename}”在历史消息中的预览、下载和重新发送都将不可用，且无法恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setPendingDelete(null)}>取消</Button>
+            <Button type="button" variant="destructive" onClick={() => {
+              const file = pendingDelete
+              setPendingDelete(null)
+              if (file) void deleteFile(file)
+            }}>删除附件</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

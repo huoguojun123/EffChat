@@ -74,6 +74,8 @@ backend (Gin)
 
 产品状态颜色使用 `success`、`warning`、`error`、`info` 和 `running` 五类主题语义 token（各自提供前景、弱背景、边界和纯色变体），亮暗主题在 `globals.css` 中分别定义。状态组件必须同时提供文字、图标或结构变化，不能只依赖色相；工具类型、文件类型和 provider 品牌仍可使用独立分类色。新增状态反馈优先复用这些 token，避免在组件内直接拼接 Tailwind 色阶。
 
+前端代表性 Chat 门禁在亮暗主题分别读取浏览器计算的颜色 token，并验证正文、辅助文字、错误状态达到 4.5:1，对焦点环达到 3:1；该门禁使用 synthetic fixture，不替代逐页面人工验收，也不扫描用户 Markdown、代码或预览内容。
+
 聊天区域的通用 shell 与当前是否已有 active session 解耦：欢迎页、readiness 检查中、检查失败和无可用模型状态都继续渲染唯一的侧栏 opener，使移动抽屉或桌面持久化收起后的历史会话、账号菜单和设置仍可到达。模型选择、文件、导出、输入框、会话文件抽屉和拖放上传只在 active session 存在时渲染；隐藏侧栏继续由 `aria-hidden`、`inert` 和 pointer-events 共同隔离，不复制第二套 opener 或侧栏状态。
 
 `/chat/:sessionId` 只接受不带符号、前导零、小数或指数形式的正十进制安全整数。非法参数在发起会话详情请求前以 replace 导航回根页并清空 active session；合法但当前列表未加载的 ID 仍沿既有鉴权详情查询确认存在性，查询失败同样回到可达的空会话 shell。

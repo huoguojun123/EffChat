@@ -93,6 +93,20 @@ async function computed(page: Page, selector: string, property: string) {
   return page.locator(selector).first().evaluate((element, name) => getComputedStyle(element).getPropertyValue(name).trim(), property)
 }
 
+function contrastRatio(foreground: string, background: string) {
+  const parse = (value: string) => {
+    const match = value.trim().match(/^#([0-9a-f]{6})$/i)
+    if (!match) throw new Error(`Expected a six-digit hex color, got ${value}`)
+    return match[1].match(/../g)!.map((part) => Number.parseInt(part, 16) / 255).map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+  }
+  const luminance = (value: string) => {
+    const [r, g, b] = parse(value)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const [high, low] = [luminance(foreground), luminance(background)].sort((a, b) => b - a)
+  return (high + 0.05) / (low + 0.05)
+}
+
 async function assertNoSmallChromeText(page: Page, selectors: string[]) {
   const offenders = await page.evaluate((rootSelectors) => {
     const result: string[] = []
@@ -289,6 +303,34 @@ test("composer and message surfaces stay distinct in light and dark themes", asy
     expect(statusToken).toMatch(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 
+    await context.close()
+  }
+})
+
+test("light and dark semantic text tokens meet the representative contrast floor", async ({ browser }) => {
+  for (const theme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25 })
+    const page = await context.newPage()
+    await installRoutes(page, { theme })
+    await page.goto("/chat/1")
+    await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+    await waitForFonts(page)
+
+    const tokens = await page.locator("html").evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        foreground: style.getPropertyValue("--theme-fg").trim(),
+        background: style.getPropertyValue("--theme-bg").trim(),
+        mutedForeground: style.getPropertyValue("--theme-muted-fg").trim(),
+        surface: style.getPropertyValue("--theme-surface").trim(),
+        error: style.getPropertyValue("--status-error-fg").trim(),
+        ring: style.getPropertyValue("--ring").trim(),
+      }
+    })
+    expect(contrastRatio(tokens.foreground, tokens.background)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(tokens.mutedForeground, tokens.surface)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(tokens.error, tokens.background)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(tokens.ring, tokens.background)).toBeGreaterThanOrEqual(3)
     await context.close()
   }
 })

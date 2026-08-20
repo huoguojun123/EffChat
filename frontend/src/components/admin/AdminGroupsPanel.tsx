@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react"
+import { useEffect, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from "react"
 import { adminApi, type CreateGroupInput, type UpdateGroupInput } from "@/api/admin"
 import type { UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MotionView } from "@/components/ui/motion"
 import { ChevronLeft, Plus, Trash2, X } from "lucide-react"
 import { BusyOwnership, EditorOwnership } from "./editorOwnership"
@@ -37,6 +38,10 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
   const [editorOwner] = useState(() => new EditorOwnership())
   const [busyOwner] = useState(() => new BusyOwnership())
   const mountedRef = useRef(true)
+  const [pendingDiscard, setPendingDiscard] = useState<{ proceed: () => void } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<UserGroup | null>(null)
+  const discardTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null)
   const activeId = draft?.id
   const panelDirty = editorOwner.isDirty()
 
@@ -70,10 +75,12 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
     return id ? `group:${id}` : "new-group"
   }
 
-  function canLeaveGroupEditor(nextKey: string) {
+  function canLeaveGroupEditor(nextKey: string, trigger: HTMLButtonElement | null, proceed: () => void) {
     if (!editorOwner.isDirty()) return true
     if (editorOwner.currentEntityKey() === nextKey) return false
-    return window.confirm("放弃当前分组的未保存修改？")
+    discardTriggerRef.current = trigger
+    setPendingDiscard({ proceed })
+    return false
   }
 
   function activateGroupEditor(nextDraft: GroupDraft) {
@@ -87,22 +94,22 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
     setDraft(update)
   }
 
-  function closeEditor() {
-    if (!canLeaveGroupEditor("")) return
+  function closeEditor(event?: MouseEvent<HTMLButtonElement>) {
+    if (!canLeaveGroupEditor("", event?.currentTarget || null, () => closeEditor())) return
     invalidateBusy("group-editor")
     editorOwner.invalidate()
     setDraft(null)
   }
 
-  function startCreate() {
-    if (!canLeaveGroupEditor("new-group")) return
+  function startCreate(event?: MouseEvent<HTMLButtonElement>) {
+    if (!canLeaveGroupEditor("new-group", event?.currentTarget || null, () => startCreate())) return
     activateGroupEditor({ ...emptyGroup, level: nextLevel(groups) })
   }
 
-  function startEdit(group: UserGroup) {
+  function startEdit(group: UserGroup, event?: MouseEvent<HTMLButtonElement>) {
     const key = groupKey(group.id)
     if (editorOwner.currentEntityKey() === key && draft?.id === group.id) return
-    if (!canLeaveGroupEditor(key)) return
+    if (!canLeaveGroupEditor(key, event?.currentTarget || null, () => startEdit(group))) return
     activateGroupEditor({
       id: group.id,
       name: group.name,
@@ -189,7 +196,6 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
   }
 
   async function deleteGroup(group: UserGroup) {
-    if (!window.confirm(`删除分组「${group.name}」？显式绑定该组的用户将继承当前默认组。`)) return
     const operation = editorOwner.beginOperation()
     const busy = beginBusy(`delete-${group.id}`, "group-editor")
     setError("")
@@ -209,7 +215,13 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
     }
   }
 
+  function requestDeleteGroup(group: UserGroup, event: MouseEvent<HTMLButtonElement>) {
+    deleteTriggerRef.current = event.currentTarget
+    setPendingDelete(group)
+  }
+
   return (
+    <>
     <div className="flex h-full min-h-0 overflow-hidden lg:grid lg:grid-cols-[minmax(0,1fr)_390px]">
       <div className={`min-h-0 flex-1 flex-col overflow-hidden border-b border-border/70 lg:flex lg:border-b-0 lg:border-r ${draft ? "hidden lg:flex" : "flex"}`}>
           <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
@@ -232,7 +244,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
               groups.map((group) => (
                 <button
                   key={group.id}
-                  onClick={() => startEdit(group)}
+                  onClick={(event) => startEdit(group, event)}
                   className={`grid w-full grid-cols-[minmax(0,1fr)_72px] items-center gap-3 border-b px-4 py-2.5 text-left transition-colors motion-control last:border-b-0 md:grid-cols-[minmax(0,1fr)_72px_220px_72px] ${
                     activeId === group.id
                       ? "border-l-4 border-l-foreground border-b-border/70 bg-muted/40"
@@ -267,7 +279,7 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
               <div className="truncate font-medium">{draft ? (draft.id ? "编辑分组" : "新建分组") : "分组详情"}</div>
             </div>
             {draft && (
-              <Button variant="ghost" size="sm" className="hidden lg:inline-flex" onClick={closeEditor}>
+                  <Button variant="ghost" size="sm" className="hidden lg:inline-flex" onClick={closeEditor}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -336,9 +348,9 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
                     variant="ghost"
                     size="sm"
                     className="text-destructive hover:text-destructive"
-                    onClick={() => {
+                    onClick={(event) => {
                       const group = groups.find((g) => g.id === draft.id)
-                      if (group) deleteGroup(group)
+                      if (group) requestDeleteGroup(group, event)
                     }}
                     disabled={saving !== ""}
                   >
@@ -357,6 +369,58 @@ export function AdminGroupsPanel({ groups, setGroups, setError, onDirtyChange }:
           </MotionView>
       </div>
     </div>
+    <Dialog open={!!pendingDiscard} onOpenChange={(nextOpen) => !nextOpen && setPendingDiscard(null)}>
+      <DialogContent
+        className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+        onCloseAutoFocus={(event) => {
+          const trigger = discardTriggerRef.current
+          if (!trigger?.isConnected) return
+          event.preventDefault()
+          trigger.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>放弃未保存修改？</DialogTitle>
+          <DialogDescription>当前分组的修改还没有保存，继续操作会丢失这些内容。</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPendingDiscard(null)}>继续编辑</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            const pending = pendingDiscard
+            setPendingDiscard(null)
+            editorOwner.invalidate()
+            pending?.proceed()
+          }}>放弃修改</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={!!pendingDelete} onOpenChange={(nextOpen) => !nextOpen && setPendingDelete(null)}>
+      <DialogContent
+        className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+        onCloseAutoFocus={(event) => {
+          const trigger = deleteTriggerRef.current
+          if (!trigger?.isConnected) return
+          event.preventDefault()
+          trigger.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>删除分组？</DialogTitle>
+          <DialogDescription>
+            删除“{pendingDelete?.name}”后，显式绑定该组的用户将继承当前默认组。此操作无法恢复。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPendingDelete(null)}>取消</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            const group = pendingDelete
+            setPendingDelete(null)
+            if (group) void deleteGroup(group)
+          }}>删除分组</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }
 

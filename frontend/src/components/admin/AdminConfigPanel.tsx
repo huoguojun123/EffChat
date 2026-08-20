@@ -3,6 +3,7 @@ import { adminApi, type ConfigItem } from "@/api/admin"
 import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Save } from "lucide-react"
 import { useChatStore } from "@/stores/chat"
 
@@ -64,6 +65,13 @@ const promptPlaceholders = [
   { label: "模型能力", token: "{{capabilities}}" },
 ]
 
+type ConfigConfirmation = {
+  title: string
+  description: string
+  confirmLabel: string
+  action: () => void
+}
+
 export function AdminConfigPanel({
   configItems,
   setConfigItems,
@@ -78,6 +86,8 @@ export function AdminConfigPanel({
   const [saving, setSaving] = useState(false)
   const [cleanupSaving, setCleanupSaving] = useState(false)
   const [cleanupResult, setCleanupResult] = useState("")
+  const [confirmation, setConfirmation] = useState<ConfigConfirmation | null>(null)
+  const confirmationTriggerRef = useRef<HTMLElement | null>(null)
 
   const visibleItems = useMemo(() => configItems.filter((item) => {
     if (hiddenConfigKeys.has(item.key)) return false
@@ -113,6 +123,27 @@ export function AdminConfigPanel({
     setDrafts((prev) => ({ ...prev, [key]: value }))
   }
 
+  function requestConfirmation(action: () => void, title: string, description: string, confirmLabel: string) {
+    confirmationTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setConfirmation({ title, description, confirmLabel, action })
+  }
+
+  function cancelConfirmation() {
+    setConfirmation(null)
+    const trigger = confirmationTriggerRef.current
+    confirmationTriggerRef.current = null
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus()
+    })
+  }
+
+  function confirmPendingAction() {
+    const pending = confirmation
+    setConfirmation(null)
+    confirmationTriggerRef.current = null
+    pending?.action()
+  }
+
   async function saveAll() {
     if (!changedKeys.length) return
     setSaving(true)
@@ -142,7 +173,6 @@ export function AdminConfigPanel({
   }
 
   async function cleanupOrphans() {
-    if (!window.confirm("清理 24 小时前、尚未发送且未被消息引用的暂存附件？磁盘文件也会删除。")) return
     setCleanupSaving(true)
     setCleanupResult("")
     setError("")
@@ -154,6 +184,29 @@ export function AdminConfigPanel({
     } finally {
       setCleanupSaving(false)
     }
+  }
+
+  function requestCleanupConfirmation() {
+    requestConfirmation(
+      () => void cleanupOrphans(),
+      "清理暂存附件？",
+      "将清理 24 小时前、尚未发送且未被消息引用的暂存附件，磁盘文件也会删除。历史消息引用的附件会保留。",
+      "清理文件",
+    )
+  }
+
+  function requestTemplateFill(item: ConfigItem, apply: () => void) {
+    const template = formatConfigValue(item.default)
+    if (!template || !valueOf(item).trim() || valueOf(item) === template) {
+      apply()
+      return
+    }
+    requestConfirmation(
+      apply,
+      "覆盖当前提示词？",
+      "当前内容尚未保存。填入推荐模板后，现有内容会被覆盖，但不会立即保存到服务器。",
+      "覆盖内容",
+    )
   }
 
   return (
@@ -173,7 +226,7 @@ export function AdminConfigPanel({
               {group.category === "文件" ? (
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {cleanupResult ? <span className="text-sm text-muted-foreground">{cleanupResult}</span> : null}
-                  <Button type="button" size="sm" variant="outline" className="h-8" onClick={() => void cleanupOrphans()} disabled={cleanupSaving}>
+                  <Button type="button" size="sm" variant="outline" className="h-8" onClick={requestCleanupConfirmation} disabled={cleanupSaving}>
                     {cleanupSaving ? "清理中" : "清理遗留文件"}
                   </Button>
                 </div>
@@ -192,7 +245,7 @@ export function AdminConfigPanel({
                     }
                   >
                     <div className="text-sm font-medium">{item.display_name || item.key}</div>
-                    <ConfigInput item={item} value={valueOf(item)} models={models} onChange={(value) => setValue(item.key, value)} disabled={saving} />
+                    <ConfigInput item={item} value={valueOf(item)} models={models} onChange={(value) => setValue(item.key, value)} disabled={saving} onRequestTemplateFill={requestTemplateFill} />
                   </div>
                 ))}
               </div>
@@ -200,6 +253,18 @@ export function AdminConfigPanel({
           </section>
         ))}
       </div>
+      <Dialog open={confirmation !== null} onOpenChange={(open) => { if (!open) cancelConfirmation() }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{confirmation?.title}</DialogTitle>
+            <DialogDescription>{confirmation?.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={cancelConfirmation}>取消</Button>
+            <Button type="button" variant={confirmation?.confirmLabel === "清理文件" ? "destructive" : "default"} onClick={confirmPendingAction} disabled={cleanupSaving}>{confirmation?.confirmLabel}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -244,12 +309,14 @@ function ConfigInput({
   models,
   onChange,
   disabled,
+  onRequestTemplateFill,
 }: {
   item: ConfigItem
   value: string
   models: Model[]
   onChange: (value: string) => void
   disabled: boolean
+  onRequestTemplateFill?: (item: ConfigItem, apply: () => void) => void
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [selectedPlaceholder, setSelectedPlaceholder] = useState(promptPlaceholders[0].token)
@@ -289,9 +356,12 @@ function ConfigInput({
     function fillDefaultTemplate() {
       const template = formatConfigValue(item.default)
       if (!template) return
-      if (value.trim() && value !== template && !window.confirm("当前内容会被推荐模板覆盖，确定继续吗？")) return
-      onChange(template)
-      requestAnimationFrame(() => textareaRef.current?.focus())
+      const applyTemplate = () => {
+        onChange(template)
+        requestAnimationFrame(() => textareaRef.current?.focus())
+      }
+      if (onRequestTemplateFill) onRequestTemplateFill(item, applyTemplate)
+      else applyTemplate()
     }
 
     return (
@@ -318,6 +388,7 @@ function ConfigInput({
         </div>
         <textarea
           ref={textareaRef}
+          aria-label={item.display_name || item.key}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}

@@ -17,6 +17,7 @@ import { navigateWithFade } from "@/lib/navigation"
 import { pickEmptyQuote } from "@/lib/emptyQuotes"
 import { prefersReducedMotion } from "@/lib/motionPreference"
 import { Files, PanelLeft, PanelLeftClose, Settings2, UploadCloud } from "lucide-react"
+import { chatSurfaceControlClass } from "./ChatInput.constants"
 
 export function ChatArea({
   sidebarOpen,
@@ -216,7 +217,7 @@ export function ChatArea({
               variant="ghost"
               size="icon"
               onClick={onToggleSidebar}
-              className="pointer-events-auto h-8 w-8 shrink-0 rounded-[10px] bg-popover/30 backdrop-blur-md hover:bg-popover/58"
+              className={`pointer-events-auto h-8 w-8 shrink-0 ${chatSurfaceControlClass}`}
               aria-label={sidebarOpen ? "收起侧边栏" : "打开侧边栏"}
               aria-expanded={sidebarOpen}
               aria-controls="app-sidebar"
@@ -242,7 +243,7 @@ export function ChatArea({
               <Button
                 variant="outline"
                 size="sm"
-                className="pointer-events-auto h-8 w-8 gap-1.5 rounded-[10px] border-border/45 bg-popover/42 px-0 text-xs shadow-sm backdrop-blur-md motion-control hover:bg-popover/68 sm:w-auto sm:px-2.5"
+                className={`pointer-events-auto h-8 w-8 gap-1.5 px-0 text-xs sm:w-auto sm:px-2.5 ${chatSurfaceControlClass}`}
                 onClick={() => setFilesOpen(true)}
                 aria-expanded={filesOpen}
                 aria-label="文件"

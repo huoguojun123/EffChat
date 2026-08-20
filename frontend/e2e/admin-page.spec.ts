@@ -44,6 +44,7 @@ test("admin route loads only the model page dependencies and opens mobile naviga
   expect((mobileNavigationBox?.y || 0) + (mobileNavigationBox?.height || 0)).toBeGreaterThan(820)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   const close = page.getByRole("button", { name: "关闭管理导航" })
+  await expect(close).toHaveCount(1)
   await expect.poll(async () => (await close.boundingBox())?.width || 0).toBeGreaterThanOrEqual(43.5)
   await expect.poll(async () => (await close.boundingBox())?.height || 0).toBeGreaterThanOrEqual(43.5)
 })

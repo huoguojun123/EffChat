@@ -307,6 +307,34 @@ test("composer and message surfaces stay distinct in light and dark themes", asy
   }
 })
 
+test("chat chrome controls share the file surface contract", async ({ page }) => {
+  await installRoutes(page, { theme: "dark" })
+  await page.setViewportSize({ width: 1536, height: 864 })
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  const controls = [
+    page.getByRole("button", { name: "收起侧边栏" }),
+    page.getByRole("button", { name: "文件", exact: true }),
+    page.getByRole("button", { name: "更多会话操作" }),
+    page.getByRole("combobox", { name: /当前模型/ }),
+  ]
+  const styles = await Promise.all(controls.map((control) => control.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      borderColor: style.borderColor,
+      backgroundColor: style.backgroundColor,
+      boxShadow: style.boxShadow,
+      backdropFilter: style.backdropFilter,
+    }
+  })))
+  expect(styles).toHaveLength(4)
+  for (const property of ["borderColor", "backgroundColor", "boxShadow", "backdropFilter"] as const) {
+    expect(new Set(styles.map((style) => style[property])).size, `${property} should use one shared chat surface`).toBe(1)
+  }
+})
+
 test("light and dark semantic text tokens meet the representative contrast floor", async ({ browser }) => {
   for (const theme of ["light", "dark"] as const) {
     const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25 })

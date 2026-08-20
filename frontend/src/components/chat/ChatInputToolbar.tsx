@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { MotionDrill } from "@/components/ui/motion"
 import { cn } from "@/lib/utils"
-import { ACCEPT_ATTR, SEARCH_MODE_LABEL, composerIconButtonClass, motionIndex, type SearchMode } from "./ChatInput.constants"
+import { ACCEPT_ATTR, SEARCH_MODE_LABEL, chatSurfaceControlClass, composerIconButtonClass, motionIndex, type SearchMode } from "./ChatInput.constants"
 import { MenuItem, SkillMenuItem } from "./ChatInputParts"
 
 interface ChatInputToolbarProps {
@@ -77,7 +77,7 @@ export function ChatInputToolbar({
   const searchEnabled = searchMode !== "off"
 
   return (
-    <div data-testid="composer-toolbar" className={cn("flex items-center gap-0 rounded-[13px] border border-border/70 bg-popover/96 p-0.5 shadow-[0_8px_24px_-18px_rgba(0,0,0,0.28),0_1px_4px_rgba(0,0,0,0.05)] sm:gap-0.5", className)}>
+    <div data-testid="composer-toolbar" className={cn("flex items-center gap-0 p-0.5 sm:gap-0.5", chatSurfaceControlClass, className)}>
       <input
         ref={fileInputRef}
         type="file"

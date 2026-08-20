@@ -136,7 +136,7 @@ export function UserMessage({
               name="edited-message"
               autoComplete="off"
               aria-label="编辑最后一条消息"
-              className="message-user-surface w-full resize-none rounded-[18px] border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_4px_16px_-12px_rgba(0,0,0,0.25)] outline-none transition-[border-color,box-shadow] motion-control focus:border-primary/45 focus:ring-3 focus:ring-primary/10"
+              className="message-user-surface w-full resize-none rounded-[18px] border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_2px_10px_-9px_rgba(0,0,0,0.2)] outline-none transition-[border-color,box-shadow] motion-control focus:border-primary/45 focus:ring-3 focus:ring-primary/10"
             />
             <div className="flex items-center gap-1.5">
               <button
@@ -250,7 +250,7 @@ function UserText({ text }: { text: string }) {
           <div
             ref={innerRef}
             data-testid="user-message-surface"
-            className="message-user-surface rounded-2xl border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_4px_16px_-12px_rgba(0,0,0,0.25)] whitespace-pre-wrap sm:px-5 sm:py-3"
+            className="message-user-surface rounded-2xl border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_2px_10px_-9px_rgba(0,0,0,0.2)] whitespace-pre-wrap sm:px-5 sm:py-3"
           >
             {text}
           </div>

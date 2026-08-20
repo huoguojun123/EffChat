@@ -69,7 +69,7 @@ export function ComposerBox({
       <div
         data-testid="composer-surface"
         className={cn(
-          "relative rounded-[18px] border border-border/80 bg-popover/96 px-3 py-1 shadow-[0_12px_32px_-20px_rgba(0,0,0,0.32),0_2px_8px_rgba(0,0,0,0.06)] transition-[background-color,border-color,box-shadow] motion-control focus-within:border-ring/55 focus-within:bg-popover focus-within:ring-3 focus-within:ring-ring/12"
+          "relative rounded-[18px] border border-border/80 bg-popover/96 px-3 py-1 shadow-[0_4px_14px_-10px_rgba(0,0,0,0.22)] transition-[background-color,border-color,box-shadow] motion-control focus-within:border-ring/55 focus-within:bg-popover focus-within:ring-3 focus-within:ring-ring/12"
         )}
       >
         {showStatus && (

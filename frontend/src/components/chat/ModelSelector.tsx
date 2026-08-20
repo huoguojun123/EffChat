@@ -9,6 +9,7 @@ import { ChevronDown, Sparkles, Wrench as ToolIcon, Eye, Globe, Check, Settings2
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover"
 import { Button } from "@/components/ui/button"
 import { navigateWithFade } from "@/lib/navigation"
+import { chatSurfaceControlClass } from "./ChatInput.constants"
 
 export function ModelSelector() {
   const [open, setOpen] = useState(false)
@@ -57,7 +58,7 @@ export function ModelSelector() {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className="flex min-w-0 items-center gap-1 rounded-[10px] border border-white/30 bg-popover/32 px-2 py-1.5 text-sm font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] backdrop-blur-md transition-[background-color,border-color,color,box-shadow] duration-200 motion-control hover:bg-popover/58 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 dark:border-white/10 sm:gap-1.5 sm:px-2.5"
+          className={`flex min-w-0 items-center gap-1 px-2 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 sm:gap-1.5 sm:px-2.5 ${chatSurfaceControlClass}`}
           role="combobox"
           aria-label={triggerLabel}
           aria-haspopup="listbox"

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { adminApi, type SkillImportPreview, type SkillImportResult, type SkillInput } from "@/api/admin"
 import type { SkillDefinition, UserGroup } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useSkillStore } from "@/stores/skills"
 import { GitBranch, Upload } from "lucide-react"
 import {
@@ -53,6 +54,10 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
   const [updateDialog, setUpdateDialog] = useState<UpdateDialogState | null>(null)
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<"editor" | "files">("editor")
+  const [pendingDiscard, setPendingDiscard] = useState<{ proceed: () => void } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<SkillDefinition | null>(null)
+  const discardTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null)
   const [importQuery, setImportQuery] = useState("")
   const zipInputRef = useRef<HTMLInputElement>(null)
   const updateZipInputRef = useRef<HTMLInputElement>(null)
@@ -102,10 +107,12 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
     setSaving(busyOwner.invalidate(scope))
   }
 
-  function canLeaveDraft(nextEntityKey: string) {
+  function canLeaveDraft(nextEntityKey: string, trigger: HTMLButtonElement | null, proceed: () => void) {
     if (!draft || !editorOwner.isDirty()) return true
     if (editorOwner.currentEntityKey() === nextEntityKey) return false
-    return window.confirm("放弃当前 Skill 的未保存修改？")
+    discardTriggerRef.current = trigger
+    setPendingDiscard({ proceed })
+    return false
   }
 
   function changeDraft(update: React.SetStateAction<SkillDraft | null>) {
@@ -113,8 +120,8 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
     setDraft(update)
   }
 
-  function closeEditor() {
-    if (!canLeaveDraft("")) return
+  function closeEditor(event?: MouseEvent<HTMLButtonElement>) {
+    if (!canLeaveDraft("", event?.currentTarget || null, () => closeEditor())) return
     invalidateBusy("editor")
     editorOwner.invalidate()
     setDraft(null)
@@ -122,8 +129,8 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
     setMobilePane("editor")
   }
 
-  function startCreate() {
-    if (!canLeaveDraft("new")) return
+  function startCreate(event?: MouseEvent<HTMLButtonElement>) {
+    if (!canLeaveDraft("new", event?.currentTarget || null, () => startCreate())) return
     invalidateBusy("editor")
     editorOwner.activate("new")
     setDraft({ ...emptyDraft, files: [] })
@@ -132,9 +139,9 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
     setMobileDetailOpen(true)
   }
 
-  async function startEdit(skill: SkillDefinition) {
+  async function startEdit(skill: SkillDefinition, event?: MouseEvent<HTMLButtonElement>) {
     if (editorOwner.currentEntityKey() === skill.id && draft) return
-    if (!canLeaveDraft(skill.id)) return
+    if (!canLeaveDraft(skill.id, event?.currentTarget || null, () => void startEdit(skill))) return
     invalidateBusy("editor")
     editorOwner.activate(skill.id)
     const operation = editorOwner.beginOperation()
@@ -231,7 +238,6 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
   }
 
   async function deleteSkill(skill: SkillDefinition) {
-    if (!window.confirm(`确定删除 Skill「${skill.name}」吗？旧文件包也会被清理。`)) return
     const busy = beginBusy(skill.id, `catalog:${skill.id}`)
     setError("")
     try {
@@ -249,6 +255,11 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
     } finally {
       finishBusy(busy)
     }
+  }
+
+  function requestDeleteSkill(skill: SkillDefinition, event: MouseEvent<HTMLButtonElement>) {
+    deleteTriggerRef.current = event.currentTarget
+    setPendingDelete(skill)
   }
 
   function applyGovernanceRollback(skillID: string, restored: SkillDefinition | null) {
@@ -599,6 +610,7 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
   const activeContent = activePath === "SKILL.md" ? draft?.entry_content || "" : activeReference?.content || ""
 
   return (
+    <>
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="border-b border-border/70 px-4 py-3">
         <div className="grid gap-2 lg:grid-cols-[minmax(18rem,1fr)_auto_auto_auto] lg:items-center">
@@ -657,10 +669,10 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
           saving={saving}
           mobileDetailOpen={mobileDetailOpen}
           onQueryChange={setQuery}
-          onCreate={startCreate}
-          onEdit={(skill) => void startEdit(skill)}
+          onCreate={(event) => startCreate(event)}
+          onEdit={(skill, event) => void startEdit(skill, event)}
           onToggle={(skill) => void toggleSkill(skill)}
-          onDelete={(skill) => void deleteSkill(skill)}
+          onDelete={(skill, event) => requestDeleteSkill(skill, event)}
           onRollback={applyGovernanceRollback}
           setError={setError}
         />
@@ -748,5 +760,55 @@ export function AdminSkillsPanel({ skills, setSkills, groups, setError, onDirtyC
         onApply={() => void applyUpdateDialog()}
       />
     </div>
+    <Dialog open={!!pendingDiscard} onOpenChange={(nextOpen) => !nextOpen && setPendingDiscard(null)}>
+      <DialogContent
+        className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+        onCloseAutoFocus={(event) => {
+          const trigger = discardTriggerRef.current
+          if (!trigger?.isConnected) return
+          event.preventDefault()
+          trigger.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>放弃未保存修改？</DialogTitle>
+          <DialogDescription>当前 Skill 的修改还没有保存，继续操作会丢失这些内容。</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPendingDiscard(null)}>继续编辑</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            const pending = pendingDiscard
+            setPendingDiscard(null)
+            editorOwner.invalidate()
+            pending?.proceed()
+          }}>放弃修改</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={!!pendingDelete} onOpenChange={(nextOpen) => !nextOpen && setPendingDelete(null)}>
+      <DialogContent
+        className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+        onCloseAutoFocus={(event) => {
+          const trigger = deleteTriggerRef.current
+          if (!trigger?.isConnected) return
+          event.preventDefault()
+          trigger.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>删除 Skill？</DialogTitle>
+          <DialogDescription>删除“{pendingDelete?.name}”后，旧文件包也会被清理，此操作无法恢复。</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={() => setPendingDelete(null)}>取消</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            const skill = pendingDelete
+            setPendingDelete(null)
+            if (skill) void deleteSkill(skill)
+          }}>删除 Skill</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

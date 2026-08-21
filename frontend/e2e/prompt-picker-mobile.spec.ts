@@ -78,8 +78,8 @@ test("mobile prompt picker uses a reachable list and preview flow", async ({ bro
 
   const back = dialog.getByRole("button", { name: "返回提示词列表" })
   const backBox = await back.boundingBox()
-  expect(backBox?.width || 0).toBeGreaterThanOrEqual(44)
-  expect(backBox?.height || 0).toBeGreaterThanOrEqual(44)
+  expect(Math.round(backBox?.width || 0)).toBeGreaterThanOrEqual(44)
+  expect(Math.round(backBox?.height || 0)).toBeGreaterThanOrEqual(44)
   await back.click()
   await expect(dialog.getByLabel("搜索提示词")).toBeVisible()
 

@@ -91,6 +91,30 @@ async function installChatRoutes(context: BrowserContext, override?: RouteOverri
   })
 }
 
+test("a transient startup outage preserves the token and can recover", async ({ context, page }) => {
+  let userChecks = 0
+  let unavailable = true
+  await installChatRoutes(context, async (route, path) => {
+    if (path !== "/api/v1/users/me") return false
+    userChecks += 1
+    if (unavailable) await route.abort("failed")
+    else await route.fulfill({ json: { id: 1, username: "member", role: "user", is_active: true } })
+    return true
+  })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto("/chat/1")
+
+  await expect(page.getByRole("alert")).toContainText("暂时无法连接")
+  expect(await page.evaluate(() => localStorage.getItem("token"))).toBe("test-token")
+  unavailable = false
+  await page.getByRole("button", { name: "重新连接" }).click()
+
+  await expect(page.getByText("session-one-message")).toBeVisible()
+  await expect(page).toHaveURL(/\/chat\/1$/)
+  expect(userChecks).toBeGreaterThanOrEqual(2)
+})
+
 test("390px foreground return rechecks the active run without losing the current session", async ({ context, page }) => {
   const activeChecks = new Map<Page, number>()
   await installChatRoutes(context, async (route, path) => {
@@ -118,6 +142,24 @@ test("390px foreground return rechecks the active run without losing the current
   await expect.poll(() => activeChecks.get(page) || 0).toBeGreaterThan(before)
   await expect(page.getByText("session-one-message")).toBeVisible()
   await expect(page).toHaveURL(/\/chat\/1$/)
+})
+
+test("mobile chrome keeps high-frequency controls reachable through the 768px breakpoint", async ({ context, page }) => {
+  await installChatRoutes(context)
+  for (const width of [390, 700]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto("/chat/1")
+    for (const button of [
+      page.getByRole("button", { name: "打开侧边栏" }),
+      page.getByRole("button", { name: "文件", exact: true }),
+      page.getByTestId("composer-toolbar").getByRole("button", { name: "更多", exact: true }),
+    ]) {
+      const box = await button.boundingBox()
+      expect(box).not.toBeNull()
+      expect(Math.round(box?.width || 0)).toBeGreaterThanOrEqual(44)
+      expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44)
+    }
+  }
 })
 
 test("a late active-run lookup cannot take over after switching sessions", async ({ context, page }) => {
@@ -279,6 +321,7 @@ test("PWA update failure returns the refresh action instead of spinning forever"
       addEventListener() {},
       removeEventListener() {},
       register: () => Promise.resolve(registration),
+      getRegistration: () => Promise.resolve(registration),
       ready: Promise.resolve(registration),
     }
     Object.defineProperty(Navigator.prototype, "serviceWorker", {

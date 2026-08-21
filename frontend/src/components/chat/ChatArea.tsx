@@ -217,7 +217,7 @@ export function ChatArea({
               variant="ghost"
               size="icon"
               onClick={onToggleSidebar}
-              className={`pointer-events-auto h-8 w-8 shrink-0 ${chatSurfaceControlClass}`}
+              className={`pointer-events-auto h-11 w-11 shrink-0 md:h-8 md:w-8 ${chatSurfaceControlClass}`}
               aria-label={sidebarOpen ? "收起侧边栏" : "打开侧边栏"}
               aria-expanded={sidebarOpen}
               aria-controls="app-sidebar"
@@ -243,13 +243,13 @@ export function ChatArea({
               <Button
                 variant="outline"
                 size="sm"
-                className={`pointer-events-auto h-8 w-8 gap-1.5 px-0 text-xs sm:w-auto sm:px-2.5 ${chatSurfaceControlClass}`}
+                className={`pointer-events-auto h-11 w-11 gap-1.5 px-0 text-xs md:h-8 md:w-auto md:px-2.5 ${chatSurfaceControlClass}`}
                 onClick={() => setFilesOpen(true)}
                 aria-expanded={filesOpen}
                 aria-label="文件"
               >
                 <Files className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">文件</span>
+                <span className="hidden md:inline">文件</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent>文件</TooltipContent>

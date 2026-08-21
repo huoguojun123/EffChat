@@ -326,7 +326,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                 onChange={(e) => { setQuery(e.target.value); setPage(1) }}
                 placeholder="搜索账号 / 昵称 / 邮箱"
                 aria-label="搜索用户"
-                className="h-11 pl-8 text-sm sm:h-8"
+                className="h-11 pl-8 text-sm md:h-8"
               />
             </div>
           </div>
@@ -380,7 +380,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                     type="button"
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={safePage <= 1}
-                    className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-8"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8"
                     aria-label="上一页用户"
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
@@ -395,7 +395,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                     type="button"
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={safePage >= totalPages}
-                    className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:w-8"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg border border-border/60 bg-background shadow-sm transition-[background-color,border-color,color] motion-control hover:border-border hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8"
                     aria-label="下一页用户"
                   >
                     <ChevronRight className="h-3.5 w-3.5" />

@@ -144,6 +144,24 @@ test("390px foreground return rechecks the active run without losing the current
   await expect(page).toHaveURL(/\/chat\/1$/)
 })
 
+test("mobile chrome keeps high-frequency controls reachable through the 768px breakpoint", async ({ context, page }) => {
+  await installChatRoutes(context)
+  for (const width of [390, 700]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto("/chat/1")
+    for (const button of [
+      page.getByRole("button", { name: "打开侧边栏" }),
+      page.getByRole("button", { name: "文件", exact: true }),
+      page.getByTestId("composer-toolbar").getByRole("button", { name: "更多", exact: true }),
+    ]) {
+      const box = await button.boundingBox()
+      expect(box).not.toBeNull()
+      expect(Math.round(box?.width || 0)).toBeGreaterThanOrEqual(44)
+      expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44)
+    }
+  }
+})
+
 test("a late active-run lookup cannot take over after switching sessions", async ({ context, page }) => {
   let releaseLookup!: () => void
   const lookupBlocked = new Promise<void>((resolve) => { releaseLookup = resolve })

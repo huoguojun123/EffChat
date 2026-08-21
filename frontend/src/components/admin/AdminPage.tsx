@@ -222,13 +222,13 @@ export function AdminPage() {
     <div className="flex h-[100dvh] min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <SkipLink />
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/70 px-3 sm:px-5">
-        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 md:h-9 md:w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-semibold">{currentTab.label}</h1>
         </div>
-        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={refreshCurrent} disabled={busy} aria-label="刷新当前页面" title="刷新当前页面">
+        <Button type="button" variant="ghost" size="icon" className="h-11 w-11 md:h-9 md:w-9" onClick={refreshCurrent} disabled={busy} aria-label="刷新当前页面" title="刷新当前页面">
           <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin motion-reduce:animate-none" : ""}`} />
         </Button>
         <Button type="button" variant="ghost" size="icon" className="h-11 w-11 lg:hidden" onClick={() => setMobileNavOpen(true)} aria-label="打开管理导航" title="管理导航">

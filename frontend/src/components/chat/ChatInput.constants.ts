@@ -25,7 +25,7 @@ export function getComposerTextareaMaxHeight(viewportWidth: number) {
   return COMPOSER_TEXTAREA_MOBILE_MAX_HEIGHT
 }
 
-export const composerIconButtonClass = "h-11 w-11 shrink-0 rounded-[9px] border-0 bg-transparent p-0 text-muted-foreground shadow-none transition-[background-color,color] motion-control hover:bg-accent/80 hover:text-foreground active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8 sm:w-8"
+export const composerIconButtonClass = "h-11 w-11 shrink-0 rounded-[9px] border-0 bg-transparent p-0 text-muted-foreground shadow-none transition-[background-color,color] motion-control hover:bg-accent/80 hover:text-foreground active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 md:h-8 md:w-8"
 
 // Chat chrome uses one quiet raised surface so adjacent controls do not look like
 // unrelated floating layers across light and dark themes.

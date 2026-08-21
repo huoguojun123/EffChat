@@ -126,6 +126,7 @@ export function AdminExternalServiceChain({
   const [deleteTarget, setDeleteTarget] = useState<ExternalService | null>(
     null,
   );
+  const [pendingDiscard, setPendingDiscard] = useState(false);
   const [deletingKey, setDeletingKey] = useState("");
   const [editorOwner] = useState(() => new EditorOwnership());
   const [deleteOwner] = useState(() => new EditorOwnership());
@@ -169,7 +170,10 @@ export function AdminExternalServiceChain({
   }
 
   function closeEditor() {
-    if (editorOwner.isDirty() && !window.confirm("放弃当前外部服务的未保存修改？")) return;
+    if (editorOwner.isDirty()) {
+      setPendingDiscard(true);
+      return;
+    }
     editorOwner.invalidate();
     setSaving(false);
     setTesting(false);
@@ -461,6 +465,22 @@ export function AdminExternalServiceChain({
                 保存
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={pendingDiscard} onOpenChange={setPendingDiscard}>
+        <DialogContent className="max-w-[calc(100vw-1.5rem)] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>放弃未保存修改？</DialogTitle>
+            <DialogDescription>当前外部服务的地址、凭据或状态修改还没有保存，继续关闭会丢失这些内容。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingDiscard(false)}>继续编辑</Button>
+            <Button type="button" variant="destructive" onClick={() => {
+              setPendingDiscard(false)
+              editorOwner.invalidate()
+              closeEditor()
+            }}>放弃修改</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

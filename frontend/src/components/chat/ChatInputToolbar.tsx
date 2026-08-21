@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { MotionDrill } from "@/components/ui/motion"
 import { cn } from "@/lib/utils"
-import { ACCEPT_ATTR, SEARCH_MODE_LABEL, composerIconButtonClass, motionIndex, type SearchMode } from "./ChatInput.constants"
+import { ACCEPT_ATTR, SEARCH_MODE_LABEL, chatSurfaceControlClass, composerIconButtonClass, motionIndex, type SearchMode } from "./ChatInput.constants"
 import { MenuItem, SkillMenuItem } from "./ChatInputParts"
 
 interface ChatInputToolbarProps {
@@ -77,7 +77,7 @@ export function ChatInputToolbar({
   const searchEnabled = searchMode !== "off"
 
   return (
-    <div data-testid="composer-toolbar" className={cn("flex items-center gap-0 sm:gap-1.5", className)}>
+    <div data-testid="composer-toolbar" className={cn("flex items-center gap-0 p-0.5 sm:gap-0.5", chatSurfaceControlClass, className)}>
       <input
         ref={fileInputRef}
         type="file"
@@ -97,7 +97,7 @@ export function ChatInputToolbar({
         title="暂存附件"
         aria-label="暂存附件"
       >
-        {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+        {uploading ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Paperclip className="h-4 w-4" aria-hidden="true" />}
       </Button>
 
       <Button
@@ -105,7 +105,7 @@ export function ChatInputToolbar({
         variant="ghost"
         className={cn(
           composerIconButtonClass,
-          searchEnabled && "text-sky-700 before:bg-sky-100 before:ring-1 before:ring-sky-200/80 hover:before:bg-sky-100 dark:text-sky-300 dark:before:bg-sky-500/20 dark:before:ring-sky-400/25 dark:hover:before:bg-sky-500/30"
+          searchEnabled && "bg-sky-100/80 text-sky-700 hover:bg-sky-100 dark:bg-sky-500/15 dark:text-sky-300 dark:hover:bg-sky-500/25"
         )}
         disabled={!activeSessionId}
         title={SEARCH_MODE_LABEL[searchMode]}
@@ -113,7 +113,7 @@ export function ChatInputToolbar({
         aria-pressed={searchEnabled}
         onClick={() => setSearchMode(searchEnabled ? "off" : "auto")}
       >
-        <Globe className="h-4 w-4" />
+        <Globe className="h-4 w-4" aria-hidden="true" />
       </Button>
 
       <Popover open={thinkingMenuOpen} onOpenChange={setThinkingMenuOpen}>
@@ -123,13 +123,13 @@ export function ChatInputToolbar({
             variant="ghost"
             className={cn(
               composerIconButtonClass,
-              thinkingActive && "text-amber-700 before:bg-amber-100 before:ring-1 before:ring-amber-200/80 hover:before:bg-amber-100 dark:text-amber-300 dark:before:bg-amber-500/20 dark:before:ring-amber-400/25 dark:hover:before:bg-amber-500/30"
+              thinkingActive && "bg-amber-100/80 text-amber-700 hover:bg-amber-100 dark:bg-amber-500/15 dark:text-amber-300 dark:hover:bg-amber-500/25"
             )}
             disabled={!activeSessionId || !thinkingActive}
             title={thinkingActive ? `思考强度：${thinkingLabel}` : "当前模型不支持思考强度"}
             aria-label={thinkingActive ? `思考强度：${thinkingLabel}` : "当前模型不支持思考强度"}
           >
-            <Brain className="h-4 w-4" />
+            <Brain className="h-4 w-4" aria-hidden="true" />
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" side="top" className="w-[min(18rem,calc(100vw-1.5rem))] p-1.5">
@@ -166,14 +166,14 @@ export function ChatInputToolbar({
             className={cn(
               composerIconButtonClass,
               activeSession?.system_prompt || memoryEnabled || activeSkillCount > 0
-                ? "text-primary before:bg-primary/15 before:ring-1 before:ring-primary/20 hover:before:bg-primary/25"
+                ? "bg-primary/10 text-primary hover:bg-primary/15"
                 : ""
             )}
             disabled={!activeSessionId}
             title="更多"
             aria-label="更多"
           >
-            <MoreHorizontal className="h-4 w-4" />
+            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" side="top" className="w-[min(20rem,calc(100vw-1.5rem))] p-1.5">

@@ -94,8 +94,8 @@ test("user saves preserve newer input and cannot close another user editor", asy
   await expect(page.getByLabel("昵称")).toHaveValue("Alpha newer revision")
 
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByText("Beta User", { exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(page.getByLabel("昵称")).toHaveValue("Beta User")
   await page.waitForTimeout(350)
   await expect(page.getByLabel("昵称")).toHaveValue("Beta User")
@@ -162,14 +162,14 @@ test("group saves and deletes stay with the generation that started them", async
   await expect(page.getByLabel("名称")).toHaveValue("Group A newer revision")
 
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByText("Group B", { exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(page.getByLabel("名称")).toHaveValue("Group B")
   await page.waitForTimeout(350)
   await expect(page.getByLabel("名称")).toHaveValue("Group B")
 
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByRole("button", { name: "删除", exact: true }).click()
+  await page.getByRole("dialog", { name: "删除分组？" }).getByRole("button", { name: "删除分组" }).click()
   await page.getByText("Group A newer revision", { exact: true }).click()
   await expect(page.getByLabel("名称")).toHaveValue("Group A newer revision")
   await page.waitForTimeout(350)

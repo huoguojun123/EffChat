@@ -75,6 +75,9 @@ test("desktop empty state restores a persistently collapsed sidebar", async ({ p
   await expect(sidebar).toHaveAttribute("aria-hidden", "true")
   await expect(sidebar).toHaveAttribute("inert", "")
 
+  const skipLink = page.getByRole("link", { name: "跳到主要内容" })
+  await page.keyboard.press("Tab")
+  await expect(skipLink).toBeFocused()
   await page.keyboard.press("Tab")
   await expect(opener).toBeFocused()
   await opener.click()

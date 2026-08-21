@@ -4,6 +4,7 @@ import { exportSessionMarkdown } from "@/api/sessions"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { chatSurfaceControlClass } from "./ChatInput.constants"
 
 export function SessionExportDialog({ sessionId }: { sessionId: number }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -32,7 +33,7 @@ export function SessionExportDialog({ sessionId }: { sessionId: number }) {
           <Button
             variant="outline"
             size="icon"
-            className="pointer-events-auto h-8 w-8 rounded-lg border-border/70 bg-background/85 shadow-sm backdrop-blur motion-control hover:bg-background"
+            className={`pointer-events-auto h-8 w-8 ${chatSurfaceControlClass}`}
             aria-label="更多会话操作"
           >
             <Ellipsis className="h-3.5 w-3.5" />

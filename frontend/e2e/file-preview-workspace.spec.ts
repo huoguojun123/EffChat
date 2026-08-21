@@ -129,3 +129,33 @@ test("document workspace becomes a usable full-screen reader on mobile", async (
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await expect(page.locator(".document-markdown .markdown-table-scroll")).toBeVisible()
 })
+
+test("sent attachment deletion uses an in-product confirmation and restores focus", async ({ page }) => {
+  await mockDocumentPreview(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const deleteRequests: string[] = []
+  page.on("request", (request) => {
+    if (request.method() === "DELETE") deleteRequests.push(request.url())
+  })
+
+  await page.goto("/chat/1")
+  await page.getByRole("button", { name: "文件", exact: true }).click()
+  const workspace = page.getByRole("dialog", { name: "对话附件" })
+  const deleteButton = workspace.getByRole("button", { name: "删除文件：research-directory.xlsx" })
+  await expect(deleteButton).toBeVisible()
+
+  await deleteButton.click()
+  const confirmation = page.getByRole("dialog", { name: "删除已发送附件？" })
+  await expect(confirmation).toBeVisible()
+  await expect(confirmation).toContainText("历史消息中的预览、下载和重新发送都将不可用")
+  await confirmation.getByRole("button", { name: "取消" }).click()
+  await expect(confirmation).toBeHidden()
+  await expect(deleteButton).toBeFocused()
+  expect(deleteRequests).toHaveLength(0)
+
+  await deleteButton.click()
+  await page.getByRole("dialog", { name: "删除已发送附件？" }).getByRole("button", { name: "删除附件" }).click()
+  await expect.poll(() => deleteRequests.length).toBe(1)
+  expect(deleteRequests[0]).toMatch(/\/api\/v1\/files\/701$/)
+  await expect(workspace.getByText("research-directory.xlsx")).toHaveCount(0)
+})

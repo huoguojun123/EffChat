@@ -3,6 +3,7 @@ import { adminApi, type AIChannel, type AIChannelInput } from "@/api/admin"
 import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useModelStore } from "@/stores/models"
 import { Save, Trash2 } from "lucide-react"
 import { adapterOptions } from "./AdminChannelsPanel.constants"
@@ -87,6 +88,7 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
   const [fallbackKey] = useState(() => `custom-${Date.now().toString(36)}`)
   const [draft, setDraft] = useState<AIChannelInput>(() => channelDraftFrom(channel))
   const [saving, setSaving] = useState("")
+  const [pendingDelete, setPendingDelete] = useState(false)
   const [owner] = useState(() => new EditorOwnership())
   const loadModels = useModelStore((s) => s.loadModels)
 
@@ -170,12 +172,6 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
 
   async function deleteChannel() {
     if (!channel) return
-    const affected = models.filter((model) => model.provider === channel.key).length
-    const detail = affected > 0
-      ? `删除渠道 ${channel.key} 后，${affected} 个使用该渠道的模型会保留，但在重新分配渠道前无法调用。`
-      : `删除渠道 ${channel.key} 后，新请求将不能再使用这个渠道。`
-    if (!window.confirm(`${detail}\n\n确定继续？`)) return
-
     const operation = owner.beginOperation()
     setSaving("delete")
     setError("")
@@ -197,7 +193,12 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
     }
   }
 
+  function requestDeleteChannel() {
+    setPendingDelete(true)
+  }
+
   return (
+    <>
     <div className="border-b border-border/70 p-3">
       <div className="mb-2 flex items-center justify-between gap-3 lg:mb-3">
         <div className="min-w-0">
@@ -206,7 +207,7 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {!isNew && channel ? (
-            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void deleteChannel()} disabled={saving !== ""}>
+            <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={requestDeleteChannel} disabled={saving !== ""}>
               <Trash2 className="h-3.5 w-3.5" />
               删除
             </Button>
@@ -235,5 +236,28 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
         <Toggle label="启用" checked={draft.enabled} onChange={(enabled) => changeDraft((prev) => ({ ...prev, enabled }))} />
       </div>
     </div>
+    <Dialog open={pendingDelete} onOpenChange={setPendingDelete}>
+      <DialogContent className="max-w-[calc(100vw-1.5rem)] sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>删除渠道？</DialogTitle>
+          <DialogDescription>
+            {(() => {
+              const affected = channel ? models.filter((model) => model.provider === channel.key).length : 0
+              return affected > 0
+                ? `删除渠道 ${channel?.key} 后，${affected} 个使用该渠道的模型会保留，但在重新分配渠道前无法调用。`
+                : `删除渠道 ${channel?.key || "此渠道"} 后，新请求将不能再使用这个渠道。`
+            })()}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setPendingDelete(false)}>取消</Button>
+          <Button type="button" variant="destructive" onClick={() => {
+            setPendingDelete(false)
+            void deleteChannel()
+          }}>删除渠道</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }

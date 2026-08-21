@@ -25,7 +25,11 @@ export function getComposerTextareaMaxHeight(viewportWidth: number) {
   return COMPOSER_TEXTAREA_MOBILE_MAX_HEIGHT
 }
 
-export const composerIconButtonClass = "relative h-10 w-9 shrink-0 border-0 bg-transparent p-0 text-muted-foreground shadow-none transition-colors motion-control before:absolute before:inset-x-0.5 before:inset-y-1 before:rounded-[7px] before:border before:border-white/35 before:bg-popover/32 before:shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_4px_12px_rgba(0,0,0,0.07)] before:backdrop-blur-xl before:backdrop-saturate-150 before:transition-[background-color,box-shadow] hover:bg-transparent hover:text-foreground hover:before:bg-popover/58 hover:before:shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_5px_15px_rgba(0,0,0,0.1)] active:bg-transparent dark:before:border-white/10 [&>svg]:relative [&>svg]:z-10 sm:h-8 sm:w-8 sm:before:inset-0"
+export const composerIconButtonClass = "h-11 w-11 shrink-0 rounded-[9px] border-0 bg-transparent p-0 text-muted-foreground shadow-none transition-[background-color,color] motion-control hover:bg-accent/80 hover:text-foreground active:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8 sm:w-8"
+
+// Chat chrome uses one quiet raised surface so adjacent controls do not look like
+// unrelated floating layers across light and dark themes.
+export const chatSurfaceControlClass = "rounded-[10px] border border-border/45 bg-popover/42 shadow-sm backdrop-blur-md transition-[background-color,border-color,color,box-shadow] motion-control hover:bg-popover/68"
 
 export function motionIndex(index: number): CSSProperties {
   return { "--motion-index": index } as CSSProperties

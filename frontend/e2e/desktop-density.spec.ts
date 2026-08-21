@@ -33,6 +33,7 @@ const messages = [
     message_data: {
       role: "assistant",
       content: "桌面密度回归内容。",
+      runtime: { duration_ms: 1200, tokens_per_second: 12.3 },
       segments: [
         { thinking: "读取页面结构并检查共享 token。" },
         {
@@ -50,11 +51,15 @@ const messages = [
   },
 ]
 
-async function installRoutes(page: Page) {
-  await page.addInitScript(() => {
+async function installRoutes(page: Page, options: { theme?: "light" | "dark"; sidebarWidth?: number } = {}) {
+  await page.addInitScript((settings) => {
     localStorage.setItem("token", "density-fixture-token")
     localStorage.setItem("sidebar_open", "true")
-  })
+    if (settings.theme) localStorage.setItem("theme", settings.theme)
+    if (settings.sidebarWidth !== undefined && localStorage.getItem("sidebar_width") === null) {
+      localStorage.setItem("sidebar_width", String(settings.sidebarWidth))
+    }
+  }, options)
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
@@ -88,6 +93,20 @@ async function computed(page: Page, selector: string, property: string) {
   return page.locator(selector).first().evaluate((element, name) => getComputedStyle(element).getPropertyValue(name).trim(), property)
 }
 
+function contrastRatio(foreground: string, background: string) {
+  const parse = (value: string) => {
+    const match = value.trim().match(/^#([0-9a-f]{6})$/i)
+    if (!match) throw new Error(`Expected a six-digit hex color, got ${value}`)
+    return match[1].match(/../g)!.map((part) => Number.parseInt(part, 16) / 255).map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+  }
+  const luminance = (value: string) => {
+    const [r, g, b] = parse(value)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  }
+  const [high, low] = [luminance(foreground), luminance(background)].sort((a, b) => b - a)
+  return (high + 0.05) / (low + 0.05)
+}
+
 async function assertNoSmallChromeText(page: Page, selectors: string[]) {
   const offenders = await page.evaluate((rootSelectors) => {
     const result: string[] = []
@@ -118,7 +137,20 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await page.locator('[aria-label="侧边栏"]').boundingBox()).not.toBeNull()
   expect(Math.round((await page.locator('[aria-label="侧边栏"]').boundingBox())?.width || 0)).toBe(expected.sidebar)
   expect(Math.round((await page.getByTestId("chat-input").boundingBox())?.height || 0)).toBe(expected.composer)
-  expect(await computed(page, ".markdown-body", "font-size")).toBe("15px")
+  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
+  expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
+  expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
+  const messageSurfaces = await page.evaluate(() => {
+    const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
+    const assistant = document.querySelector<HTMLElement>('[data-testid="message-item"][data-role="assistant"] .markdown-body')
+    return {
+      user: user ? getComputedStyle(user).backgroundColor : "",
+      assistant: assistant ? getComputedStyle(assistant).backgroundColor : "",
+    }
+  })
+  expect(messageSurfaces.user).not.toBe("")
+  expect(messageSurfaces.user).not.toBe("rgba(0, 0, 0, 0)")
+  expect(messageSurfaces.user).not.toBe(messageSurfaces.assistant)
   await assertNoSmallChromeText(page, ["aside", '[data-testid="composer-toolbar"]'])
 
   const reasoning = page.getByRole("button", { name: /思考过程与工具调用/ })
@@ -126,6 +158,19 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await reasoning.locator(".text-xs").first().evaluate((element) => getComputedStyle(element).fontSize)).toBe("12px")
   await reasoning.click()
   await expect(page.getByRole("button", { name: /联网搜索/ })).toBeVisible()
+
+  const usageToggle = page.getByRole("button", { name: /12\.3\/s/ })
+  await expect(usageToggle).toBeVisible()
+  await usageToggle.click()
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toBeVisible()
+  await expect(page.getByText("1.2秒", { exact: true })).toBeVisible()
+  await page.getByText("桌面密度回归内容。", { exact: true }).click()
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toHaveCount(0)
+  await usageToggle.click()
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.getByText("12.3 token/秒", { exact: true })).toHaveCount(0)
+  await expect(usageToggle).toBeFocused()
 
   await page.getByRole("button", { name: /Fixture Admin/ }).click()
   const slider = page.getByRole("slider", { name: "对话字号" })
@@ -157,11 +202,24 @@ test("standard and compact desktop density keep chat chrome consistent", async (
     await page.goto("/chat/1")
     const dialog = await assertChatDensity(page, density)
     const expectedDialog = density.name === "standard" ? 600 : 560
-    expect(Math.round((await dialog.boundingBox())?.width || 0)).toBe(expectedDialog)
+    await expect.poll(async () => Math.round((await dialog.boundingBox())?.width || 0)).toBe(expectedDialog)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     expect(errors).toEqual([])
     await context.close()
   }
+})
+
+test("protected pages expose a keyboard skip link to the main content", async ({ page }) => {
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  const skipLink = page.getByRole("link", { name: "跳到主要内容" })
+  await page.keyboard.press("Tab")
+  await expect(skipLink).toBeFocused()
+  await skipLink.press("Enter")
+  await expect(page.locator("main#main-content")).toBeFocused()
 })
 
 test("admin density stays readable and mobile touch targets do not shrink", async ({ browser }) => {
@@ -191,4 +249,182 @@ test("admin density stays readable and mobile touch targets do not shrink", asyn
   }
   expect(await mobilePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await mobile.close()
+})
+
+test("mobile composer keeps its primary controls touchable", async ({ browser }) => {
+  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await mobile.newPage()
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  for (const button of await page.getByTestId("composer-toolbar").getByRole("button").all()) {
+    const box = await button.boundingBox()
+    expect(box?.width || 0).toBeGreaterThanOrEqual(44)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(44)
+  }
+  const send = await page.getByTestId("send-button").boundingBox()
+  expect(send?.width || 0).toBeGreaterThanOrEqual(44)
+  expect(send?.height || 0).toBeGreaterThanOrEqual(44)
+  expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
+
+  await mobile.close()
+})
+
+test("composer and message surfaces stay distinct in light and dark themes", async ({ browser }) => {
+  for (const theme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25 })
+    const page = await context.newPage()
+    await installRoutes(page, { theme })
+    await page.goto("/chat/1")
+    await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+    await waitForFonts(page)
+
+    expect(await page.locator("html").evaluate((element) => element.classList.contains("dark"))).toBe(theme === "dark")
+    expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
+    const surfaces = await page.evaluate(() => {
+      const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
+      const assistant = document.querySelector<HTMLElement>('[data-testid="message-item"][data-role="assistant"] .markdown-body')
+      const composer = document.querySelector<HTMLElement>('[data-testid="composer-surface"]')
+      return {
+        user: user ? getComputedStyle(user).backgroundColor : "",
+        assistant: assistant ? getComputedStyle(assistant).backgroundColor : "",
+        composer: composer ? getComputedStyle(composer).backgroundColor : "",
+      }
+    })
+    expect(surfaces.user).not.toBe("")
+    expect(surfaces.composer).not.toBe("")
+    expect(surfaces.user).not.toBe(surfaces.assistant)
+    expect(surfaces.composer).not.toBe(surfaces.assistant)
+    const statusColor = await page.locator(".status-success-solid").first().evaluate((element) => getComputedStyle(element).color)
+    const statusToken = await page.locator("html").evaluate((element) => getComputedStyle(element).getPropertyValue("--status-success-solid").trim())
+    expect(statusColor).not.toBe("")
+    expect(statusToken).toMatch(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+
+    await context.close()
+  }
+})
+
+test("chat chrome controls share the file surface contract", async ({ page }) => {
+  await installRoutes(page, { theme: "dark" })
+  await page.setViewportSize({ width: 1536, height: 864 })
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  const controls = [
+    page.getByRole("button", { name: "收起侧边栏" }),
+    page.getByRole("button", { name: "文件", exact: true }),
+    page.getByRole("button", { name: "更多会话操作" }),
+    page.getByRole("combobox", { name: /当前模型/ }),
+  ]
+  const styles = await Promise.all(controls.map((control) => control.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      borderColor: style.borderColor,
+      backgroundColor: style.backgroundColor,
+      boxShadow: style.boxShadow,
+      backdropFilter: style.backdropFilter,
+    }
+  })))
+  expect(styles).toHaveLength(4)
+  for (const property of ["borderColor", "backgroundColor", "boxShadow", "backdropFilter"] as const) {
+    expect(new Set(styles.map((style) => style[property])).size, `${property} should use one shared chat surface`).toBe(1)
+  }
+})
+
+test("light and dark semantic text tokens meet the representative contrast floor", async ({ browser }) => {
+  for (const theme of ["light", "dark"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25 })
+    const page = await context.newPage()
+    await installRoutes(page, { theme })
+    await page.goto("/chat/1")
+    await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+    await waitForFonts(page)
+
+    const tokens = await page.locator("html").evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        foreground: style.getPropertyValue("--theme-fg").trim(),
+        background: style.getPropertyValue("--theme-bg").trim(),
+        mutedForeground: style.getPropertyValue("--theme-muted-fg").trim(),
+        surface: style.getPropertyValue("--theme-surface").trim(),
+        error: style.getPropertyValue("--status-error-fg").trim(),
+        ring: style.getPropertyValue("--ring").trim(),
+      }
+    })
+    expect(contrastRatio(tokens.foreground, tokens.background)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(tokens.mutedForeground, tokens.surface)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(tokens.error, tokens.background)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(tokens.ring, tokens.background)).toBeGreaterThanOrEqual(3)
+    await context.close()
+  }
+})
+
+test("icon-only chat controls expose a keyboard-visible tooltip", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1536, height: 864 } })
+  const page = await context.newPage()
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  const sidebarToggle = page.getByRole("button", { name: "收起侧边栏" })
+  await expect(sidebarToggle).toBeVisible()
+  await sidebarToggle.focus()
+  await expect(page.getByRole("tooltip")).toHaveText("收起侧边栏", { timeout: 1200 })
+  await context.close()
+})
+
+test("desktop sidebar resize is bounded, keyboard accessible, and persistent", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const page = await context.newPage()
+  await installRoutes(page, { sidebarWidth: 320 })
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+  await waitForFonts(page)
+
+  const sidebar = page.getByRole("complementary", { name: "侧边栏" })
+  let separator = page.getByRole("separator", { name: "调整侧边栏宽度" })
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(320)
+  await expect(separator).toHaveAttribute("aria-valuemin", "240")
+  await expect(separator).toHaveAttribute("aria-valuemax", "360")
+  await expect(separator).toHaveAttribute("aria-valuenow", "320")
+
+  await separator.focus()
+  await separator.press("ArrowRight")
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(336)
+  await page.reload()
+  separator = page.getByRole("separator", { name: "调整侧边栏宽度" })
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(336)
+
+  await separator.press("Home")
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(240)
+  await separator.press("End")
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(360)
+
+  const handle = await separator.boundingBox()
+  expect(handle).not.toBeNull()
+  await page.mouse.move((handle?.x || 0) + 2, (handle?.y || 0) + 80)
+  await page.mouse.down()
+  await page.mouse.move(120, (handle?.y || 0) + 80)
+  await page.mouse.up()
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(240)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await context.close()
+})
+
+test("mobile sidebar ignores the desktop width preference", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await installRoutes(page, { sidebarWidth: 340 })
+  await page.goto("/chat/1")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
+
+  await expect(page.getByRole("separator", { name: "调整侧边栏宽度" })).toHaveCount(0)
+  await page.getByRole("button", { name: "打开侧边栏" }).click()
+  const sidebar = page.getByRole("complementary", { name: "侧边栏" })
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())?.width || 0)).toBe(300)
+  await expect(page.getByRole("separator", { name: "调整侧边栏宽度" })).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await context.close()
 })

@@ -7,6 +7,7 @@ import { useChatStore } from "@/stores/chat"
 import { useModelStore } from "@/stores/models"
 import { navigateWithFade } from "@/lib/navigation"
 import { Button } from "@/components/ui/button"
+import { SkipLink } from "@/components/ui/skip-link"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { MotionView } from "@/components/ui/motion"
 import { LoadingIndicator } from "@/components/ui/loading-indicator"
@@ -219,6 +220,7 @@ export function AdminPage() {
 
   return (
     <div className="flex h-[100dvh] min-w-0 flex-col overflow-hidden bg-background text-foreground">
+      <SkipLink />
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/70 px-3 sm:px-5">
         <Button type="button" variant="ghost" size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={returnToChat} aria-label="返回聊天" title="返回聊天">
           <ArrowLeft className="h-4 w-4" />
@@ -246,7 +248,7 @@ export function AdminPage() {
           ))}
         </nav>
 
-        <main className="min-h-0 min-w-0 overflow-y-auto overscroll-contain lg:overflow-hidden">
+        <main id="main-content" tabIndex={-1} className="min-h-0 min-w-0 overflow-y-auto overscroll-contain focus:outline-none lg:overflow-hidden">
           {panelState.error ? <div role="alert" className="border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">{panelState.error}</div> : null}
           <MotionView viewKey={tab} direction={tabDirection} className="min-h-full min-w-0 lg:h-full lg:min-h-0">
             <div className="min-h-full min-w-0 px-0 py-0 sm:px-5 sm:py-5 lg:h-full lg:min-h-0" aria-busy={panelState.loading}>

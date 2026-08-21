@@ -13,6 +13,7 @@ import { isStreamingInteractionBusy } from "@/lib/streamingStatus"
 import { getCachedTokens, getCacheHitRate, getReasoningTokens } from "@/lib/usage"
 import { formatTokens } from "@/lib/format"
 import { groupAssistantSegments } from "./assistantSegments"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
 interface Props {
   message: Message
@@ -103,7 +104,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
   }
 
   return (
-    <div className="group py-8">
+    <div className="group py-5 sm:py-6">
       <div className="flex items-start gap-0 sm:gap-4">
         <div className="hidden w-11 shrink-0 justify-center pt-1 sm:flex">
           <AppLogo className="h-8 w-8 text-foreground/80" />
@@ -340,32 +341,32 @@ function UsageSummary({ message }: { message: Message }) {
   if (!usage && !runtime?.tokens_per_second && !runtime?.duration_ms) return null
 
   return (
-    <div className="relative ml-auto flex justify-end">
-      <button
-        onClick={() => setOpen((value) => !value)}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground"
-      >
-        <span>{summary}</span>
-        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-      </button>
-      <div className={`absolute right-0 top-full z-20 mt-1 origin-top-right transition-[opacity,translate] motion-panel ${open ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none -translate-y-1 opacity-0"}`}>
-        <div className="w-max max-w-[calc(100vw-2rem)] rounded-md border border-border bg-popover px-3 py-2 text-popover-foreground shadow-lg">
-          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            {usage ? (
-              <>
-                <span>输入 {formatTokens(usage.prompt_tokens)}</span>
-                <span>输出 {formatTokens(usage.completion_tokens)}</span>
-                <span>总计 {formatTokens(usage.total_tokens)}</span>
-                {cachedTokens > 0 ? <span>缓存 {formatTokens(cachedTokens)} / {(cacheHitRate * 100).toFixed(0)}%</span> : null}
-                {reasoningTokens > 0 ? <span>推理 {formatTokens(reasoningTokens)}</span> : null}
-              </>
-            ) : null}
-            {runtime?.tokens_per_second ? <span>{runtime.tokens_per_second.toFixed(1)} token/秒</span> : null}
-            {runtime?.duration_ms ? <span>{formatDuration(runtime.duration_ms)}</span> : null}
-          </div>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <span>{summary}</span>
+          {open ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-max max-w-[calc(100vw-2rem)] px-3 py-2">
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {usage ? (
+            <>
+              <span>输入 {formatTokens(usage.prompt_tokens)}</span>
+              <span>输出 {formatTokens(usage.completion_tokens)}</span>
+              <span>总计 {formatTokens(usage.total_tokens)}</span>
+              {cachedTokens > 0 ? <span>缓存 {formatTokens(cachedTokens)} / {(cacheHitRate * 100).toFixed(0)}%</span> : null}
+              {reasoningTokens > 0 ? <span>推理 {formatTokens(reasoningTokens)}</span> : null}
+            </>
+          ) : null}
+          {runtime?.tokens_per_second ? <span>{runtime.tokens_per_second.toFixed(1)} token/秒</span> : null}
+          {runtime?.duration_ms ? <span>{formatDuration(runtime.duration_ms)}</span> : null}
         </div>
-      </div>
-    </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 

@@ -6,6 +6,7 @@ import { SessionFilesDrawer } from "./SessionFilesDrawer"
 import { SessionExportDialog } from "./SessionExportDialog"
 import { MessageList } from "@/components/message/MessageList"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { LoadingIndicator } from "@/components/ui/loading-indicator"
 import { AppLogo } from "@/components/AppLogo"
 import { ModelSelector } from "./ModelSelector"
@@ -16,6 +17,7 @@ import { navigateWithFade } from "@/lib/navigation"
 import { pickEmptyQuote } from "@/lib/emptyQuotes"
 import { prefersReducedMotion } from "@/lib/motionPreference"
 import { Files, PanelLeft, PanelLeftClose, Settings2, UploadCloud } from "lucide-react"
+import { chatSurfaceControlClass } from "./ChatInput.constants"
 
 export function ChatArea({
   sidebarOpen,
@@ -209,17 +211,22 @@ export function ChatArea({
       onDrop={handleDrop}
     >
       <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 bg-gradient-to-b from-background/68 via-background/32 to-transparent px-2 sm:gap-2 sm:px-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onToggleSidebar}
-          className="pointer-events-auto h-8 w-8 shrink-0 rounded-[10px] bg-popover/30 backdrop-blur-md hover:bg-popover/58"
-          aria-label={sidebarOpen ? "收起侧边栏" : "打开侧边栏"}
-          aria-expanded={sidebarOpen}
-          aria-controls="app-sidebar"
-        >
-          {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onToggleSidebar}
+              className={`pointer-events-auto h-8 w-8 shrink-0 ${chatSurfaceControlClass}`}
+              aria-label={sidebarOpen ? "收起侧边栏" : "打开侧边栏"}
+              aria-expanded={sidebarOpen}
+              aria-controls="app-sidebar"
+            >
+              {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{sidebarOpen ? "收起侧边栏" : "打开侧边栏"}</TooltipContent>
+        </Tooltip>
 
         {activeSession ? (
           <h1 className="min-w-0 flex-1 truncate px-1 text-sm font-medium text-foreground/80">
@@ -231,17 +238,22 @@ export function ChatArea({
 
         {!isSessionTransitioning && activeSessionId ? (
           <div className="pointer-events-none flex shrink-0 items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            className="pointer-events-auto h-8 w-8 gap-1.5 rounded-[10px] border-border/45 bg-popover/42 px-0 text-xs shadow-sm backdrop-blur-md motion-control hover:bg-popover/68 sm:w-auto sm:px-2.5"
-            onClick={() => setFilesOpen(true)}
-            aria-expanded={filesOpen}
-            aria-label="文件"
-          >
-            <Files className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">文件</span>
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={`pointer-events-auto h-8 w-8 gap-1.5 px-0 text-xs sm:w-auto sm:px-2.5 ${chatSurfaceControlClass}`}
+                onClick={() => setFilesOpen(true)}
+                aria-expanded={filesOpen}
+                aria-label="文件"
+              >
+                <Files className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">文件</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>文件</TooltipContent>
+          </Tooltip>
           <SessionExportDialog key={activeSessionId} sessionId={activeSessionId} />
           </div>
         ) : null}

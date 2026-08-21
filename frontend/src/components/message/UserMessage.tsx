@@ -22,6 +22,7 @@ interface Props {
 const COLLAPSED_MAX_PX = 336
 // 收起时把这条消息顶部锚到视口顶部下方的间距（px），让焦点落在消息开头而非飘走。
 const COLLAPSE_TOP_GAP = 16
+const userActionButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-40 sm:h-8"
 
 export function UserMessage({
   message,
@@ -116,8 +117,8 @@ export function UserMessage({
   const emptyEdit = !editContent.trim() && files.length === 0
 
   return (
-    <div className="flex justify-end py-3 pl-10">
-      <div className="max-w-[85%] space-y-1.5">
+    <div className="group flex justify-end py-4 pl-8 sm:py-5 sm:pl-10">
+      <div className="max-w-[min(88%,48rem)] space-y-1.5">
         {files.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {files.map((f, i) => (
@@ -132,8 +133,10 @@ export function UserMessage({
               value={editContent}
               onChange={(event) => setEditContent(event.target.value)}
               onKeyDown={handleEditKeyDown}
+              name="edited-message"
+              autoComplete="off"
               aria-label="编辑最后一条消息"
-              className="w-full resize-none rounded-[18px] border border-border/60 bg-popover px-4 py-2 text-[15px] leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] motion-control focus:border-primary/45 focus:ring-2 focus:ring-primary/10"
+              className="message-user-surface w-full resize-none rounded-[18px] border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_2px_10px_-9px_rgba(0,0,0,0.2)] outline-none transition-[border-color,box-shadow] motion-control focus:border-primary/45 focus:ring-3 focus:ring-primary/10"
             />
             <div className="flex items-center gap-1.5">
               <button
@@ -143,7 +146,7 @@ export function UserMessage({
                   setEditError(null)
                 }}
                 disabled={savingEdit}
-                className="h-8 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:opacity-40"
+                className={userActionButtonClass}
               >
                 取消
               </button>
@@ -151,7 +154,7 @@ export function UserMessage({
                 type="button"
                 onClick={() => void handleSaveEdit()}
                 disabled={savingEdit || unchangedEdit || emptyEdit}
-                className="h-8 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity motion-control hover:opacity-85 disabled:pointer-events-none disabled:opacity-35"
+                className="h-11 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-[opacity,box-shadow] motion-control hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-35 sm:h-8"
               >
                 {savingEdit ? "保存中" : "保存并重新生成"}
               </button>
@@ -167,9 +170,9 @@ export function UserMessage({
                   type="button"
                   onClick={() => void handleBeginEdit()}
                   disabled={savingEdit}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                  className={userActionButtonClass}
                 >
-                  <Pencil className="h-3.5 w-3.5" />
+                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>编辑</span>
                 </button>
               ) : null}
@@ -178,9 +181,9 @@ export function UserMessage({
                   type="button"
                   onClick={handleRetry}
                   disabled={isStreaming || retrying}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                  className={userActionButtonClass}
                 >
-                  <RotateCcw className={`h-3.5 w-3.5 ${retrying ? "animate-spin motion-reduce:animate-none" : ""}`} />
+                  <RotateCcw className={`h-3.5 w-3.5 ${retrying ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden="true" />
                   <span>{retrying ? "重试中" : "重试"}</span>
                 </button>
               ) : null}
@@ -189,10 +192,10 @@ export function UserMessage({
           </div>
         ) : null}
         {message.local_state === "pending" || message.local_state === "streaming" || message.local_state === "finalizing" ? (
-          <div className="text-right text-xs text-muted-foreground">等待服务端确认</div>
+          <div role="status" aria-live="polite" className="text-right text-xs text-muted-foreground">等待服务端确认</div>
         ) : null}
         {message.local_state === "failed_local" ? (
-          <div className="text-right text-xs text-rose-600 dark:text-rose-400">
+          <div role="alert" aria-live="polite" className="text-right text-xs text-rose-600 dark:text-rose-400">
             {message.local_error || "本次回复未能完成，可重试最后一条消息"}
           </div>
         ) : null}
@@ -246,14 +249,15 @@ function UserText({ text }: { text: string }) {
         >
           <div
             ref={innerRef}
-            className="rounded-2xl border border-border/40 bg-popover px-5 py-3 text-[15px] leading-relaxed shadow-sm whitespace-pre-wrap"
+            data-testid="user-message-surface"
+            className="message-user-surface rounded-2xl border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_2px_10px_-9px_rgba(0,0,0,0.2)] whitespace-pre-wrap sm:px-5 sm:py-3"
           >
             {text}
           </div>
         </div>
         <div
           className={cn(
-            "pointer-events-none absolute inset-x-0 bottom-0 h-12 rounded-b-2xl bg-gradient-to-t from-popover to-transparent transition-opacity motion-panel",
+            "message-user-fade pointer-events-none absolute inset-x-0 bottom-0 h-12 rounded-b-2xl transition-opacity motion-panel",
             showCollapsed ? "opacity-100" : "opacity-0"
           )}
         />
@@ -261,10 +265,11 @@ function UserText({ text }: { text: string }) {
       {isLong && (
         <div className="flex justify-center">
           <button
+            type="button"
             onClick={handleToggle}
-            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs text-muted-foreground transition-colors motion-control hover:text-foreground"
+            className="inline-flex h-11 items-center gap-1 rounded-md px-2.5 text-xs text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8"
           >
-            {collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+            {collapsed ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />}
             <span>{collapsed ? "展开" : "收起"}</span>
           </button>
         </div>

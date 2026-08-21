@@ -66,8 +66,8 @@ test("external service save and test responses stay with their draft", async ({ 
   await expect(baseURL).toHaveValue("https://newer.example.invalid/search")
 
   await page.getByRole("button", { name: "保存", exact: true }).click()
-  page.once("dialog", (dialog) => dialog.accept())
   await page.keyboard.press("Escape")
+  await page.getByRole("dialog", { name: "放弃未保存修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await page.getByText("Firecrawl", { exact: true }).click()
   await expect(baseURL).toHaveValue("https://api.firecrawl.dev/v2")
   await page.waitForTimeout(350)

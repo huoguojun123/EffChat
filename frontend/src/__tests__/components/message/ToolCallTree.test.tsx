@@ -36,8 +36,8 @@ describe("ToolCallTree web extraction quality", () => {
     expect(html).toContain("Fallback content remains visible.")
     expect(html).toContain('href="https://example.com/source"')
     expect(html).toContain('aria-label="打开来源：Example page"')
-    expect(html).toContain("text-amber-700")
-    expect(html).not.toContain("text-emerald-600")
+    expect(html).toContain("status-warning-solid")
+    expect(html).not.toContain("status-success-solid")
   })
 
   it("renders source-only truncation as a warning", () => {
@@ -49,14 +49,14 @@ describe("ToolCallTree web extraction quality", () => {
   })
 
   it("keeps clean and legacy output in the normal success state", () => {
-    expect(renderExtract({ summarized: true })).toContain("text-emerald-600")
-    expect(renderExtract({})).toContain("text-emerald-600")
+    expect(renderExtract({ summarized: true })).toContain("status-success-solid")
+    expect(renderExtract({})).toContain("status-success-solid")
   })
 
   it("keeps hard failures in the error state", () => {
     const html = renderExtract({ ok: false, error: "upstream unavailable", degraded: true })
 
-    expect(html).toContain("text-rose-600")
+    expect(html).toContain("status-error-solid")
     expect(html).toContain("工具调用失败")
     expect(html).not.toContain("内容受限")
   })

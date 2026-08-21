@@ -33,11 +33,11 @@ export function ContextStatusButton({ messages, model }: { messages: Message[]; 
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 shrink-0 rounded-[12px] text-muted-foreground transition-colors motion-control hover:bg-accent hover:text-foreground"
+          className="h-11 w-11 shrink-0 rounded-[12px] text-muted-foreground transition-colors motion-control hover:bg-accent hover:text-foreground sm:h-9 sm:w-9"
           title="上下文与用量"
           aria-label="上下文与用量"
         >
-          <Gauge className="h-3.5 w-3.5" />
+          <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-64 p-2 text-xs">
@@ -96,18 +96,19 @@ export function MenuItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-sm font-medium transition-[background-color,color,box-shadow] duration-200 motion-control",
-        "hover:bg-foreground/5 hover:shadow-[0_1px_2px_rgba(0,0,0,0.02)] disabled:pointer-events-none disabled:opacity-50",
+        "hover:bg-foreground/5 hover:shadow-[0_1px_2px_rgba(0,0,0,0.02)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50",
         active ? "text-foreground" : "text-muted-foreground"
       )}
     >
-      <span className={cn("shrink-0", active && "text-primary")}>{icon}</span>
+      <span aria-hidden="true" className={cn("shrink-0", active && "text-primary")}>{icon}</span>
       <span className="flex-1 truncate text-foreground/90">{label}</span>
       {hint && <span className="text-xs text-muted-foreground/70">{hint}</span>}
-      {trailing}
+      {trailing ? <span aria-hidden="true">{trailing}</span> : null}
     </button>
   )
 }
@@ -123,10 +124,11 @@ export function SkillMenuItem({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cn(
         "flex min-h-10 w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-sm font-medium transition-[background-color,color,box-shadow] duration-200 motion-control",
-        "hover:bg-foreground/5 hover:shadow-[0_1px_2px_rgba(0,0,0,0.02)]",
+        "hover:bg-foreground/5 hover:shadow-[0_1px_2px_rgba(0,0,0,0.02)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
         active ? "text-foreground" : "text-muted-foreground"
       )}
     >
@@ -161,7 +163,7 @@ export function FileChip({ file, onRemove, onRetry }: { file: FileInfo; onRemove
       title={file.filename}
     >
       {isImage && url ? (
-        <img src={url} alt={file.filename} className="h-6 w-6 shrink-0 rounded object-cover" />
+        <img src={url} alt={file.filename} width={24} height={24} className="h-6 w-6 shrink-0 rounded object-cover" />
       ) : (
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[8px] bg-muted/60 text-muted-foreground/80">
           <Icon className="h-3.5 w-3.5" />
@@ -177,7 +179,7 @@ export function FileChip({ file, onRemove, onRetry }: { file: FileInfo; onRemove
             <button
               type="button"
               onClick={onRetry}
-              className="shrink-0 rounded-[6px] px-1.5 text-xs font-medium text-primary transition-colors motion-control hover:bg-primary/10"
+              className="min-h-8 shrink-0 rounded-[6px] px-1.5 text-xs font-medium text-primary transition-colors motion-control hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               重试
             </button>
@@ -194,11 +196,12 @@ export function FileChip({ file, onRemove, onRetry }: { file: FileInfo; onRemove
         <span className="shrink-0 text-xs text-muted-foreground/60">{formatBytes(file.size)}</span>
       )}
       <button
+        type="button"
         onClick={onRemove}
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground transition-[background-color,color] duration-200 motion-control hover:bg-foreground/10 hover:text-foreground"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] text-muted-foreground transition-[background-color,color] duration-200 motion-control hover:bg-foreground/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         aria-label={`移除附件：${file.filename}`}
       >
-        <X className="h-3 w-3" />
+        <X className="h-3 w-3" aria-hidden="true" />
       </button>
     </div>
   )

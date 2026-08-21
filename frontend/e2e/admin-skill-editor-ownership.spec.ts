@@ -120,11 +120,11 @@ test("late loads and saves cannot replace the current Skill draft", async ({ pag
   await expect(page.getByLabel("描述")).toHaveValue("newer unsaved revision")
   await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled()
 
-  page.once("dialog", (dialog) => dialog.dismiss())
   await page.getByText("Skill A", { exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存修改？" }).getByRole("button", { name: "继续编辑" }).click()
   await expect(page.getByLabel("名称")).toHaveValue("Skill B")
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByText("Skill A", { exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(page.getByLabel("名称")).toHaveValue("Skill A")
 })
 
@@ -158,8 +158,8 @@ test("a committed save still refreshes the catalog after the editor changes", as
   await page.getByLabel("描述").fill("committed while navigating")
   await page.getByRole("button", { name: "保存", exact: true }).click()
 
-  page.once("dialog", (dialog) => dialog.accept())
   await page.getByText("Skill A", { exact: true }).click()
+  await page.getByRole("dialog", { name: "放弃未保存修改？" }).getByRole("button", { name: "放弃修改" }).click()
   await expect(page.getByText("Skill B (saved)", { exact: true })).toBeVisible()
   await expect(page.getByLabel("名称")).toHaveValue("Skill A")
 })

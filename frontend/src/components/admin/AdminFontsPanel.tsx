@@ -1,9 +1,10 @@
-import { useRef, useState } from "react"
+import { useRef, useState, type MouseEvent } from "react"
 import { adminApi, type ChatFontSelection } from "@/api/admin"
 import { useSystemStore } from "@/stores/system"
 import type { FontAsset } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { FontActionOwnership, FontSlotOwnership, type FontSlot, type FontSlotGenerations } from "@/components/admin/fontSlotOwnership"
 import { Code2, Languages, LetterText, RotateCcw, Trash2, Upload } from "lucide-react"
 
@@ -32,6 +33,8 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
   const [displayName, setDisplayName] = useState("")
   const [busyActions, setBusyActions] = useState<Set<string>>(() => new Set())
   const [pendingSlots, setPendingSlots] = useState<Partial<Record<FontSlot, number>>>({})
+  const [pendingDelete, setPendingDelete] = useState<FontAsset | null>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   function beginErrorOwner() {
     errorOwnerRef.current += 1
@@ -167,9 +170,6 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
   }
 
   async function deleteFont(font: FontAsset) {
-    const selectedSlots = fontSlots.filter((slot) => selectedFontIds[slot.key] === font.id).map((slot) => slot.label)
-    const slotText = selectedSlots.length > 0 ? `\n\n它正在用于：${selectedSlots.join("、")}。删除后这些槽位会恢复系统默认。` : ""
-    if (!window.confirm(`删除字体「${font.display_name}」？字体文件也会从上传目录移除。${slotText}`)) return
     const action = `delete-${font.id}`
     const errorOwner = beginErrorOwner()
     const actionGeneration = actionOwnershipRef.current.begin(action)
@@ -192,6 +192,11 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
     } finally {
       if (actionOwnershipRef.current.owns(action, actionGeneration)) setActionBusy(action, false)
     }
+  }
+
+  function requestDelete(font: FontAsset, event: MouseEvent<HTMLButtonElement>) {
+    deleteTriggerRef.current = event.currentTarget
+    setPendingDelete(font)
   }
 
   return (
@@ -278,7 +283,7 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
                 <span className="h-5 w-5 rounded-full bg-background shadow-sm transition-transform motion-control group-data-[enabled=true]:translate-x-5" />
               </button>
               <div className="flex justify-end">
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => void deleteFont(font)} disabled={busyActions.has(`delete-${font.id}`)} aria-label={`删除字体：${font.display_name}`} title="删除">
+                <Button ref={deleteTriggerRef} variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={(event) => requestDelete(font, event)} disabled={busyActions.has(`delete-${font.id}`)} aria-label={`删除字体：${font.display_name}`} title="删除">
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                 </Button>
               </div>
@@ -286,6 +291,35 @@ export function AdminFontsPanel({ fonts, selectedFontIds, setFonts, setSelectedF
           )
         })}
       </div>
+      <Dialog open={!!pendingDelete} onOpenChange={(nextOpen) => !nextOpen && setPendingDelete(null)}>
+        <DialogContent
+          className="max-w-[calc(100vw-1.5rem)] sm:max-w-md"
+          onCloseAutoFocus={(event) => {
+            const trigger = deleteTriggerRef.current
+            if (!trigger?.isConnected) return
+            event.preventDefault()
+            trigger.focus()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>删除字体？</DialogTitle>
+            <DialogDescription>
+              “{pendingDelete?.display_name}”的字体文件会从上传目录永久移除，无法恢复。
+              {pendingDelete && fontSlots.some((slot) => selectedFontIds[slot.key] === pendingDelete.id)
+                ? ` 当前用于：${fontSlots.filter((slot) => selectedFontIds[slot.key] === pendingDelete.id).map((slot) => slot.label).join("、")}；删除后这些槽位会恢复系统默认。`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setPendingDelete(null)}>取消</Button>
+            <Button type="button" variant="destructive" onClick={() => {
+              const font = pendingDelete
+              setPendingDelete(null)
+              if (font) void deleteFont(font)
+            }}>删除字体</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

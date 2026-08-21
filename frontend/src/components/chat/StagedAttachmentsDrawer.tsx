@@ -3,6 +3,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { FileText, ImageIcon, Loader2, Plus, RefreshCw, RotateCw, Square, Trash2, X } from "lucide-react"
 import { canRetryOCR, filesApi, type FileInfo, isFileSendBlocked } from "@/api/files"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useAuthedBlobUrl } from "@/hooks/useAuthedBlobUrl"
 import { formatBytes } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -64,10 +65,20 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                 上传
               </Button>
-              <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
-              <DialogPrimitive.Close asChild>
-                <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
-              </DialogPrimitive.Close>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
+                </TooltipTrigger>
+                <TooltipContent>刷新暂存附件</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DialogPrimitive.Close asChild>
+                    <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
+                  </DialogPrimitive.Close>
+                </TooltipTrigger>
+                <TooltipContent>关闭暂存附件</TooltipContent>
+              </Tooltip>
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto p-3 scrollbar-thin">
               {uploadTasks.length > 0 ? <div className="mb-3 space-y-1.5">{uploadTasks.map((task) => <UploadTaskRow key={task.id} task={task} onCancel={() => onCancelUpload(task.id)} onRetry={() => void onRetryUpload(task.id)} onDismiss={() => onDismissUpload(task.id)} />)}</div> : null}

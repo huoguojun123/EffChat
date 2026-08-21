@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, type MouseEvent } from "react"
 import { History, Plus, Search, Trash2 } from "lucide-react"
 import type { SkillDefinition } from "@/types"
 import { Button } from "@/components/ui/button"
@@ -12,10 +12,10 @@ interface AdminSkillsLibraryProps {
   saving: string
   mobileDetailOpen: boolean
   onQueryChange: (value: string) => void
-  onCreate: () => void
-  onEdit: (skill: SkillDefinition) => void
+  onCreate: (event: MouseEvent<HTMLButtonElement>) => void
+  onEdit: (skill: SkillDefinition, event: MouseEvent<HTMLButtonElement>) => void
   onToggle: (skill: SkillDefinition) => void
-  onDelete: (skill: SkillDefinition) => void
+  onDelete: (skill: SkillDefinition, event: MouseEvent<HTMLButtonElement>) => void
   onRollback: (skillID: string, restored: SkillDefinition | null) => void
   setError: (error: string) => void
 }
@@ -55,7 +55,7 @@ export function AdminSkillsLibrary({
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">暂无 Skill</div>
         ) : skills.map((skill) => (
           <div key={skill.id} className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-border/60 px-3 py-1.5 last:border-b-0">
-            <button className="min-w-0 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={() => onEdit(skill)}>
+            <button className="min-w-0 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" onClick={(event) => onEdit(skill, event)}>
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-sm font-medium">{skill.name}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">L{skill.min_group_level ?? 0}</span>
@@ -89,7 +89,7 @@ export function AdminSkillsLibrary({
               >
                 <History className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-11 w-11 text-destructive hover:text-destructive sm:h-8 sm:w-8" onClick={() => onDelete(skill)} aria-label={`删除 Skill：${skill.name}`} title="删除">
+              <Button variant="ghost" size="icon" className="h-11 w-11 text-destructive hover:text-destructive sm:h-8 sm:w-8" onClick={(event) => onDelete(skill, event)} aria-label={`删除 Skill：${skill.name}`} title="删除">
                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>

@@ -70,11 +70,23 @@ backend (Gin)
 
 外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面密度只依据可用 CSS viewport，不识别 OS、浏览器或 DPR：标准桌面保留 `0.25rem` spacing，宽度不超过 1600px 或高度不超过 900px 的非移动桌面使用 `0.2375rem` 紧凑 spacing，并同步侧栏、管理导航、设置框、欢迎引文、composer CSS 与运行时自动增高下限。产品 chrome 的常规辅助文字至少为 12px；用户可调的聊天正文字号保持独立。移动端不继承桌面紧凑 spacing，继续使用抽屉式侧栏、约 44 CSS px 的高频触摸命中盒和无横向溢出。
 
+消息角色不只依赖色相区分：用户输入保持右侧、有宽度上限的轻量语义表面，助手回答保持左侧透明文档流，工具、推理和运行元信息继续作为次级层级。Composer 使用高不透明 raised surface、单一边界和受控焦点环；聊天顶部操作控件和 Composer 工具条统一复用“文件”按钮的 quiet raised surface（语义 border/background、轻量 shadow 和受控 blur），不叠加逐按钮玻璃片。用户历史消息与当前输入入口使用不同表面语义。该视觉契约不改变聊天正文 15px 基线、用户字号设置、消息折叠、编辑重试、附件或发送/恢复生命周期。
+
+产品状态颜色使用 `success`、`warning`、`error`、`info` 和 `running` 五类主题语义 token（各自提供前景、弱背景、边界和纯色变体），亮暗主题在 `globals.css` 中分别定义。状态组件必须同时提供文字、图标或结构变化，不能只依赖色相；工具类型、文件类型和 provider 品牌仍可使用独立分类色。新增状态反馈优先复用这些 token，避免在组件内直接拼接 Tailwind 色阶。
+
+前端代表性 Chat 门禁在亮暗主题分别读取浏览器计算的颜色 token，并验证正文、辅助文字、错误状态达到 4.5:1，对焦点环达到 3:1；该门禁使用 synthetic fixture，不替代逐页面人工验收，也不扫描用户 Markdown、代码或预览内容。
+
 聊天区域的通用 shell 与当前是否已有 active session 解耦：欢迎页、readiness 检查中、检查失败和无可用模型状态都继续渲染唯一的侧栏 opener，使移动抽屉或桌面持久化收起后的历史会话、账号菜单和设置仍可到达。模型选择、文件、导出、输入框、会话文件抽屉和拖放上传只在 active session 存在时渲染；隐藏侧栏继续由 `aria-hidden`、`inert` 和 pointer-events 共同隔离，不复制第二套 opener 或侧栏状态。
 
 `/chat/:sessionId` 只接受不带符号、前导零、小数或指数形式的正十进制安全整数。非法参数在发起会话详情请求前以 replace 导航回根页并清空 active session；合法但当前列表未加载的 ID 仍沿既有鉴权详情查询确认存在性，查询失败同样回到可达的空会话 shell。
 
 移动端高频管理、文件和暂存附件动作使用至少约 44 CSS px 的实际命中盒，同时保持 14–16 px 图标视觉尺寸；原生 list/范围按钮显式复用 `focus-visible` ring，搜索输入提供稳定 accessible name。Radix Dialog 要么提供 `DialogDescription`，要么显式关闭描述关联，避免把 console warning 当作无害噪声。会话记忆继续保存英文 section key 与原始 title，但已知分区在中文界面使用中文展示标签，所有记忆时间统一以 `zh-CN` 24 小时格式显示。
+
+产品 Dialog 按行为区分短确认、文本输入、持续工作窗口和移动 Drawer；危险操作必须先显示影响范围并由用户确认，取消不得发起请求。嵌套在 `WorkspaceWindow` 内的短 Dialog 使用更高 overlay/content 层级，保证遮罩不会拦截子 Dialog；受控 Dialog 调用方负责保存触发元素并在取消时恢复焦点。该契约不替换浏览器级 `beforeunload`，也不引入全局 modal manager。
+
+语义不透明的 icon-only 控件使用共享 Radix Tooltip（Provider 延迟 500ms、focus 快速显示、Portal、碰撞内边距 8px），同时保留原有 `aria-label` 作为无障碍名称。当前已覆盖 Chat 侧栏/文件入口、Composer 发送/停止、暂存附件操作、会话文件刷新和 Admin 用户分页；普通截断文本继续使用 `title`，不把 tooltip 当作唯一功能或把所有文字机械包装。
+
+桌面侧栏宽度由 `--desktop-sidebar-width` 单一 token 所有组件共享。无 `sidebar_width` 浏览器偏好时继续使用标准/紧凑 CSS 默认值；用户调整后只保存 240–360px 的本地偏好，运行时根据 viewport 为主区保留至少约 560px 的空间。`Layout` 内的垂直 separator 支持 Pointer Events、方向键、Home/End 和可见焦点，拖动期间暂停宽度过渡；窄窗口只临时 clamp，窗口变宽后恢复用户目标值。移动端抽屉继续使用 `min(84vw, 300px)`，不显示或读取桌面 separator 交互。
 
 ## 发送消息链路
 

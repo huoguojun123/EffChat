@@ -42,12 +42,36 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
   const [tab, setTab] = useState<"profile" | "password" | "appearance">("profile")
   const [direction, setDirection] = useState<"forward" | "back">("forward")
   const [dirty, setDirty] = useState(false)
+  const [pendingLeave, setPendingLeave] = useState<(() => void) | null>(null)
+  const leaveTriggerRef = useRef<HTMLElement | null>(null)
 
   const leaveCurrentForm = useCallback((leave: () => void) => {
-    if (dirty && !window.confirm("放弃当前设置中未保存的修改？")) return
+    if (dirty) {
+      leaveTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      setPendingLeave(() => leave)
+      return
+    }
     setDirty(false)
     leave()
   }, [dirty])
+
+  const cancelPendingLeave = useCallback(() => {
+    setPendingLeave(null)
+    const trigger = leaveTriggerRef.current
+    leaveTriggerRef.current = null
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus()
+    })
+  }, [])
+
+  const confirmPendingLeave = useCallback(() => {
+    const leave = pendingLeave
+    setPendingLeave(null)
+    leaveTriggerRef.current = null
+    if (!leave) return
+    setDirty(false)
+    leave()
+  }, [pendingLeave])
 
   const close = useCallback(() => {
     leaveCurrentForm(() => onOpenChange(false))
@@ -64,7 +88,19 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
 
   return (
     <Dialog open={open} onOpenChange={(next) => next ? onOpenChange(true) : close()}>
-      <DialogContent className="max-h-[min(90dvh,680px)] max-w-[var(--settings-dialog-width)] overflow-hidden p-0">
+      <DialogContent
+        className="max-h-[min(90dvh,680px)] max-w-[var(--settings-dialog-width)] overflow-hidden p-0"
+        onKeyDownCapture={(event) => {
+          if (event.key !== "Escape") return
+          if (!dirty || pendingLeave !== null) return
+          // Capture the key before Radix's document dismiss handler. The parent
+          // owns this Escape and opens the guard on the next task, so the nested
+          // dialog cannot consume the same event while it mounts.
+          event.preventDefault()
+          event.stopPropagation()
+          window.setTimeout(close, 0)
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="border-b border-border px-5 py-4">设置</DialogTitle>
           <DialogDescription className="sr-only">配置个人资料、密码和界面外观。</DialogDescription>
@@ -104,6 +140,28 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
             {tab === "password" ? <PasswordForm onDone={close} onDirtyChange={setDirty} /> : null}
             {tab === "appearance" ? <AppearanceSettings /> : null}
           </MotionView>
+        </div>
+      </DialogContent>
+      <UnsavedChangesDialog
+        open={pendingLeave !== null}
+        onCancel={cancelPendingLeave}
+        onConfirm={confirmPendingLeave}
+      />
+    </Dialog>
+  )
+}
+
+function UnsavedChangesDialog({ open, onCancel, onConfirm }: { open: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onCancel() }}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>放弃未保存的修改？</DialogTitle>
+          <DialogDescription>当前设置尚未保存。继续后，这些修改将丢失。</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onCancel}>继续编辑</Button>
+          <Button type="button" variant="destructive" onClick={onConfirm}>放弃修改</Button>
         </div>
       </DialogContent>
     </Dialog>

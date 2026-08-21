@@ -47,7 +47,7 @@ export function AdminSkillsLibrary({
       <div className="border-b border-border/70 px-3 py-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder="搜索 Skill" aria-label="搜索 Skill" className="h-11 pl-8 text-sm sm:h-8" />
+          <Input value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder="搜索 Skill" aria-label="搜索 Skill" className="h-11 pl-8 text-sm md:h-8" />
         </div>
       </div>
       <div className="min-h-[220px] flex-1 overflow-y-auto scrollbar-thin">
@@ -81,7 +81,7 @@ export function AdminSkillsLibrary({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11 sm:h-8 sm:w-8"
+                className="h-11 w-11 md:h-8 md:w-8"
                 onClick={() => setHistorySkillID((current) => current === skill.id ? "" : skill.id)}
                 aria-label={`查看 Skill 变更历史：${skill.name}`}
                 aria-expanded={historySkillID === skill.id}
@@ -89,7 +89,7 @@ export function AdminSkillsLibrary({
               >
                 <History className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-11 w-11 text-destructive hover:text-destructive sm:h-8 sm:w-8" onClick={(event) => onDelete(skill, event)} aria-label={`删除 Skill：${skill.name}`} title="删除">
+              <Button variant="ghost" size="icon" className="h-11 w-11 text-destructive hover:text-destructive md:h-8 md:w-8" onClick={(event) => onDelete(skill, event)} aria-label={`删除 Skill：${skill.name}`} title="删除">
                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
             </div>

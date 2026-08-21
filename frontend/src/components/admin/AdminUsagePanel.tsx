@@ -133,7 +133,7 @@ export function AdminUsagePanel({ setError }: Props) {
                   setMode(item.value)
                 }
               }}
-              className={`h-11 rounded px-3 text-sm transition-colors motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8 ${
+              className={`h-11 rounded px-3 text-sm transition-colors motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:h-8 ${
                 mode === item.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
@@ -147,7 +147,7 @@ export function AdminUsagePanel({ setError }: Props) {
                 setMode("custom")
               }
             }}
-            className={`h-11 rounded px-3 text-sm transition-colors motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8 ${
+            className={`h-11 rounded px-3 text-sm transition-colors motion-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:h-8 ${
               mode === "custom" ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
@@ -159,15 +159,15 @@ export function AdminUsagePanel({ setError }: Props) {
             <input type="date" aria-label="开始日期" value={customStart} max={localDateValue(0)} onChange={(event) => {
               invalidateSelection(selectionKey("custom", event.target.value, customEnd))
               setCustomStart(event.target.value)
-            }} className="h-11 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8" />
+            }} className="h-11 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:h-8" />
             <span className="text-xs text-muted-foreground">至</span>
             <input type="date" aria-label="结束日期" value={customEnd} max={localDateValue(0)} onChange={(event) => {
               invalidateSelection(selectionKey("custom", customStart, event.target.value))
               setCustomEnd(event.target.value)
-            }} className="h-11 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8" />
+            }} className="h-11 min-w-0 rounded-md border border-border/70 bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:h-8" />
           </div>
         ) : null}
-        <Button variant="outline" size="sm" className="h-11 sm:h-8" onClick={refreshUsage} disabled={loading}>
+        <Button variant="outline" size="sm" className="h-11 md:h-8" onClick={refreshUsage} disabled={loading}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           刷新
         </Button>

@@ -88,7 +88,19 @@ export function SettingsDialog({ open, onOpenChange, onOpenPromptManager }: Prop
 
   return (
     <Dialog open={open} onOpenChange={(next) => next ? onOpenChange(true) : close()}>
-      <DialogContent className="max-h-[min(90dvh,680px)] max-w-[var(--settings-dialog-width)] overflow-hidden p-0">
+      <DialogContent
+        className="max-h-[min(90dvh,680px)] max-w-[var(--settings-dialog-width)] overflow-hidden p-0"
+        onKeyDownCapture={(event) => {
+          if (event.key !== "Escape") return
+          if (!dirty || pendingLeave !== null) return
+          // Capture the key before Radix's document dismiss handler. The parent
+          // owns this Escape and opens the guard on the next task, so the nested
+          // dialog cannot consume the same event while it mounts.
+          event.preventDefault()
+          event.stopPropagation()
+          window.setTimeout(close, 0)
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="border-b border-border px-5 py-4">设置</DialogTitle>
           <DialogDescription className="sr-only">配置个人资料、密码和界面外观。</DialogDescription>

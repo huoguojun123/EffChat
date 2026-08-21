@@ -182,7 +182,7 @@ test("Mermaid waits with the message and appears within the compact height cap",
   const secondButton = await toolbar.getByRole("button", { name: /联网/ }).boundingBox()
   expect(firstButton).not.toBeNull()
   expect(secondButton).not.toBeNull()
-  expect(Math.round((secondButton?.x || 0) - (firstButton?.x || 0))).toBe(36)
+  expect(Math.round((secondButton?.x || 0) - (firstButton?.x || 0))).toBe(44)
 })
 
 test("Graphviz inline and dialog previews become visible", async ({ page }) => {

@@ -665,7 +665,7 @@ function SortableServiceRow({
     >
       <button
         type="button"
-        className="flex h-11 min-h-11 w-11 min-w-11 shrink-0 cursor-grab items-center justify-center touch-none rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:min-h-8 sm:w-8 sm:min-w-8"
+        className="flex h-11 min-h-11 w-11 min-w-11 shrink-0 cursor-grab items-center justify-center touch-none rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50 md:h-8 md:min-h-8 md:w-8 md:min-w-8"
         aria-label={`调整 ${preset?.label || service.display_name} 顺序`}
         disabled={disabled}
         {...attributes}
@@ -694,7 +694,7 @@ function SortableServiceRow({
         type="button"
         variant="ghost"
         size="icon"
-        className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8"
+        className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive md:h-8 md:w-8"
         aria-label={`删除 ${preset?.label || service.display_name}`}
         title={`删除 ${preset?.label || service.display_name}`}
         onClick={onDelete}
@@ -749,7 +749,7 @@ function OCRSection({
               type="button"
               variant="ghost"
               size="icon"
-              className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive sm:h-8 sm:w-8"
+              className="h-11 w-11 shrink-0 text-muted-foreground hover:text-destructive md:h-8 md:w-8"
               aria-label="删除 MinerU 精准解析"
               title="删除 MinerU 精准解析"
               onClick={() => onDelete(service)}

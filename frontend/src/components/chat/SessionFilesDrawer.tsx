@@ -263,10 +263,10 @@ export function SessionFilesDrawer({ sessionId, open, onOpenChange }: Props) {
                       {selected.tokenEstimate ? ` · ${formatTokens(selected.tokenEstimate)}` : ""}
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md sm:h-8 sm:w-8" onClick={() => void downloadFile(selected)} aria-label={`${downloadLabel(selected)}：${selected.filename}`} title={downloadLabel(selected)}>
+                  <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md md:h-8 md:w-8" onClick={() => void downloadFile(selected)} aria-label={`${downloadLabel(selected)}：${selected.filename}`} title={downloadLabel(selected)}>
                     <Download className="h-4 w-4" />
                   </Button>
-                  <Button ref={deleteTriggerRef} variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md text-rose-500 hover:text-rose-600 sm:h-8 sm:w-8" onClick={(event) => requestDelete(selected, event)} aria-label={`删除文件：${selected.filename}`}>
+                  <Button ref={deleteTriggerRef} variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-md text-rose-500 hover:text-rose-600 md:h-8 md:w-8" onClick={(event) => requestDelete(selected, event)} aria-label={`删除文件：${selected.filename}`}>
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>

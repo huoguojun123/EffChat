@@ -7,6 +7,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.3] - 2026-08-21
+
+### Fixed
+
+- Improved mobile system-prompt selection with a single-column list and preview flow that remains usable within narrow touch viewports.
+- Preserved authentication credentials across transient startup, network, and timeout failures; credentials are cleared only after an explicit `401` response.
+- Kept high-frequency mobile controls at approximately 44 CSS px touch targets and aligned PWA install metadata with the actual icon contract.
+- Added regression coverage for mobile prompt selection, PWA session recovery, production update behavior, and the public build-time PWA contract.
+
 ## [0.4.1-beta.2] - 2026-08-18
 
 ### Fixed
@@ -182,7 +191,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.2...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.3...HEAD
+[0.4.1-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.3
 [0.4.1-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.2
 [0.4.1-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.1
 [0.4.0-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.0-beta.3

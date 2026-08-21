@@ -61,20 +61,20 @@ export function StagedAttachmentsDrawer({ open, onOpenChange, files, selected, u
           >
             <header className="flex min-h-12 items-center gap-2 border-b border-border/70 px-3 pt-[env(safe-area-inset-top)]">
               <DialogPrimitive.Title className="min-w-0 flex-1 text-sm font-medium">暂存附件</DialogPrimitive.Title>
-              <Button variant="ghost" size="sm" className="h-11 gap-1.5 px-2 sm:h-8" onClick={onUpload} disabled={uploading}>
+              <Button variant="ghost" size="sm" className="h-11 gap-1.5 px-2 md:h-8" onClick={onUpload} disabled={uploading}>
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                 上传
               </Button>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md md:h-8 md:w-8" onClick={() => void onRefresh()} aria-label="刷新暂存附件"><RefreshCw className="h-4 w-4" /></Button>
                 </TooltipTrigger>
                 <TooltipContent>刷新暂存附件</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DialogPrimitive.Close asChild>
-                    <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md sm:h-8 sm:w-8" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-11 w-11 rounded-md md:h-8 md:w-8" aria-label="关闭暂存附件"><X className="h-4 w-4" /></Button>
                   </DialogPrimitive.Close>
                 </TooltipTrigger>
                 <TooltipContent>关闭暂存附件</TooltipContent>

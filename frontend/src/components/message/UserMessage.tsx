@@ -22,7 +22,7 @@ interface Props {
 const COLLAPSED_MAX_PX = 336
 // 收起时把这条消息顶部锚到视口顶部下方的间距（px），让焦点落在消息开头而非飘走。
 const COLLAPSE_TOP_GAP = 16
-const userActionButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-40 sm:h-8"
+const userActionButtonClass = "inline-flex h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-40 md:h-8"
 
 export function UserMessage({
   message,
@@ -154,7 +154,7 @@ export function UserMessage({
                 type="button"
                 onClick={() => void handleSaveEdit()}
                 disabled={savingEdit || unchangedEdit || emptyEdit}
-                className="h-11 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-[opacity,box-shadow] motion-control hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-35 sm:h-8"
+                className="h-11 rounded-md bg-foreground px-3 text-xs font-medium text-background transition-[opacity,box-shadow] motion-control hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-35 md:h-8"
               >
                 {savingEdit ? "保存中" : "保存并重新生成"}
               </button>
@@ -267,7 +267,7 @@ function UserText({ text }: { text: string }) {
           <button
             type="button"
             onClick={handleToggle}
-            className="inline-flex h-11 items-center gap-1 rounded-md px-2.5 text-xs text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-8"
+            className="inline-flex h-11 items-center gap-1 rounded-md px-2.5 text-xs text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:h-8"
           >
             {collapsed ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />}
             <span>{collapsed ? "展开" : "收起"}</span>

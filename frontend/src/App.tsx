@@ -1,4 +1,5 @@
 import { lazy, useEffect } from "react"
+import { WifiOff } from "lucide-react"
 import { createBrowserRouter, Navigate } from "react-router"
 import { RouterProvider } from "react-router/dom"
 import { useAuthStore } from "@/stores/auth"
@@ -10,6 +11,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { PWAUpdatePrompt } from "@/components/PWAUpdatePrompt"
 import { LazyBoundary } from "@/components/LazyBoundary"
 import { LoadingIndicator } from "@/components/ui/loading-indicator"
+import { Button } from "@/components/ui/button"
 
 const AdminPage = lazy(() => import("@/components/admin/AdminPage").then((module) => ({ default: module.AdminPage })))
 
@@ -40,12 +42,25 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AppBootShell() {
+  const hydrationError = useAuthStore((s) => s.hydrationError)
+  const hydrate = useAuthStore((s) => s.hydrate)
   return (
-    <div className="flex h-dvh overflow-hidden bg-background" aria-busy="true">
+    <div className="flex h-dvh overflow-hidden bg-background" aria-busy={hydrationError ? undefined : true}>
       <div className="hidden w-[var(--desktop-sidebar-width)] shrink-0 border-r border-border/70 bg-sidebar md:block" />
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="h-12 shrink-0 border-b border-border/50" />
-        <LoadingIndicator label="正在启动" className="flex-1" />
+        {hydrationError ? (
+          <div role="alert" className="flex flex-1 items-center justify-center px-5 text-center">
+            <div className="max-w-sm">
+              <WifiOff className="mx-auto h-5 w-5 text-muted-foreground" aria-hidden="true" />
+              <h1 className="mt-3 text-sm font-semibold">暂时无法连接</h1>
+              <p className="mt-1 text-sm text-muted-foreground">{hydrationError}</p>
+              <Button type="button" variant="outline" className="mt-4 min-h-11" onClick={() => void hydrate()}>
+                重新连接
+              </Button>
+            </div>
+          </div>
+        ) : <LoadingIndicator label="正在启动" className="flex-1" />}
       </div>
     </div>
   )
@@ -64,8 +79,16 @@ export default function App() {
         void syncStoredToken(event.newValue)
       }
     }
+    function handleOnline() {
+      const auth = useAuthStore.getState()
+      if (auth.token && !auth.hydrated) void auth.hydrate()
+    }
     window.addEventListener("storage", handleStorage)
-    return () => window.removeEventListener("storage", handleStorage)
+    window.addEventListener("online", handleOnline)
+    return () => {
+      window.removeEventListener("storage", handleStorage)
+      window.removeEventListener("online", handleOnline)
+    }
   }, [hydrate, loadSystem, syncStoredToken])
 
   return (

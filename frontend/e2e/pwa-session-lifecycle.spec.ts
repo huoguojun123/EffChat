@@ -91,6 +91,30 @@ async function installChatRoutes(context: BrowserContext, override?: RouteOverri
   })
 }
 
+test("a transient startup outage preserves the token and can recover", async ({ context, page }) => {
+  let userChecks = 0
+  let unavailable = true
+  await installChatRoutes(context, async (route, path) => {
+    if (path !== "/api/v1/users/me") return false
+    userChecks += 1
+    if (unavailable) await route.abort("failed")
+    else await route.fulfill({ json: { id: 1, username: "member", role: "user", is_active: true } })
+    return true
+  })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto("/chat/1")
+
+  await expect(page.getByRole("alert")).toContainText("暂时无法连接")
+  expect(await page.evaluate(() => localStorage.getItem("token"))).toBe("test-token")
+  unavailable = false
+  await page.getByRole("button", { name: "重新连接" }).click()
+
+  await expect(page.getByText("session-one-message")).toBeVisible()
+  await expect(page).toHaveURL(/\/chat\/1$/)
+  expect(userChecks).toBeGreaterThanOrEqual(2)
+})
+
 test("390px foreground return rechecks the active run without losing the current session", async ({ context, page }) => {
   const activeChecks = new Map<Page, number>()
   await installChatRoutes(context, async (route, path) => {

@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { User } from "@/types"
 import { useAuthStore } from "@/stores/auth"
-import { api } from "@/api/client"
+import { api, ApiError } from "@/api/client"
 import * as authApi from "@/api/auth"
 import { clearAccountScopedState } from "@/stores/accountState"
 
-vi.mock("@/api/client", () => ({ api: { get: vi.fn() } }))
+vi.mock("@/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/client")>()
+  return { ...actual, api: { get: vi.fn() } }
+})
 vi.mock("@/api/auth", () => ({ login: vi.fn(), register: vi.fn() }))
 vi.mock("@/stores/accountState", () => ({ clearAccountScopedState: vi.fn() }))
 
@@ -41,10 +44,37 @@ beforeEach(() => {
     setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
     removeItem: vi.fn((key: string) => storage.delete(key)),
   })
-  useAuthStore.setState({ user: null, token: null, hydrated: true, isLoading: false })
+  useAuthStore.setState({ user: null, token: null, hydrated: true, hydrationError: null, isLoading: false })
 })
 
 describe("useAuthStore cross-tab synchronization", () => {
+  it("keeps the stored token when hydration fails without an authentication response", async () => {
+    storage.set("token", "still-valid-token")
+    apiGet.mockRejectedValue(new ApiError(0, "网络连接失败，请检查后端服务或网络"))
+
+    await useAuthStore.getState().hydrate()
+
+    expect(storage.get("token")).toBe("still-valid-token")
+    expect(clearAccountState).not.toHaveBeenCalled()
+    expect(useAuthStore.getState()).toMatchObject({
+      user: null,
+      token: "still-valid-token",
+      hydrated: false,
+      hydrationError: "网络连接失败，请检查后端服务或网络",
+    })
+  })
+
+  it("clears the stored token when hydration explicitly returns unauthorized", async () => {
+    storage.set("token", "expired-token")
+    apiGet.mockRejectedValue(new ApiError(401, "invalid or expired token"))
+
+    await useAuthStore.getState().hydrate()
+
+    expect(storage.has("token")).toBe(false)
+    expect(clearAccountState).toHaveBeenCalledOnce()
+    expect(useAuthStore.getState()).toMatchObject({ user: null, token: null, hydrated: true, hydrationError: null })
+  })
+
   it("clears account state and hydrates the user for a token from another tab", async () => {
     const nextUser = user(2, "next")
     storage.set("token", "next-token")

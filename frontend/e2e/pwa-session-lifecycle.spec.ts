@@ -321,6 +321,7 @@ test("PWA update failure returns the refresh action instead of spinning forever"
       addEventListener() {},
       removeEventListener() {},
       register: () => Promise.resolve(registration),
+      getRegistration: () => Promise.resolve(registration),
       ready: Promise.resolve(registration),
     }
     Object.defineProperty(Navigator.prototype, "serviceWorker", {

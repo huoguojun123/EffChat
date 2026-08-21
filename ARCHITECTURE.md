@@ -82,6 +82,8 @@ backend (Gin)
 
 移动端高频管理、文件和暂存附件动作使用至少约 44 CSS px 的实际命中盒，同时保持 14–16 px 图标视觉尺寸；原生 list/范围按钮显式复用 `focus-visible` ring，搜索输入提供稳定 accessible name。Radix Dialog 要么提供 `DialogDescription`，要么显式关闭描述关联，避免把 console warning 当作无害噪声。会话记忆继续保存英文 section key 与原始 title，但已知分区在中文界面使用中文展示标签，所有记忆时间统一以 `zh-CN` 24 小时格式显示。
 
+PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化、受控更新和恢复联网，不承诺离线聊天、离线消息读取、离线管理或离线文件预览。Service Worker 只预缓存启动壳与必要静态资源，不缓存认证 API、用户正文或私有文件响应。启动时 `/users/me` 的明确 401 才能清理本地凭据；网络失败、超时或后端不可达保留 token，并在不渲染账户数据的启动壳中显示重试状态，联网后重新验证。普通透明圆角图标只声明为普通 PWA icon；只有提供独立、不透明且经过安全区验证的资源后才能声明 `maskable`。
+
 产品 Dialog 按行为区分短确认、文本输入、持续工作窗口和移动 Drawer；危险操作必须先显示影响范围并由用户确认，取消不得发起请求。嵌套在 `WorkspaceWindow` 内的短 Dialog 使用更高 overlay/content 层级，保证遮罩不会拦截子 Dialog；受控 Dialog 调用方负责保存触发元素并在取消时恢复焦点。该契约不替换浏览器级 `beforeunload`，也不引入全局 modal manager。
 
 语义不透明的 icon-only 控件使用共享 Radix Tooltip（Provider 延迟 500ms、focus 快速显示、Portal、碰撞内边距 8px），同时保留原有 `aria-label` 作为无障碍名称。当前已覆盖 Chat 侧栏/文件入口、Composer 发送/停止、暂存附件操作、会话文件刷新和 Admin 用户分页；普通截断文本继续使用 `title`，不把 tooltip 当作唯一功能或把所有文字机械包装。

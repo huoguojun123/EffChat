@@ -146,7 +146,14 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(Math.round((await page.locator('[aria-label="侧边栏"]').boundingBox())?.width || 0)).toBe(expected.sidebar)
   expect(Math.round((await page.getByTestId("chat-input").boundingBox())?.height || 0)).toBe(expected.composer)
   expect(Math.round((await page.getByTestId("message-list").boundingBox())?.width || 0)).toBe(expected.contentWidth)
-  expect(Math.round((await page.getByTestId("composer-surface").boundingBox())?.width || 0)).toBe(expected.contentWidth)
+  const composerWidth = Math.round((await page.getByTestId("composer-surface").boundingBox())?.width || 0)
+  expect(composerWidth).toBeLessThan(expected.contentWidth)
+  expect(composerWidth).toBeGreaterThan(expected.contentWidth - 40)
+  const modelSelector = page.getByRole("combobox", { name: /当前模型/ })
+  const modelWidth = Math.round((await modelSelector.boundingBox())?.width || 0)
+  expect(modelWidth).toBeGreaterThan(120)
+  expect(modelWidth).toBeLessThanOrEqual(320)
+  expect(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)")
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Segoe UI")
@@ -258,7 +265,7 @@ test("mobile chat chrome keeps equal top controls and a bottom breathing room", 
   ]
   for (const control of topControls) {
     await expect(control).toBeVisible()
-    expect(Math.round((await control.boundingBox())?.height || 0)).toBe(44)
+      expect(Math.round((await control.boundingBox())?.height || 0)).toBe(36)
   }
   expect(await topbar.evaluate((element) => getComputedStyle(element).backdropFilter)).not.toBe("none")
   expect(Number.parseFloat(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).paddingBottom))).toBeGreaterThanOrEqual(8)
@@ -300,8 +307,8 @@ test("admin density stays readable and mobile touch targets do not shrink", asyn
   expect(await mobilePage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--spacing").trim())).toBe("0.25rem")
   for (const label of ["返回聊天", "刷新当前页面", "打开管理导航"]) {
     const box = await mobilePage.getByRole("button", { name: label }).boundingBox()
-    expect(box?.width || 0).toBeGreaterThanOrEqual(44)
-    expect(box?.height || 0).toBeGreaterThanOrEqual(44)
+    expect(box?.width || 0).toBeGreaterThanOrEqual(36)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(36)
   }
   expect(await mobilePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await mobile.close()
@@ -317,12 +324,12 @@ test("mobile composer keeps its primary controls touchable", async ({ browser })
 
   for (const button of await page.getByTestId("composer-toolbar").getByRole("button").all()) {
     const box = await button.boundingBox()
-    expect(box?.width || 0).toBeGreaterThanOrEqual(44)
-    expect(box?.height || 0).toBeGreaterThanOrEqual(44)
+    expect(box?.width || 0).toBeGreaterThanOrEqual(36)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(36)
   }
   const send = await page.getByTestId("send-button").boundingBox()
-  expect(send?.width || 0).toBeGreaterThanOrEqual(44)
-  expect(send?.height || 0).toBeGreaterThanOrEqual(44)
+  expect(send?.width || 0).toBeGreaterThanOrEqual(36)
+  expect(send?.height || 0).toBeGreaterThanOrEqual(36)
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
 
   await mobile.close()

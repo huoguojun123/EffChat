@@ -139,7 +139,7 @@ export function ComposerBox({
                 size="icon"
                 variant={isAbortable ? "ghost" : "default"}
                 className={cn(
-                  "h-11 w-11 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control md:h-9 md:w-9",
+                  "h-9 w-9 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control md:h-9 md:w-9",
                   isAbortable && "text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground",
                   isStreaming && !isAbortable && "cursor-wait"
                 )}

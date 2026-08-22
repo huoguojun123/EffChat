@@ -11,6 +11,14 @@ const session = {
   updated_at: "2026-08-16T00:00:00Z",
 }
 
+const longSession = {
+  ...session,
+  id: 2,
+  title: "这是一个用于验证侧栏标题有效宽度的较长会话标题",
+  created_at: "2026-08-16T00:02:00Z",
+  updated_at: "2026-08-16T00:02:00Z",
+}
+
 const messages = [
   {
     id: 1,
@@ -51,7 +59,7 @@ const messages = [
   },
 ]
 
-async function installRoutes(page: Page, options: { theme?: "light" | "dark"; sidebarWidth?: number } = {}) {
+async function installRoutes(page: Page, options: { theme?: "light" | "dark"; sidebarWidth?: number; sessions?: typeof session[] } = {}) {
   await page.addInitScript((settings) => {
     localStorage.setItem("token", "density-fixture-token")
     localStorage.setItem("sidebar_open", "true")
@@ -68,7 +76,7 @@ async function installRoutes(page: Page, options: { theme?: "light" | "dark"; si
     }
     if (path === "/api/v1/system/info") return route.fulfill({ json: { system_name: "EffChat", version: "fixture" } })
     if (path === "/api/v1/models") return route.fulfill({ json: { models: [{ id: "density-model", provider: "fixture", display_name: "Density Model", enabled: true, sort_order: 1 }], total: 1 } })
-    if (path === "/api/v1/sessions") return route.fulfill({ json: { sessions: [session], has_more: false, next_offset: 0 } })
+    if (path === "/api/v1/sessions") return route.fulfill({ json: { sessions: options.sessions ?? [session], has_more: false, next_offset: 0 } })
     if (path === "/api/v1/session-folders") return route.fulfill({ json: { folders: [] } })
     if (path === "/api/v1/sessions/1") return route.fulfill({ json: session })
     if (path === "/api/v1/sessions/1/messages" || path === "/api/v1/sessions/1/message-window") {
@@ -207,6 +215,27 @@ test("standard and compact desktop density keep chat chrome consistent", async (
     expect(errors).toEqual([])
     await context.close()
   }
+})
+
+test("inactive session actions do not reserve sidebar title width", async ({ page }) => {
+  await installRoutes(page, { sessions: [session, longSession] })
+  await page.goto("/chat/1")
+  await expect(page.getByTestId("session-row-2")).toBeVisible()
+  await waitForFonts(page)
+
+  const row = page.getByTestId("session-row-2")
+  const title = row.getByRole("button", { name: longSession.title })
+  const actions = row.getByTestId("session-actions")
+  await expect(actions).toBeHidden()
+  expect(await actions.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none")
+
+  const titleWidthBeforeFocus = (await title.boundingBox())?.width ?? 0
+  const rowWidth = (await row.boundingBox())?.width ?? 0
+  expect(titleWidthBeforeFocus).toBeGreaterThan(rowWidth - 40)
+
+  await title.focus()
+  await expect(actions).toBeVisible()
+  expect(await actions.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("auto")
 })
 
 test("protected pages expose a keyboard skip link to the main content", async ({ page }) => {

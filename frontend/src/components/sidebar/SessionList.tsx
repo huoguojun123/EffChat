@@ -111,10 +111,12 @@ export function SessionList({
               {items.map((session) => {
                 const active = activeSessionId === session.id
                 const editing = editingId === session.id
+                const actionsVisible = active || folderMenuId === session.id
 
                 return (
                   <div
                     key={session.id}
+                    data-testid={`session-row-${session.id}`}
                     className={cn(
                       "group relative flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm cursor-pointer transition-colors motion-control",
                       active
@@ -150,7 +152,10 @@ export function SessionList({
                         <>
                           <button
                             type="button"
-                            className="min-w-0 flex-1 truncate text-left"
+                            className={cn(
+                              "min-w-0 flex-1 truncate text-left",
+                              actionsVisible ? "pr-28" : "group-hover:pr-28 group-focus-within:pr-28"
+                            )}
                             aria-current={active ? "page" : undefined}
                             onClick={(e) => {
                               e.stopPropagation()
@@ -160,9 +165,11 @@ export function SessionList({
                             {session.title || "新对话"}
                           </button>
                           <div className={cn(
-                            "flex items-center gap-0.5 transition-opacity motion-control",
-                            active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                          )}>
+                            "absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity motion-control",
+                            actionsVisible
+                              ? "visible opacity-100"
+                              : "invisible pointer-events-none opacity-0 group-hover:visible group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:visible group-focus-within:pointer-events-auto"
+                          )} data-testid="session-actions">
                             <Popover
                               open={folderMenuId === session.id}
                               onOpenChange={(open) => {

@@ -94,8 +94,9 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
 
   useEffect(() => {
     owner.activate(channel?.key || "new-channel")
+    onDirtyChange(false)
     return () => owner.invalidate()
-  }, [channel?.key, owner])
+  }, [channel?.key, onDirtyChange, owner])
 
   function changeDraft(update: SetStateAction<AIChannelInput>) {
     owner.change()
@@ -231,7 +232,7 @@ export function AdminChannelSettingsForm({ channel, isNew, models, setChannels, 
           <Input value={draft.base_url} onChange={(e) => changeDraft((prev) => ({ ...prev, base_url: e.target.value }))} />
         </Field>
         <Field label="API key">
-          <Input type="password" value={draft.api_key || ""} placeholder={isNew ? "" : "留空保留已保存 Key"} onChange={(e) => changeDraft((prev) => ({ ...prev, api_key: e.target.value }))} />
+          <Input type="password" autoComplete="new-password" value={draft.api_key || ""} placeholder={isNew ? "" : "留空保留已保存 Key"} onChange={(e) => changeDraft((prev) => ({ ...prev, api_key: e.target.value }))} />
         </Field>
         <Toggle label="启用" checked={draft.enabled} onChange={(enabled) => changeDraft((prev) => ({ ...prev, enabled }))} />
       </div>

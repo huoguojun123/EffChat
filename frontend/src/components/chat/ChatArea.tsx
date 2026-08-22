@@ -345,7 +345,7 @@ function EmptyGreeting({
         <h2 className="text-sm font-medium text-muted-foreground/75">{greeting}</h2>
         <blockquote
           aria-label={quote.text}
-          className="empty-greeting-quote relative mt-4 text-balance font-serif text-foreground/82"
+          className="empty-greeting-quote relative mt-4 text-balance font-sans text-foreground/82"
         >
           <span aria-hidden="true" className="invisible block">{quote.text}</span>
           <span aria-hidden="true" className="absolute inset-0 block">

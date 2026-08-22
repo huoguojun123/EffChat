@@ -50,6 +50,34 @@ test("admin route loads only the model page dependencies and opens mobile naviga
   await expect.poll(async () => (await close.boundingBox())?.height || 0).toBeGreaterThanOrEqual(43.5)
 })
 
+test("model filter starts blank and does not create a dirty navigation guard", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("token", "test-token"))
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname
+    if (path === "/api/v1/users/me") return route.fulfill({ json: { id: 1, username: "admin", role: "admin", is_active: true } })
+    if (path === "/api/v1/system/info") return route.fulfill({ json: { system_name: "EffChat" } })
+    if (path === "/api/v1/models") return route.fulfill({ json: { models: [{ id: "fixture-model", display_name: "Fixture Model", provider: "fixture", enabled: true, sort_order: 1 }], total: 1 } })
+    if (path === "/api/v1/admin/channels") return route.fulfill({ json: { channels: [{ id: 1, key: "fixture", display_name: "Fixture", adapter: "openai_compatible", base_url: "https://example.invalid/v1", api_key_set: true, enabled: true, sort_order: 1 }], total: 1 } })
+    if (path === "/api/v1/admin/groups") return route.fulfill({ json: { groups: [], total: 0 } })
+    if (path === "/api/v1/admin/users") return route.fulfill({ json: { users: [], total: 0 } })
+    return route.fulfill({ json: {} })
+  })
+
+  await page.setViewportSize({ width: 1536, height: 864 })
+  await page.goto("/admin/models")
+  const filter = page.getByRole("searchbox", { name: "搜索模型" })
+  await expect(filter).toBeVisible()
+  await expect(filter).toHaveValue("")
+
+  await page.getByRole("navigation", { name: "管理后台导航" }).first().getByRole("button", { name: "用户", exact: true }).click()
+  await expect(page).toHaveURL(/\/admin\/users$/)
+  await expect(page.getByRole("heading", { name: "放弃未保存修改？" })).toHaveCount(0)
+
+  await page.getByRole("navigation", { name: "管理后台导航" }).first().getByRole("button", { name: "模型", exact: true }).click()
+  await expect(page).toHaveURL(/\/admin\/models$/)
+  await expect(page.getByRole("searchbox", { name: "搜索模型" })).toHaveValue("")
+})
+
 test("non-admin users are returned to chat before the admin page loads", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("token", "test-token"))
   await page.route("**/api/v1/**", async (route) => {

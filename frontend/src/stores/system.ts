@@ -78,10 +78,10 @@ function applyChatFonts(fonts: ChatFonts) {
   const chineseFamily = fonts.chinese?.file_url ? `"${fontFamilyName("chinese", fonts.chinese)}"` : ""
   const latinFamily = fonts.latin?.file_url ? `"${fontFamilyName("latin", fonts.latin)}"` : ""
   if (chineseFamily || latinFamily) {
-    const bodyFamilies = [chineseFamily, latinFamily, "var(--font-serif)"].filter(Boolean).join(", ")
+    const bodyFamilies = [chineseFamily, latinFamily, "var(--font-sans)"].filter(Boolean).join(", ")
     root.style.setProperty("--chat-font-family", bodyFamilies)
   } else {
-    root.style.setProperty("--chat-font-family", "var(--font-serif)")
+    root.style.setProperty("--chat-font-family", "var(--font-sans)")
   }
 
   if (fonts.code?.file_url) {

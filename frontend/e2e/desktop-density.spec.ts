@@ -149,6 +149,7 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(Math.round((await page.getByTestId("composer-surface").boundingBox())?.width || 0)).toBe(expected.contentWidth)
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
+  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Plus Jakarta Sans")
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
   const messageSurfaces = await page.evaluate(() => {
     const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')

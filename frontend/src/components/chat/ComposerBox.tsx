@@ -127,7 +127,7 @@ export function ComposerBox({
           autoComplete="off"
           aria-label="消息输入"
           placeholder="输入消息…"
-          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[6.25rem] text-[15px] leading-6 outline-none [font-family:var(--chat-font-family,var(--font-serif))] placeholder:text-muted-foreground/50 sm:pr-[5.6rem]"
+          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[6.25rem] text-[15px] leading-6 outline-none [font-family:var(--chat-font-family,var(--font-sans))] placeholder:text-muted-foreground/50 sm:pr-[5.6rem]"
           data-testid="chat-input"
         />
 

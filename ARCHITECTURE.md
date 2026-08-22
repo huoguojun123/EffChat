@@ -281,6 +281,8 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 认证 middleware 在所有受保护 API 前重新读取当前活动账号与 auth version，不信任 token 中的用户名或角色。缺少/非法 Authorization header、无效 token、非法 claims 和已失效账号使用稳定 401 code，非管理员访问为稳定 403；账号状态 repository 故障为带 request ID 的 retryable 5xx，并保留底层 cause 供内部诊断而不进入响应。该契约不改变 JWT 七天有效期、legacy token 的 auth version 兼容或账号变更后的 run 取消行为。
 
+首个注册账号额外持久化为唯一 `is_super_admin`，注册事务在 advisory lock 下原子授予该身份并激活；历史部署由 `054_super_admin_identity.sql` 按最早用户 ID 回填。普通管理员更新接口始终拒绝该账号的降级或停用，并返回 `super_admin_protected`；该标记不接受客户端提交，也不改变现有 `role=admin` 鉴权模型。
+
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 
 管理员保存渠道、模型、外部服务或工具配置后，只影响新请求；已经运行中的 SSE / Agent run 不会中途切换凭据。

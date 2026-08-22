@@ -76,7 +76,6 @@ CREATE TABLE IF NOT EXISTS users (
     nickname VARCHAR(100),
     avatar_url TEXT,
     role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
-    is_super_admin BOOLEAN NOT NULL DEFAULT false,
     group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL,
     permissions JSONB DEFAULT '{}',
     preferences JSONB DEFAULT '{}',
@@ -100,7 +99,6 @@ CREATE TRIGGER update_users_updated_at
 
 COMMENT ON TABLE users IS '用户表';
 COMMENT ON COLUMN users.role IS '角色：admin（管理员）或 user（普通用户）。首个注册用户由应用层自动设为 admin';
-COMMENT ON COLUMN users.is_super_admin IS '首个注册账号的不可降级身份；应用层和管理员接口禁止改为普通用户或停用';
 COMMENT ON COLUMN users.group_id IS '所属分级组，NULL 视为默认最低级';
 
 -- ============================================

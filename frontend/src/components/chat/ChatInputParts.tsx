@@ -33,7 +33,7 @@ export function ContextStatusButton({ messages, model }: { messages: Message[]; 
         <Button
           size="icon"
           variant="ghost"
-          className="h-9 w-9 shrink-0 rounded-[12px] text-muted-foreground transition-colors motion-control hover:bg-accent hover:text-foreground md:h-9 md:w-9"
+          className="!min-h-0 !min-w-0 h-8 w-8 shrink-0 rounded-[12px] text-muted-foreground transition-colors motion-control hover:bg-accent hover:text-foreground"
           title="上下文与用量"
           aria-label="上下文与用量"
         >

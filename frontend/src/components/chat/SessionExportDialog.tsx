@@ -33,7 +33,7 @@ export function SessionExportDialog({ sessionId }: { sessionId: number }) {
           <Button
             variant="outline"
             size="icon"
-            className={`pointer-events-auto h-9 w-9 md:h-8 md:w-8 ${chatSurfaceControlClass}`}
+            className={`pointer-events-auto !min-h-0 !min-w-0 h-8 w-8 ${chatSurfaceControlClass}`}
             aria-label="更多会话操作"
           >
             <Ellipsis className="h-3.5 w-3.5" />

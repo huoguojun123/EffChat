@@ -58,7 +58,7 @@ export function ModelSelector() {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className={`flex h-9 min-w-9 max-w-[42vw] items-center gap-1 px-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 sm:gap-1.5 sm:px-2.5 md:h-8 md:min-w-0 md:max-w-[min(32vw,320px)] md:py-1.5 ${chatSurfaceControlClass}`}
+          className={`flex h-8 min-w-8 max-w-[42vw] items-center gap-1 px-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 sm:gap-1.5 sm:px-2.5 md:min-w-0 md:max-w-[min(32vw,320px)] md:py-1.5 ${chatSurfaceControlClass}`}
           role="combobox"
           aria-label={triggerLabel}
           aria-haspopup="listbox"

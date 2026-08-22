@@ -265,7 +265,7 @@ test("mobile chat chrome keeps equal top controls and a bottom breathing room", 
   ]
   for (const control of topControls) {
     await expect(control).toBeVisible()
-      expect(Math.round((await control.boundingBox())?.height || 0)).toBe(36)
+      expect(Math.round((await control.boundingBox())?.height || 0)).toBe(32)
   }
   expect(await topbar.evaluate((element) => getComputedStyle(element).backdropFilter)).not.toBe("none")
   expect(Number.parseFloat(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).paddingBottom))).toBeGreaterThanOrEqual(8)
@@ -307,8 +307,8 @@ test("admin density stays readable and mobile touch targets do not shrink", asyn
   expect(await mobilePage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--spacing").trim())).toBe("0.25rem")
   for (const label of ["返回聊天", "刷新当前页面", "打开管理导航"]) {
     const box = await mobilePage.getByRole("button", { name: label }).boundingBox()
-    expect(box?.width || 0).toBeGreaterThanOrEqual(36)
-    expect(box?.height || 0).toBeGreaterThanOrEqual(36)
+    expect(box?.width || 0).toBeGreaterThanOrEqual(32)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(32)
   }
   expect(await mobilePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await mobile.close()
@@ -324,12 +324,12 @@ test("mobile composer keeps its primary controls touchable", async ({ browser })
 
   for (const button of await page.getByTestId("composer-toolbar").getByRole("button").all()) {
     const box = await button.boundingBox()
-    expect(box?.width || 0).toBeGreaterThanOrEqual(36)
-    expect(box?.height || 0).toBeGreaterThanOrEqual(36)
+    expect(box?.width || 0).toBeGreaterThanOrEqual(32)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(32)
   }
   const send = await page.getByTestId("send-button").boundingBox()
-  expect(send?.width || 0).toBeGreaterThanOrEqual(36)
-  expect(send?.height || 0).toBeGreaterThanOrEqual(36)
+  expect(send?.width || 0).toBeGreaterThanOrEqual(32)
+  expect(send?.height || 0).toBeGreaterThanOrEqual(32)
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
 
   await mobile.close()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func setupAdminTestEnv(t *testing.T) *adminTestEnv {
 		}
 	}
 
-	// First user = admin (per project design)
+	// First user = immutable super administrator.
 	adminUsername := fmt.Sprintf("admin_%d", time.Now().UnixNano())
 	adminResp := registerUser(t, r, adminUsername, "adminpass123")
 	var adminUserID int64
@@ -62,6 +63,9 @@ func setupAdminTestEnv(t *testing.T) *adminTestEnv {
 		if err := db.QueryRow("SELECT id FROM users WHERE username = $1", adminUsername).Scan(&adminUserID); err != nil {
 			t.Fatalf("lookup admin user failed: %v", err)
 		}
+	}
+	if adminResp.User == nil || !adminResp.User.IsSuperAdmin {
+		t.Fatalf("first registration must create super administrator: %+v", adminResp.User)
 	}
 	if _, err := db.Exec("UPDATE users SET role = 'admin', is_active = true WHERE id = $1", adminUserID); err != nil {
 		t.Fatalf("promote admin user failed: %v", err)
@@ -299,12 +303,24 @@ func TestAdminUpdateUser_InvalidRole(t *testing.T) {
 	}
 }
 
+func TestAdminUpdateUser_ProtectsSuperAdministrator(t *testing.T) {
+	env := setupAdminTestEnv(t)
+	role := "user"
+	if _, err := env.userAdminService.Update(env.adminID, &service.UpdateUserRequest{Role: &role}); !errors.Is(err, repository.ErrProtectedSuperAdmin) {
+		t.Fatalf("demote super administrator: got %v, want ErrProtectedSuperAdmin", err)
+	}
+	w := env.doAdmin(http.MethodPatch, fmt.Sprintf("/api/v1/admin/users/%d", env.adminID), map[string]interface{}{"is_active": false})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "super_admin_protected") {
+		t.Fatalf("disable super administrator: want 409 super_admin_protected, got %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestUserAdminService_PreventsRemovingLastActiveAdmin(t *testing.T) {
 	env := setupAdminTestEnv(t)
 	role := "user"
 	_, err := env.userAdminService.Update(env.adminID, &service.UpdateUserRequest{Role: &role})
-	if !errors.Is(err, repository.ErrLastActiveAdmin) {
-		t.Fatalf("demote last active admin: got %v, want ErrLastActiveAdmin", err)
+	if !errors.Is(err, repository.ErrProtectedSuperAdmin) {
+		t.Fatalf("demote super administrator: got %v, want ErrProtectedSuperAdmin", err)
 	}
 	admin, total, err := env.userAdminService.List(100, 0)
 	if err != nil {

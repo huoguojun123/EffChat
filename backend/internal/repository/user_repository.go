@@ -12,10 +12,11 @@ import (
 )
 
 var (
-	ErrNotFound         = errors.New("not found")
-	ErrLastActiveAdmin  = errors.New("cannot remove the last active admin")
-	ErrUserConflict     = errors.New("user identity conflict")
-	ErrUserGroupMissing = errors.New("user group not found")
+	ErrNotFound            = errors.New("not found")
+	ErrLastActiveAdmin     = errors.New("cannot remove the last active admin")
+	ErrUserConflict        = errors.New("user identity conflict")
+	ErrUserGroupMissing    = errors.New("user group not found")
+	ErrProtectedSuperAdmin = errors.New("super administrator identity is protected")
 	// ErrUserCommitUnknown marks the only mutation phase where deleting a
 	// staged avatar without re-reading ownership could remove a committed file.
 	ErrUserCommitUnknown = errors.New("user update commit outcome is unknown")
@@ -88,7 +89,7 @@ func sameOptionalString(left, right *string) bool {
 	return *left == *right
 }
 
-const userColumns = `id, username, email, password_hash, nickname, avatar_url, role, group_id,
+const userColumns = `id, username, email, password_hash, nickname, avatar_url, role, is_super_admin, group_id,
 	permissions, preferences, is_active, auth_version, created_at, updated_at, last_login_at`
 
 func scanUser(s interface {
@@ -103,6 +104,7 @@ func scanUser(s interface {
 		&user.Nickname,
 		&user.AvatarURL,
 		&user.Role,
+		&user.IsSuperAdmin,
 		&user.GroupID,
 		&user.Permissions,
 		&user.Preferences,
@@ -129,8 +131,8 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 // Create 创建用户
 func (r *UserRepository) Create(user *model.User) error {
 	query := `
-		INSERT INTO users (username, email, password_hash, nickname, role, permissions, preferences, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO users (username, email, password_hash, nickname, role, is_super_admin, permissions, preferences, is_active)
+		VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8)
 		RETURNING id, auth_version, created_at, updated_at
 	`
 
@@ -171,17 +173,19 @@ func (r *UserRepository) CreateRegistrationUserContext(ctx context.Context, user
 		return fmt.Errorf("count users: %w", userContextError(ctx, err))
 	}
 	user.Role = "user"
+	user.IsSuperAdmin = false
 	user.IsActive = false
 	if count == 0 {
 		user.Role = "admin"
+		user.IsSuperAdmin = true
 		user.IsActive = true
 	}
 	query := `
-		INSERT INTO users (username, email, password_hash, nickname, role, permissions, preferences, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO users (username, email, password_hash, nickname, role, is_super_admin, permissions, preferences, is_active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, auth_version, created_at, updated_at
 	`
-	if err := tx.QueryRowContext(ctx, query, user.Username, user.Email, user.PasswordHash, user.Nickname, user.Role, user.Permissions, user.Preferences, user.IsActive).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, query, user.Username, user.Email, user.PasswordHash, user.Nickname, user.Role, user.IsSuperAdmin, user.Permissions, user.Preferences, user.IsActive).Scan(&user.ID, &user.AuthVersion, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		if IsUniqueViolation(err) {
 			return fmt.Errorf("%w: username or email already exists", ErrUserConflict)
 		}
@@ -201,7 +205,7 @@ func (r *UserRepository) GetByID(id int64) (*model.User, error) {
 func (r *UserRepository) GetByIDContext(ctx context.Context, id int64) (*model.User, error) {
 	user := &model.User{}
 	query := `
-		SELECT id, username, email, password_hash, nickname, avatar_url, role,
+		SELECT id, username, email, password_hash, nickname, avatar_url, role, is_super_admin,
 		       permissions, preferences, is_active, auth_version, created_at, updated_at, last_login_at
 		FROM users
 		WHERE id = $1 AND is_active = true
@@ -215,6 +219,7 @@ func (r *UserRepository) GetByIDContext(ctx context.Context, id int64) (*model.U
 		&user.Nickname,
 		&user.AvatarURL,
 		&user.Role,
+		&user.IsSuperAdmin,
 		&user.Permissions,
 		&user.Preferences,
 		&user.IsActive,
@@ -242,7 +247,7 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 func (r *UserRepository) GetByUsernameContext(ctx context.Context, username string) (*model.User, error) {
 	user := &model.User{}
 	query := `
-		SELECT id, username, email, password_hash, nickname, avatar_url, role,
+		SELECT id, username, email, password_hash, nickname, avatar_url, role, is_super_admin,
 		       permissions, preferences, is_active, auth_version, created_at, updated_at, last_login_at
 		FROM users
 		WHERE username = $1
@@ -256,6 +261,7 @@ func (r *UserRepository) GetByUsernameContext(ctx context.Context, username stri
 		&user.Nickname,
 		&user.AvatarURL,
 		&user.Role,
+		&user.IsSuperAdmin,
 		&user.Permissions,
 		&user.Preferences,
 		&user.IsActive,
@@ -314,6 +320,7 @@ func (r *UserRepository) UpdateAdminFieldsContext(ctx context.Context, user *mod
 	user.Email = result.User.Email
 	user.Nickname = result.User.Nickname
 	user.Role = result.User.Role
+	user.IsSuperAdmin = result.User.IsSuperAdmin
 	user.Permissions = result.User.Permissions
 	user.IsActive = result.User.IsActive
 	user.AuthVersion = result.User.AuthVersion
@@ -352,6 +359,9 @@ func (r *UserRepository) UpdateFieldsContext(ctx context.Context, userID int64, 
 	}
 	currentRole := current.Role
 	currentActive := current.IsActive
+	if current.IsSuperAdmin && ((patch.Role != nil && *patch.Role != "admin") || (patch.IsActive != nil && !*patch.IsActive)) {
+		return UserUpdateResult{}, ErrProtectedSuperAdmin
+	}
 	oldAvatarURL := cloneOptionalString(current.AvatarURL)
 	patch.Apply(current)
 	if currentRole == "admin" && currentActive && (current.Role != "admin" || !current.IsActive) {
@@ -452,7 +462,7 @@ func (r *UserRepository) UpdatePasswordContext(ctx context.Context, userID int64
 // ListAll 获取所有用户（管理员用，含禁用账户）
 func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 	query := `
-		SELECT u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.role, u.group_id,
+		SELECT u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.role, u.is_super_admin, u.group_id,
 		       u.permissions, u.preferences, u.is_active, u.auth_version, u.created_at, u.updated_at, u.last_login_at,` +
 		effectiveUserGroupIdentitySQL + `
 		FROM users u` + effectiveUserGroupJoinSQL + `
@@ -478,6 +488,7 @@ func (r *UserRepository) ListAll(limit, offset int) ([]*model.User, error) {
 			&user.Nickname,
 			&user.AvatarURL,
 			&user.Role,
+			&user.IsSuperAdmin,
 			&user.GroupID,
 			&user.Permissions,
 			&user.Preferences,
@@ -558,7 +569,7 @@ func (r *UserRepository) GetByIDIncludeInactiveContext(ctx context.Context, id i
 	user := &model.User{}
 	effectiveGroup := &model.EffectiveUserGroup{}
 	query := `
-		SELECT u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.role, u.group_id,
+		SELECT u.id, u.username, u.email, u.password_hash, u.nickname, u.avatar_url, u.role, u.is_super_admin, u.group_id,
 		       u.permissions, u.preferences, u.is_active, u.auth_version, u.created_at, u.updated_at, u.last_login_at,` +
 		effectiveUserGroupIdentitySQL + `
 		FROM users u` + effectiveUserGroupJoinSQL + `
@@ -572,6 +583,7 @@ func (r *UserRepository) GetByIDIncludeInactiveContext(ctx context.Context, id i
 		&user.Nickname,
 		&user.AvatarURL,
 		&user.Role,
+		&user.IsSuperAdmin,
 		&user.GroupID,
 		&user.Permissions,
 		&user.Preferences,

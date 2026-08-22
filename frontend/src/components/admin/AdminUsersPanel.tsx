@@ -353,7 +353,8 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                 <button className="min-w-0 text-left" onClick={(event) => startEdit(user, event)}>
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-medium">{user.nickname || user.username}</span>
-                    {user.role === "admin" && <Shield className="h-3.5 w-3.5 text-amber-500" />}
+                    {user.role === "admin" && <Shield className={`h-3.5 w-3.5 ${user.is_super_admin ? "text-amber-500" : "text-muted-foreground"}`} />}
+                    {user.is_super_admin && <span className="shrink-0 text-xs text-amber-600 dark:text-amber-400">超级管理员</span>}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">{user.username}{user.email ? ` / ${user.email}` : ""}</div>
                 </button>
@@ -361,7 +362,7 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                   value={user.role}
                   onChange={(e) => quickPatch(user, { role: e.target.value as "admin" | "user" })}
                   className="h-8 w-24 rounded-md border border-input bg-background px-2 text-sm"
-                  disabled={saving === `user-${user.id}`}
+                  disabled={saving === `user-${user.id}` || user.is_super_admin}
                 >
                   <option value="admin">管理员</option>
                   <option value="user">用户</option>
@@ -468,13 +469,13 @@ export function AdminUsersPanel({ users, setUsers, groups, setError, onDirtyChan
                   </Field>
                   <div className="grid grid-cols-2 gap-3">
                     <Field label="角色">
-                      <select value={draft.role} onChange={(e) => changeDraft((prev) => prev ? { ...prev, role: e.target.value as "admin" | "user" } : prev)} className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm">
+                      <select value={draft.role} onChange={(e) => changeDraft((prev) => prev ? { ...prev, role: e.target.value as "admin" | "user" } : prev)} disabled={editedUser?.is_super_admin} className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm" title={editedUser?.is_super_admin ? "超级管理员身份不可更改" : undefined}>
                         <option value="admin">管理员</option>
                         <option value="user">用户</option>
                       </select>
                     </Field>
                     <Field label="状态">
-                      <StatusButton active={draft.is_active} onClick={() => changeDraft((prev) => prev ? { ...prev, is_active: !prev.is_active } : prev)} className="h-8 w-full justify-center rounded-md text-sm" />
+                      <StatusButton active={draft.is_active} onClick={() => changeDraft((prev) => prev ? { ...prev, is_active: !prev.is_active } : prev)} disabled={editedUser?.is_super_admin} className="h-8 w-full justify-center rounded-md text-sm" />
                     </Field>
                   </div>
                   {draft.id && (

@@ -462,7 +462,7 @@ export function MessageList() {
       >
         <div
           ref={listRef}
-          className={`mx-auto w-full max-w-[1060px] px-4 pt-16 transition-opacity duration-[160ms] ease-out motion-reduce:transition-none ${windowSwitching ? "opacity-0" : "opacity-100"}`}
+          className={`mx-auto w-full max-w-[var(--chat-content-max-width)] px-4 pt-16 transition-opacity duration-[160ms] ease-out motion-reduce:transition-none ${windowSwitching ? "opacity-0" : "opacity-100"}`}
           style={{ paddingBottom: "var(--chat-composer-inset, 1rem)" }}
           data-testid="message-list"
         >

@@ -44,6 +44,7 @@ type UserResponse struct {
 	Email          *string                    `json:"email,omitempty"`
 	Nickname       *string                    `json:"nickname,omitempty"`
 	Role           string                     `json:"role"`
+	IsSuperAdmin   bool                       `json:"is_super_admin"`
 	GroupID        *int64                     `json:"group_id"`
 	EffectiveGroup EffectiveUserGroupResponse `json:"effective_group"`
 	Permissions    json.RawMessage            `json:"permissions,omitempty"`
@@ -300,6 +301,7 @@ func toUserResponse(u *model.User) *UserResponse {
 		Email:          u.Email,
 		Nickname:       u.Nickname,
 		Role:           u.Role,
+		IsSuperAdmin:   u.IsSuperAdmin,
 		GroupID:        u.GroupID,
 		EffectiveGroup: effectiveGroup,
 		Permissions:    json.RawMessage(u.Permissions),

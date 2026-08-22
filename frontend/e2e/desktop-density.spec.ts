@@ -11,6 +11,14 @@ const session = {
   updated_at: "2026-08-16T00:00:00Z",
 }
 
+const longSession = {
+  ...session,
+  id: 2,
+  title: "这是一个用于验证侧栏标题有效宽度的较长会话标题",
+  created_at: "2026-08-16T00:02:00Z",
+  updated_at: "2026-08-16T00:02:00Z",
+}
+
 const messages = [
   {
     id: 1,
@@ -51,7 +59,7 @@ const messages = [
   },
 ]
 
-async function installRoutes(page: Page, options: { theme?: "light" | "dark"; sidebarWidth?: number } = {}) {
+async function installRoutes(page: Page, options: { theme?: "light" | "dark"; sidebarWidth?: number; sessions?: typeof session[] } = {}) {
   await page.addInitScript((settings) => {
     localStorage.setItem("token", "density-fixture-token")
     localStorage.setItem("sidebar_open", "true")
@@ -68,7 +76,7 @@ async function installRoutes(page: Page, options: { theme?: "light" | "dark"; si
     }
     if (path === "/api/v1/system/info") return route.fulfill({ json: { system_name: "EffChat", version: "fixture" } })
     if (path === "/api/v1/models") return route.fulfill({ json: { models: [{ id: "density-model", provider: "fixture", display_name: "Density Model", enabled: true, sort_order: 1 }], total: 1 } })
-    if (path === "/api/v1/sessions") return route.fulfill({ json: { sessions: [session], has_more: false, next_offset: 0 } })
+    if (path === "/api/v1/sessions") return route.fulfill({ json: { sessions: options.sessions ?? [session], has_more: false, next_offset: 0 } })
     if (path === "/api/v1/session-folders") return route.fulfill({ json: { folders: [] } })
     if (path === "/api/v1/sessions/1") return route.fulfill({ json: session })
     if (path === "/api/v1/sessions/1/messages" || path === "/api/v1/sessions/1/message-window") {
@@ -129,7 +137,7 @@ async function assertNoSmallChromeText(page: Page, selectors: string[]) {
   expect(offenders, `visible chrome text below 12px: ${offenders.join(", ")}`).toEqual([])
 }
 
-async function assertChatDensity(page: Page, expected: { spacing: string; sidebar: number; composer: number }) {
+async function assertChatDensity(page: Page, expected: { spacing: string; sidebar: number; composer: number; contentWidth: number }) {
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
   await waitForFonts(page)
 
@@ -137,8 +145,18 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await page.locator('[aria-label="侧边栏"]').boundingBox()).not.toBeNull()
   expect(Math.round((await page.locator('[aria-label="侧边栏"]').boundingBox())?.width || 0)).toBe(expected.sidebar)
   expect(Math.round((await page.getByTestId("chat-input").boundingBox())?.height || 0)).toBe(expected.composer)
+  expect(Math.round((await page.getByTestId("message-list").boundingBox())?.width || 0)).toBe(expected.contentWidth)
+  const composerWidth = Math.round((await page.getByTestId("composer-surface").boundingBox())?.width || 0)
+  expect(composerWidth).toBeLessThan(expected.contentWidth)
+  expect(composerWidth).toBeGreaterThan(expected.contentWidth - 40)
+  const modelSelector = page.getByRole("combobox", { name: /当前模型/ })
+  const modelWidth = Math.round((await modelSelector.boundingBox())?.width || 0)
+  expect(modelWidth).toBeGreaterThan(120)
+  expect(modelWidth).toBeLessThanOrEqual(320)
+  expect(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)")
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
+  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Segoe UI")
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
   const messageSurfaces = await page.evaluate(() => {
     const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
@@ -187,9 +205,9 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
 
 test("standard and compact desktop density keep chat chrome consistent", async ({ browser }) => {
   const cases = [
-    { name: "standard", viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, spacing: "0.25rem", sidebar: 280, composer: 54 },
-    { name: "125-percent compact", viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, spacing: "0.2375rem", sidebar: 246, composer: 50 },
-    { name: "low-height compact", viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, spacing: "0.2375rem", sidebar: 240, composer: 50 },
+    { name: "standard", viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, spacing: "0.25rem", sidebar: 280, composer: 54, contentWidth: 1180 },
+    { name: "125-percent compact", viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, spacing: "0.2375rem", sidebar: 246, composer: 50, contentWidth: 1120 },
+    { name: "low-height compact", viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, spacing: "0.2375rem", sidebar: 240, composer: 50, contentWidth: 1120 },
   ]
 
   for (const density of cases) {
@@ -207,6 +225,51 @@ test("standard and compact desktop density keep chat chrome consistent", async (
     expect(errors).toEqual([])
     await context.close()
   }
+})
+
+test("inactive session actions do not reserve sidebar title width", async ({ page }) => {
+  await installRoutes(page, { sessions: [session, longSession] })
+  await page.goto("/chat/1")
+  await expect(page.getByTestId("session-row-2")).toBeVisible()
+  await waitForFonts(page)
+
+  const row = page.getByTestId("session-row-2")
+  const title = row.getByRole("button", { name: longSession.title })
+  const actions = row.getByTestId("session-actions")
+  await expect(actions).toBeHidden()
+  expect(await actions.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none")
+
+  const titleWidthBeforeFocus = (await title.boundingBox())?.width ?? 0
+  const rowWidth = (await row.boundingBox())?.width ?? 0
+  expect(titleWidthBeforeFocus).toBeGreaterThan(rowWidth - 40)
+
+  await title.focus()
+  await expect(actions).toBeVisible()
+  expect(await actions.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("auto")
+})
+
+test("mobile chat chrome keeps equal top controls and a bottom breathing room", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  await expect(page.getByTestId("message-item").first()).toBeVisible()
+  await waitForFonts(page)
+
+  const topbar = page.getByTestId("chat-topbar")
+  const topControls = [
+    page.getByRole("button", { name: /侧边栏/ }),
+    page.getByRole("button", { name: "文件" }),
+    page.getByRole("button", { name: "更多会话操作" }),
+    page.getByRole("combobox", { name: /当前模型/ }),
+  ]
+  for (const control of topControls) {
+    await expect(control).toBeVisible()
+      expect(Math.round((await control.boundingBox())?.height || 0)).toBe(32)
+  }
+  expect(await topbar.evaluate((element) => getComputedStyle(element).backdropFilter)).not.toBe("none")
+  expect(Number.parseFloat(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).paddingBottom))).toBeGreaterThanOrEqual(8)
+  await context.close()
 })
 
 test("protected pages expose a keyboard skip link to the main content", async ({ page }) => {
@@ -244,8 +307,8 @@ test("admin density stays readable and mobile touch targets do not shrink", asyn
   expect(await mobilePage.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--spacing").trim())).toBe("0.25rem")
   for (const label of ["返回聊天", "刷新当前页面", "打开管理导航"]) {
     const box = await mobilePage.getByRole("button", { name: label }).boundingBox()
-    expect(box?.width || 0).toBeGreaterThanOrEqual(44)
-    expect(box?.height || 0).toBeGreaterThanOrEqual(44)
+    expect(box?.width || 0).toBeGreaterThanOrEqual(32)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(32)
   }
   expect(await mobilePage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await mobile.close()
@@ -261,12 +324,12 @@ test("mobile composer keeps its primary controls touchable", async ({ browser })
 
   for (const button of await page.getByTestId("composer-toolbar").getByRole("button").all()) {
     const box = await button.boundingBox()
-    expect(box?.width || 0).toBeGreaterThanOrEqual(44)
-    expect(box?.height || 0).toBeGreaterThanOrEqual(44)
+    expect(box?.width || 0).toBeGreaterThanOrEqual(32)
+    expect(box?.height || 0).toBeGreaterThanOrEqual(32)
   }
   const send = await page.getByTestId("send-button").boundingBox()
-  expect(send?.width || 0).toBeGreaterThanOrEqual(44)
-  expect(send?.height || 0).toBeGreaterThanOrEqual(44)
+  expect(send?.width || 0).toBeGreaterThanOrEqual(32)
+  expect(send?.height || 0).toBeGreaterThanOrEqual(32)
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
 
   await mobile.close()

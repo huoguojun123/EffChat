@@ -127,7 +127,7 @@ export function ComposerBox({
           autoComplete="off"
           aria-label="消息输入"
           placeholder="输入消息…"
-          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[6.25rem] text-[15px] leading-6 outline-none [font-family:var(--chat-font-family,var(--font-serif))] placeholder:text-muted-foreground/50 sm:pr-[5.6rem]"
+          className="block box-border h-[var(--chat-composer-height)] w-full resize-none overflow-y-hidden bg-transparent py-[var(--chat-composer-padding-y)] pr-[6.25rem] text-[15px] leading-6 outline-none [font-family:var(--chat-font-family,var(--font-sans))] placeholder:text-muted-foreground/50 sm:pr-[5.6rem]"
           data-testid="chat-input"
         />
 
@@ -139,7 +139,7 @@ export function ComposerBox({
                 size="icon"
                 variant={isAbortable ? "ghost" : "default"}
                 className={cn(
-                  "h-11 w-11 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control md:h-9 md:w-9",
+                  "!min-h-0 !min-w-0 h-8 w-8 shrink-0 rounded-[12px] shadow-sm transition-[background-color,color,box-shadow] motion-control",
                   isAbortable && "text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground",
                   isStreaming && !isAbortable && "cursor-wait"
                 )}

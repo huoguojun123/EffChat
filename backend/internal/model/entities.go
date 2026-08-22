@@ -15,6 +15,7 @@ type User struct {
 	Nickname       *string             `json:"nickname,omitempty"`
 	AvatarURL      *string             `json:"avatar_url,omitempty"`
 	Role           string              `json:"role"`               // admin, user
+	IsSuperAdmin   bool                `json:"is_super_admin"`     // 首个注册账号；身份不可降级或停用
 	GroupID        *int64              `json:"group_id,omitempty"` // 原始分级组；NULL 动态继承当前默认组
 	EffectiveGroup *EffectiveUserGroup `json:"-"`                  // repository 解析的当前生效组，不持久化
 	Permissions    []byte              `json:"permissions,omitempty"`

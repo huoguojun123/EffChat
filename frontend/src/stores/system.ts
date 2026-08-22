@@ -3,7 +3,7 @@ import { systemApi, type ChatFonts } from "@/api/system"
 import type { FontAsset } from "@/types"
 
 const DEFAULT_SYSTEM_NAME = "EffChat"
-const DEFAULT_SYSTEM_VERSION = "0.4.1-beta.3"
+const DEFAULT_SYSTEM_VERSION = "0.4.1-beta.4"
 const CHAT_FONT_STYLE_ID = "effchat-chat-font-face"
 // Font-family order alone cannot route glyphs because most CJK fonts also
 // contain ASCII. Disjoint ranges make the visible Chinese and Latin slots own
@@ -78,10 +78,10 @@ function applyChatFonts(fonts: ChatFonts) {
   const chineseFamily = fonts.chinese?.file_url ? `"${fontFamilyName("chinese", fonts.chinese)}"` : ""
   const latinFamily = fonts.latin?.file_url ? `"${fontFamilyName("latin", fonts.latin)}"` : ""
   if (chineseFamily || latinFamily) {
-    const bodyFamilies = [chineseFamily, latinFamily, "var(--font-serif)"].filter(Boolean).join(", ")
+    const bodyFamilies = [chineseFamily, latinFamily, "var(--font-sans)"].filter(Boolean).join(", ")
     root.style.setProperty("--chat-font-family", bodyFamilies)
   } else {
-    root.style.setProperty("--chat-font-family", "var(--font-serif)")
+    root.style.setProperty("--chat-font-family", "var(--font-sans)")
   }
 
   if (fonts.code?.file_url) {

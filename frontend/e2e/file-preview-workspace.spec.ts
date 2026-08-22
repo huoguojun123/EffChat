@@ -113,8 +113,9 @@ test("document workspace becomes a usable full-screen reader on mobile", async (
   await expect(page.locator('meta[name="viewport"]')).toHaveAttribute("content", /viewport-fit=cover/)
   const composerBox = await page.getByTestId("chat-input").locator("..").boundingBox()
   expect(composerBox).not.toBeNull()
-  expect(844 - (composerBox!.y + composerBox!.height)).toBeGreaterThanOrEqual(0)
-  expect(844 - (composerBox!.y + composerBox!.height)).toBeLessThanOrEqual(2)
+  const composerBottomGap = 844 - (composerBox!.y + composerBox!.height)
+  expect(composerBottomGap).toBeGreaterThanOrEqual(8)
+  expect(composerBottomGap).toBeLessThanOrEqual(10)
   await page.getByRole("button", { name: "文件", exact: true }).click()
 
   const workspace = page.getByRole("dialog", { name: "对话附件" })

@@ -68,7 +68,7 @@ backend (Gin)
 - `src/api`：REST API 封装和文件 blob 鉴权下载。
 - `src/lib/sseProtocol.ts` / `runReconciliation.ts`：纯 SSE 帧解析、错误归一化和有界运行对账；`useSSE` 继续负责 React 生命周期、发送、停止、重试与 store 协调。
 
-外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面密度只依据可用 CSS viewport，不识别 OS、浏览器或 DPR：标准桌面保留 `0.25rem` spacing，宽度不超过 1600px 或高度不超过 900px 的非移动桌面使用 `0.2375rem` 紧凑 spacing，并同步侧栏、管理导航、设置框、欢迎引文、composer CSS 与运行时自动增高下限。产品 chrome 的常规辅助文字至少为 12px；用户可调的聊天正文字号保持独立。移动端不继承桌面紧凑 spacing，继续使用抽屉式侧栏、约 44 CSS px 的高频触摸命中盒和无横向溢出。
+外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面密度只依据可用 CSS viewport，不识别 OS、浏览器或 DPR：标准桌面保留 `0.25rem` spacing，宽度不超过 1600px 或高度不超过 900px 的非移动桌面使用 `0.2375rem` 紧凑 spacing，并同步侧栏、管理导航、设置框、欢迎引文、composer CSS、运行时自动增高下限和 `--chat-content-max-width`（标准 1180px、紧凑 1120px、移动端全宽）。产品 chrome 的常规辅助文字至少为 12px；用户可调的聊天正文字号保持独立。移动端不继承桌面紧凑 spacing，继续使用抽屉式侧栏、约 44 CSS px 的高频触摸命中盒和无横向溢出。
 
 消息角色不只依赖色相区分：用户输入保持右侧、有宽度上限的轻量语义表面，助手回答保持左侧透明文档流，工具、推理和运行元信息继续作为次级层级。Composer 使用高不透明 raised surface、单一边界和受控焦点环；聊天顶部操作控件和 Composer 工具条统一复用“文件”按钮的 quiet raised surface（语义 border/background、轻量 shadow 和受控 blur），不叠加逐按钮玻璃片。用户历史消息与当前输入入口使用不同表面语义。该视觉契约不改变聊天正文 15px 基线、用户字号设置、消息折叠、编辑重试、附件或发送/恢复生命周期。
 
@@ -265,7 +265,7 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 个人 profile、头像与管理员 User partial update 在 repository transaction 内锁定并重读 canonical user，只应用请求携带的 email、nickname、avatar URL、role、permissions 与 active 字段；不同字段并发按事务顺序合成，同字段采用 last-write-wins。只有 role/active mutation 获取跨用户管理员 invariant advisory lock，并在同一事务内保护最后活动管理员、递增 auth version 和取消活动 run；profile/avatar mutation 只锁目标用户行。HTTP profile/avatar update 传播 request context，锁等待取消不提交。
 
-管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名及最后活动管理员 invariant 为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。用户响应同时返回可空的原始 `group_id` 与非空 `effective_group`；后者包含 id/name/level 及 inherited 标记，使 Admin Users 能明确显示“继承默认组 X（等级 N）”，而不是把 NULL 误称为最低级。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
+管理员 User list/create/update/reset-password/set-group 共享用户管理错误边界：分页、ID、用户名、邮箱、昵称、角色、权限、密码与 group ID 校验为稳定 400，用户或目标分组缺失为 404，用户名/邮箱重名、最后活动管理员 invariant 及超级管理员保护为 409，repository/transaction/密码哈希故障为带 request ID 的 retryable 5xx。用户响应同时返回可空的原始 `group_id` 与非空 `effective_group`；后者包含 id/name/level 及 inherited 标记，使 Admin Users 能明确显示“继承默认组 X（等级 N）”，而不是把 NULL 误称为最低级。首个注册账号持久化为 `is_super_admin=true`，历史库按最早用户 ID 回填；该账号始终保持 `admin` 且不可停用，普通管理员仍可管理其他账号。账号角色、状态或密码变化仍沿既有事务递增 auth version、取消活动 run；本契约不改变 request context、字段级 PATCH 或 profile/avatar 文件所有权。
 
 个人 profile 读取、资料更新与改密共享账户错误边界：邮箱、昵称和新密码的本地约束为稳定 400，当前用户缺失为 404，邮箱重名为 409，repository、事务和密码哈希故障为带 request ID 的 retryable 5xx；错误旧密码继续作为不泄漏账户内部状态的受控 400。密码在 bcrypt 前按 6–72 bytes 校验，资料更新在 repository 约束 owner 保留 unique 与 rows-affected 分类，改密成功仍沿既有事务递增 auth version、取消数据库 run 与 RunHub run。本契约不改变头像文件生命周期、Settings 草稿所有权、HTTP request context 或字段级 PATCH/lost-update 语义。
 
@@ -275,11 +275,13 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 字体槽位选择由独立 repository 职责按 typed slot 提交，只更新目标配置键；中文槽位与 legacy 兼容键在同一 transaction 内镜像。目标字体行使用 `FOR UPDATE` 与禁用/删除串行化：生命周期 mutation 在同一 transaction 更新资产并只条件清除仍引用该字体的槽位，数据库失败时资产、selection 和物理文件都保持原状。Admin 的 update/delete 响应同时返回 committed `selected_font_ids`；前端按槽位维护 generation，只合并发起槽位，禁用/删除会 fence 旧选择响应，同 action 的旧 `finally` 不能释放新 busy，失败后通过有 generation 的字体列表请求恢复 canonical 状态。该边界不引入通用配置事务框架或任务队列。
 
-聊天正文的中文与 Latin 字体 face 使用互斥 `unicode-range` 建立字形所有权：CJK/Han/Kana/Hangul/full-width 区间由中文槽位负责，ASCII、Latin 扩展与常用西文符号由英文槽位负责，因此同时包含 ASCII 的 CJK 字体不会遮蔽英文配置。两者范围外继续落到系统 serif；代码槽位保持独立 `--chat-code-font-family` 且不加字符范围，以支持源码中的 Unicode 标识符、字符串和注释。该路由只改变浏览器 glyph 选择，不改变字体文件、槽位持久化、显式 null 或生命周期事务。
+聊天正文的中文与 Latin 字体 face 使用互斥 `unicode-range` 建立字形所有权：CJK/Han/Kana/Hangul/full-width 区间由中文槽位负责，ASCII、Latin 扩展与常用西文符号由英文槽位负责，因此同时包含 ASCII 的 CJK 字体不会遮蔽英文配置。未配置管理员字体时，正文、Composer 和空会话欢迎引文回退到 `--font-sans` 的跨平台系统无衬线栈（Apple 系统字体、Segoe UI、Noto Sans SC、Microsoft YaHei、PingFang SC），以减少 Windows/macOS 字体度量和字形风格差异；代码槽位保持独立 `--chat-code-font-family` 且不加字符范围，以支持源码中的 Unicode 标识符、字符串和注释。该路由只改变浏览器 glyph 选择，不改变字体文件、槽位持久化、显式 null 或生命周期事务。
 
 注册与登录共享认证错误边界：注册用户名、邮箱、昵称、密码和 preferences 的本地约束为稳定 400，用户名或邮箱重名为 409，登录的未知账号与错误密码统一为 `invalid_credentials` 401，待审核或停用账号为受控 401，限流为带 `Retry-After` 的 retryable 429；repository、注册事务、密码哈希与 token 签发故障为带 request ID 的 retryable 5xx。注册在数据库查询和 bcrypt 前完成可判定输入校验，repository 在实际 registration unique constraint owner 保留 conflict 分类；首用户管理员、后续用户待审批和现有限流计数/重置算法不变。
 
 认证 middleware 在所有受保护 API 前重新读取当前活动账号与 auth version，不信任 token 中的用户名或角色。缺少/非法 Authorization header、无效 token、非法 claims 和已失效账号使用稳定 401 code，非管理员访问为稳定 403；账号状态 repository 故障为带 request ID 的 retryable 5xx，并保留底层 cause 供内部诊断而不进入响应。该契约不改变 JWT 七天有效期、legacy token 的 auth version 兼容或账号变更后的 run 取消行为。
+
+首个注册账号额外持久化为唯一 `is_super_admin`，注册事务在 advisory lock 下原子授予该身份并激活；历史部署由 `054_super_admin_identity.sql` 按最早用户 ID 回填。普通管理员更新接口始终拒绝该账号的降级或停用，并返回 `super_admin_protected`；该标记不接受客户端提交，也不改变现有 `role=admin` 鉴权模型。
 
 `/admin/status` 只展示当前部署容器可见的版本、build ref、schema、Go 运行时、cgroup 内存、受管存储、PostgreSQL 和文档提取器状态。依赖探测短超时且相互独立，单项失败仍返回其余状态；页面只在进入或手动刷新时请求。它不读取 Docker Socket、宿主机监控信息、环境变量、服务地址、密钥或绝对路径。
 

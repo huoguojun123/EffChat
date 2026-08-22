@@ -210,14 +210,14 @@ export function ChatArea({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 bg-gradient-to-b from-background/68 via-background/32 to-transparent px-2 sm:gap-2 sm:px-3">
+      <header data-testid="chat-topbar" className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 border-b border-border/35 bg-background/78 px-2 backdrop-blur-md sm:gap-2 sm:px-3">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
               variant="ghost"
               size="icon"
               onClick={onToggleSidebar}
-              className={`pointer-events-auto h-11 w-11 shrink-0 md:h-8 md:w-8 ${chatSurfaceControlClass}`}
+              className={`pointer-events-auto !min-h-0 !min-w-0 h-8 w-8 shrink-0 ${chatSurfaceControlClass}`}
               aria-label={sidebarOpen ? "收起侧边栏" : "打开侧边栏"}
               aria-expanded={sidebarOpen}
               aria-controls="app-sidebar"
@@ -243,7 +243,7 @@ export function ChatArea({
               <Button
                 variant="outline"
                 size="sm"
-                className={`pointer-events-auto h-11 w-11 gap-1.5 px-0 text-xs md:h-8 md:w-auto md:px-2.5 ${chatSurfaceControlClass}`}
+                className={`pointer-events-auto h-8 w-8 gap-1.5 px-0 text-xs md:w-auto md:px-2.5 ${chatSurfaceControlClass}`}
                 onClick={() => setFilesOpen(true)}
                 aria-expanded={filesOpen}
                 aria-label="文件"
@@ -285,8 +285,8 @@ export function ChatArea({
         ))}
       </div>
       {activeSessionId ? (
-        <div ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-background/68 via-background/32 to-transparent pt-10 pb-[env(safe-area-inset-bottom)] sm:pb-6">
-          <div className="pointer-events-auto">
+        <div data-testid="chat-composer-dock" ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 pt-6 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:pb-6">
+          <div className="pointer-events-auto mx-auto w-full max-w-[var(--chat-content-max-width)] px-3 sm:px-4">
             <ChatInput ref={chatInputRef} />
           </div>
         </div>
@@ -345,7 +345,7 @@ function EmptyGreeting({
         <h2 className="text-sm font-medium text-muted-foreground/75">{greeting}</h2>
         <blockquote
           aria-label={quote.text}
-          className="empty-greeting-quote relative mt-4 text-balance font-serif text-foreground/82"
+          className="empty-greeting-quote relative mt-4 text-balance font-sans text-foreground/82"
         >
           <span aria-hidden="true" className="invisible block">{quote.text}</span>
           <span aria-hidden="true" className="absolute inset-0 block">

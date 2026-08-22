@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func setupAdminTestEnv(t *testing.T) *adminTestEnv {
 		}
 	}
 
-	// First user = admin (per project design)
+	// First user = immutable super administrator.
 	adminUsername := fmt.Sprintf("admin_%d", time.Now().UnixNano())
 	adminResp := registerUser(t, r, adminUsername, "adminpass123")
 	var adminUserID int64
@@ -62,6 +63,9 @@ func setupAdminTestEnv(t *testing.T) *adminTestEnv {
 		if err := db.QueryRow("SELECT id FROM users WHERE username = $1", adminUsername).Scan(&adminUserID); err != nil {
 			t.Fatalf("lookup admin user failed: %v", err)
 		}
+	}
+	if adminResp.User == nil || !adminResp.User.IsSuperAdmin {
+		t.Fatalf("first registration must create super administrator: %+v", adminResp.User)
 	}
 	if _, err := db.Exec("UPDATE users SET role = 'admin', is_active = true WHERE id = $1", adminUserID); err != nil {
 		t.Fatalf("promote admin user failed: %v", err)
@@ -299,12 +303,24 @@ func TestAdminUpdateUser_InvalidRole(t *testing.T) {
 	}
 }
 
+func TestAdminUpdateUser_ProtectsSuperAdministrator(t *testing.T) {
+	env := setupAdminTestEnv(t)
+	role := "user"
+	if _, err := env.userAdminService.Update(env.adminID, &service.UpdateUserRequest{Role: &role}); !errors.Is(err, repository.ErrProtectedSuperAdmin) {
+		t.Fatalf("demote super administrator: got %v, want ErrProtectedSuperAdmin", err)
+	}
+	w := env.doAdmin(http.MethodPatch, fmt.Sprintf("/api/v1/admin/users/%d", env.adminID), map[string]interface{}{"is_active": false})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "super_admin_protected") {
+		t.Fatalf("disable super administrator: want 409 super_admin_protected, got %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestUserAdminService_PreventsRemovingLastActiveAdmin(t *testing.T) {
 	env := setupAdminTestEnv(t)
 	role := "user"
 	_, err := env.userAdminService.Update(env.adminID, &service.UpdateUserRequest{Role: &role})
-	if !errors.Is(err, repository.ErrLastActiveAdmin) {
-		t.Fatalf("demote last active admin: got %v, want ErrLastActiveAdmin", err)
+	if !errors.Is(err, repository.ErrProtectedSuperAdmin) {
+		t.Fatalf("demote super administrator: got %v, want ErrProtectedSuperAdmin", err)
 	}
 	admin, total, err := env.userAdminService.List(100, 0)
 	if err != nil {
@@ -324,17 +340,29 @@ func TestUserAdminService_PreventsRemovingLastActiveAdmin(t *testing.T) {
 	t.Fatal("last admin was not retained")
 }
 
-func TestUserAdminService_ConcurrentAdminChangesKeepOneActiveAdmin(t *testing.T) {
+func TestUserAdminService_ConcurrentAdminChangesKeepSuperAdministratorActive(t *testing.T) {
 	env := setupAdminTestEnv(t)
 	adminRole := "admin"
 	if _, err := env.userAdminService.Update(env.userID, &service.UpdateUserRequest{Role: &adminRole}); err != nil {
 		t.Fatalf("promote second admin: %v", err)
 	}
+	active := true
+	mutableAdmin, err := env.userAdminService.Create(&service.CreateUserRequest{
+		Username: fmt.Sprintf("mutable_admin_%d", time.Now().UnixNano()),
+		Password: "adminpass123",
+		Role:     adminRole,
+		IsActive: &active,
+	})
+	if err != nil {
+		t.Fatalf("create second mutable admin: %v", err)
+	}
 
 	inactive := false
 	start := make(chan struct{})
 	errs := make(chan error, 2)
-	for _, userID := range []int64{env.adminID, env.userID} {
+	// The first registered account is intentionally immutable. Concurrently
+	// changing ordinary admins must never affect that protected identity.
+	for _, userID := range []int64{env.userID, mutableAdmin.ID} {
 		go func(id int64) {
 			<-start
 			_, err := env.userAdminService.Update(id, &service.UpdateUserRequest{IsActive: &inactive})
@@ -342,34 +370,28 @@ func TestUserAdminService_ConcurrentAdminChangesKeepOneActiveAdmin(t *testing.T)
 		}(userID)
 	}
 	close(start)
-	first, second := <-errs, <-errs
-	var succeeded, blocked int
-	for _, err := range []error{first, second} {
-		switch {
-		case err == nil:
-			succeeded++
-		case errors.Is(err, repository.ErrLastActiveAdmin):
-			blocked++
-		default:
+	for _, err := range []error{<-errs, <-errs} {
+		if err != nil {
 			t.Fatalf("unexpected concurrent update error: %v", err)
 		}
-	}
-	if succeeded != 1 || blocked != 1 {
-		t.Fatalf("concurrent updates: succeeded=%d blocked=%d, want 1/1", succeeded, blocked)
 	}
 
 	users, _, err := env.userAdminService.List(100, 0)
 	if err != nil {
 		t.Fatalf("list users: %v", err)
 	}
-	activeAdmins := 0
+	activeSuperAdmins := 0
+	activeMutableAdmins := 0
 	for _, user := range users {
-		if user.Role == "admin" && user.IsActive {
-			activeAdmins++
+		if user.Role == "admin" && user.IsActive && user.IsSuperAdmin {
+			activeSuperAdmins++
+		}
+		if user.Role == "admin" && user.IsActive && !user.IsSuperAdmin {
+			activeMutableAdmins++
 		}
 	}
-	if activeAdmins != 1 {
-		t.Fatalf("active admins = %d, want 1", activeAdmins)
+	if activeSuperAdmins != 1 || activeMutableAdmins != 0 {
+		t.Fatalf("active admins = super:%d mutable:%d, want super:1 mutable:0", activeSuperAdmins, activeMutableAdmins)
 	}
 }
 

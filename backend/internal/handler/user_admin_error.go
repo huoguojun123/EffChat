@@ -24,6 +24,8 @@ func writeAdminUserError(c *gin.Context, operation string, err error) {
 		writePublicError(c, http.StatusConflict, "admin_user_conflict", "username or email already exists", false)
 	case errors.Is(err, repository.ErrLastActiveAdmin):
 		writePublicError(c, http.StatusConflict, "last_active_admin_required", "at least one active administrator is required", false)
+	case errors.Is(err, repository.ErrProtectedSuperAdmin):
+		writePublicError(c, http.StatusConflict, "super_admin_protected", "the first registered super administrator cannot be demoted or disabled", false)
 	default:
 		message := "failed to " + strings.ReplaceAll(operation, "_", " ") + " user"
 		switch operation {

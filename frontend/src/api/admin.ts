@@ -9,6 +9,7 @@ export interface AdminUser {
   email?: string
   nickname?: string
   role: "admin" | "user"
+  is_super_admin: boolean
   group_id: number | null
   effective_group: {
     id: number

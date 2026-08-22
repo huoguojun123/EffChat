@@ -335,8 +335,8 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   const canSend = (input.trim().length > 0 || attachments.length > 0) && !uploading && !compacting && !isStreaming && !preparingSend && !blockedAttachment && !modelUnavailable
 
   return (
-    <div className="w-full px-2 sm:px-0">
-      <div className="relative mx-auto w-full max-w-[1060px]">
+    <div className="w-full">
+      <div className="relative mx-auto w-full">
         <ChatInputToolbar
           fileInputRef={fileInputRef}
           uploading={uploading}
@@ -373,7 +373,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
             if (activeSessionId) void handleCompact(activeSessionId)
           }}
           memoryUnseen={memoryUnseen}
-          className="absolute bottom-full left-2 z-20 mb-0.5 flex-nowrap sm:left-3 sm:mb-2.5"
+          className="absolute bottom-full left-0 z-20 mb-0.5 flex-nowrap sm:left-1 sm:mb-2.5"
         />
 
         <ComposerBox

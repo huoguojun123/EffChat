@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react"
 import type { Model } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,6 +28,21 @@ export function AdminModelChannelSidebar({
   onSelectProvider,
   onCreateChannel,
 }: AdminModelChannelSidebarProps) {
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Chromium may restore a search value after a responsive panel remount even
+  // when the React state is empty. Clear only that browser-restored value; a
+  // non-empty controlled query always remains the user's intentional filter.
+  useEffect(() => {
+    if (query) return
+    const input = searchInputRef.current
+    if (!input) return
+    const frame = window.requestAnimationFrame(() => {
+      if (input.value !== "") input.value = ""
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [query])
+
   return (
     <aside aria-label="模型渠道" className={`min-h-0 flex-col border-b border-border/70 lg:flex lg:border-b-0 lg:border-r ${visible ? "flex" : "hidden lg:flex"}`}>
       <div className="flex items-center justify-between border-b border-border/70 px-3 py-3">
@@ -62,7 +78,7 @@ export function AdminModelChannelSidebar({
       <div className="border-t border-border/70 p-2">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input type="search" name="effchat-model-search" autoComplete="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => onQueryChange(e.target.value)} className="h-8 pl-8 text-sm" placeholder="搜索模型" aria-label="搜索模型" />
+          <Input ref={searchInputRef} type="search" name="effchat-model-filter" autoComplete="off" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => onQueryChange(e.target.value)} className="h-8 pl-8 text-sm" placeholder="搜索模型" aria-label="搜索模型" />
         </div>
       </div>
     </aside>

@@ -7,6 +7,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.4] - 2026-08-22
+
+### Fixed
+
+- Protected the first registered account as an immutable, active super administrator; existing installations backfill the earliest account through migration `054` without changing user data.
+- Restored the immutable migration baseline so upgrades do not fail checksum validation after the super administrator schema addition.
+- Improved cross-platform chat density, reading-column width, sidebar title space, composer spacing, and product font fallbacks for Windows-style desktop viewports.
+- Prevented responsive model-management filters from being populated by browser autofill and kept administrator controls consistent across narrow layouts.
+
+### Verification
+
+- Backend, frontend, migration contract, local Docker migration, health, schema, and data-preservation checks passed. Korea was not accessed or updated.
+
 ## [0.4.1-beta.3] - 2026-08-21
 
 ### Fixed
@@ -191,7 +204,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.3...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.4...HEAD
+[0.4.1-beta.4]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.4
 [0.4.1-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.3
 [0.4.1-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.2
 [0.4.1-beta.1]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.1

@@ -336,7 +336,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
 
   return (
     <div className="w-full px-2 sm:px-0">
-      <div className="relative mx-auto w-full max-w-[1060px]">
+      <div className="relative mx-auto w-full max-w-[var(--chat-content-max-width)]">
         <ChatInputToolbar
           fileInputRef={fileInputRef}
           uploading={uploading}

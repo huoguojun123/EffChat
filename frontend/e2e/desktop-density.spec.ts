@@ -137,7 +137,7 @@ async function assertNoSmallChromeText(page: Page, selectors: string[]) {
   expect(offenders, `visible chrome text below 12px: ${offenders.join(", ")}`).toEqual([])
 }
 
-async function assertChatDensity(page: Page, expected: { spacing: string; sidebar: number; composer: number }) {
+async function assertChatDensity(page: Page, expected: { spacing: string; sidebar: number; composer: number; contentWidth: number }) {
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toBeVisible()
   await waitForFonts(page)
 
@@ -145,6 +145,8 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await page.locator('[aria-label="侧边栏"]').boundingBox()).not.toBeNull()
   expect(Math.round((await page.locator('[aria-label="侧边栏"]').boundingBox())?.width || 0)).toBe(expected.sidebar)
   expect(Math.round((await page.getByTestId("chat-input").boundingBox())?.height || 0)).toBe(expected.composer)
+  expect(Math.round((await page.getByTestId("message-list").boundingBox())?.width || 0)).toBe(expected.contentWidth)
+  expect(Math.round((await page.getByTestId("composer-surface").boundingBox())?.width || 0)).toBe(expected.contentWidth)
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
@@ -195,9 +197,9 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
 
 test("standard and compact desktop density keep chat chrome consistent", async ({ browser }) => {
   const cases = [
-    { name: "standard", viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, spacing: "0.25rem", sidebar: 280, composer: 54 },
-    { name: "125-percent compact", viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, spacing: "0.2375rem", sidebar: 246, composer: 50 },
-    { name: "low-height compact", viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, spacing: "0.2375rem", sidebar: 240, composer: 50 },
+    { name: "standard", viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, spacing: "0.25rem", sidebar: 280, composer: 54, contentWidth: 1180 },
+    { name: "125-percent compact", viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, spacing: "0.2375rem", sidebar: 246, composer: 50, contentWidth: 1120 },
+    { name: "low-height compact", viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, spacing: "0.2375rem", sidebar: 240, composer: 50, contentWidth: 1120 },
   ]
 
   for (const density of cases) {

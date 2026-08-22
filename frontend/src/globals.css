@@ -53,6 +53,7 @@
   --settings-dialog-width: 600px;
   --chat-composer-height: 54px;
   --chat-composer-padding-y: 15px;
+  --chat-content-max-width: 1180px;
   --empty-greeting-max-width: min(48rem, 82vw);
   --empty-greeting-font-size: 1.35rem;
   --empty-greeting-line-height: 2.25rem;
@@ -895,6 +896,7 @@ html.app-route-leaving #root {
     --settings-dialog-width: 560px;
     --chat-composer-height: 50px;
     --chat-composer-padding-y: 13px;
+    --chat-content-max-width: 1120px;
     --empty-greeting-max-width: min(44rem, 74vw);
     --empty-greeting-font-size: 1.15rem;
     --empty-greeting-line-height: 2rem;
@@ -906,6 +908,7 @@ html.app-route-leaving #root {
     --empty-greeting-max-width: 90vw;
     --empty-greeting-font-size: 1.125rem;
     --empty-greeting-line-height: 1.9rem;
+    --chat-content-max-width: 100%;
   }
 }
 

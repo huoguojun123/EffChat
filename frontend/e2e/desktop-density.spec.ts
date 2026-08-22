@@ -238,6 +238,30 @@ test("inactive session actions do not reserve sidebar title width", async ({ pag
   expect(await actions.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("auto")
 })
 
+test("mobile chat chrome keeps equal top controls and a bottom breathing room", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await installRoutes(page)
+  await page.goto("/chat/1")
+  await expect(page.getByTestId("message-item").first()).toBeVisible()
+  await waitForFonts(page)
+
+  const topbar = page.getByTestId("chat-topbar")
+  const topControls = [
+    page.getByRole("button", { name: /侧边栏/ }),
+    page.getByRole("button", { name: "文件" }),
+    page.getByRole("button", { name: "更多会话操作" }),
+    page.getByRole("combobox", { name: /当前模型/ }),
+  ]
+  for (const control of topControls) {
+    await expect(control).toBeVisible()
+    expect(Math.round((await control.boundingBox())?.height || 0)).toBe(44)
+  }
+  expect(await topbar.evaluate((element) => getComputedStyle(element).backdropFilter)).not.toBe("none")
+  expect(Number.parseFloat(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).paddingBottom))).toBeGreaterThanOrEqual(8)
+  await context.close()
+})
+
 test("protected pages expose a keyboard skip link to the main content", async ({ page }) => {
   await installRoutes(page)
   await page.goto("/chat/1")

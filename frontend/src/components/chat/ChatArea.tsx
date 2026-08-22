@@ -210,7 +210,7 @@ export function ChatArea({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 bg-gradient-to-b from-background/68 via-background/32 to-transparent px-2 sm:gap-2 sm:px-3">
+      <header data-testid="chat-topbar" className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 border-b border-border/35 bg-background/78 px-2 backdrop-blur-md sm:gap-2 sm:px-3">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -285,7 +285,7 @@ export function ChatArea({
         ))}
       </div>
       {activeSessionId ? (
-        <div ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-gradient-to-t from-background/68 via-background/32 to-transparent pt-10 pb-[env(safe-area-inset-bottom)] sm:pb-6">
+        <div data-testid="chat-composer-dock" ref={composerDockRef} className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 bg-background/72 pt-10 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-md sm:pb-6">
           <div className="pointer-events-auto">
             <ChatInput ref={chatInputRef} />
           </div>

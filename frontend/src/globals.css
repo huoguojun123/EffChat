@@ -36,7 +36,7 @@
   --radius: 0.625rem;
   /* Keep the loaded Latin/CJK sans families together, with platform fallbacks
      for offline or blocked font requests. */
-  --font-sans: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
   --font-serif: Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, Cambria, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
@@ -55,7 +55,7 @@
   --settings-dialog-width: 600px;
   --chat-composer-height: 54px;
   --chat-composer-padding-y: 15px;
-  --chat-content-max-width: 1180px;
+  --chat-content-max-width: 1240px;
   --empty-greeting-max-width: min(48rem, 82vw);
   --empty-greeting-font-size: 1.35rem;
   --empty-greeting-line-height: 2.25rem;
@@ -457,14 +457,14 @@ html.app-route-leaving #root {
 /* ===== Markdown Body — replicated from @lobehub/ui Markdown chat variant ===== */
 .markdown-body {
   --md-font-size: calc(15px * var(--chat-font-scale, 1));
-  --md-line-height: 1.52;
+  --md-line-height: 1.5;
 
   font-size: var(--md-font-size);
   line-height: var(--md-line-height);
   overflow-wrap: break-word;
   width: 100%;
   & p {
-    margin-block: 0.2em;
+    margin-block: 0.15em;
     line-height: var(--md-line-height);
     letter-spacing: 0.01em;
   }
@@ -898,7 +898,7 @@ html.app-route-leaving #root {
     --settings-dialog-width: 560px;
     --chat-composer-height: 50px;
     --chat-composer-padding-y: 13px;
-    --chat-content-max-width: 1120px;
+    --chat-content-max-width: 1200px;
     --empty-greeting-max-width: min(44rem, 74vw);
     --empty-greeting-font-size: 1.15rem;
     --empty-greeting-line-height: 2rem;

@@ -104,13 +104,13 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
   }
 
   return (
-    <div className="group py-5 sm:py-6">
+    <div className="group py-5">
       <div className="flex items-start gap-0 sm:gap-4">
         <div className="hidden w-11 shrink-0 justify-center pt-1 sm:flex">
           <AppLogo className="h-8 w-8 text-foreground/80" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="w-full space-y-3">
+          <div className="w-full space-y-2.5">
             <MessageDate message={message} />
             {isError ? (
               <ErrorNotice detail={errorDetail} diagnostic={errorDiagnostic} onRetry={isLastAssistant ? handleRetry : undefined} retrying={retryBusy} />

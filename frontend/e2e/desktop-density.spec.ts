@@ -165,6 +165,7 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Plus Jakarta Sans")
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontWeight)).toBe("400")
+  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).lineHeight)).toBe("22.5px")
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
   const messageSurfaces = await page.evaluate(() => {
     const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
@@ -213,9 +214,9 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
 
 test("standard and compact desktop density keep chat chrome consistent", async ({ browser }) => {
   const cases = [
-    { name: "standard", viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, spacing: "0.25rem", sidebar: 280, composer: 54, contentWidth: 1180 },
-    { name: "125-percent compact", viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, spacing: "0.2375rem", sidebar: 246, composer: 50, contentWidth: 1120 },
-    { name: "low-height compact", viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, spacing: "0.2375rem", sidebar: 240, composer: 50, contentWidth: 1120 },
+    { name: "standard", viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1, spacing: "0.25rem", sidebar: 280, composer: 54, contentWidth: 1240 },
+    { name: "125-percent compact", viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, spacing: "0.2375rem", sidebar: 246, composer: 50, contentWidth: 1200 },
+    { name: "low-height compact", viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1, spacing: "0.2375rem", sidebar: 240, composer: 50, contentWidth: 1126 },
   ]
 
   for (const density of cases) {

@@ -181,4 +181,15 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain("第一行<br/>")
     expect(html).toContain("第二行")
   })
+
+  it("normalizes legacy break tags without changing code", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"| 项目 | 说明 |\n| --- | --- |\n| service/\u200bimpl/ | 业务层<br>定义接口 |\n\n行内代码 `<br>`\n\n```html\n<br/>\n```"} />
+    )
+
+    expect(html).toContain("业务层<br/>")
+    expect(html).toContain('行内代码 <code class="inline-code-highlight shiki">&lt;br&gt;</code>')
+    expect(html).not.toContain("业务层&lt;br&gt;定义接口")
+    expect(html).toContain('<pre class="mock-code-block" data-allow-preview="true">&lt;br/&gt;</pre>')
+  })
 })

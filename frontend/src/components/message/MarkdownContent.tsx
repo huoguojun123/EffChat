@@ -27,7 +27,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 }: Props) {
   const blockIndexRef = useRef(0)
   blockIndexRef.current = 0
-  const normalizedContent = useMemo(() => normalizeTexMathDelimiters(content), [content])
+  const normalizedContent = useMemo(() => normalizeMarkdownContent(content), [content])
   const preparationIdentity = `${ownerKey}:${normalizedContent}`
   const [pendingState, setPendingState] = useState<{ identity: string; keys: Set<string> }>(() => ({
     identity: preparationIdentity,
@@ -134,6 +134,27 @@ function normalizeTexMathDelimiters(markdown: string) {
     .map((part) => {
       if (part.startsWith("```") || part.startsWith("~~~")) return part
       return normalizeInlineTexMath(part)
+    })
+    .join("")
+}
+
+function normalizeMarkdownContent(markdown: string) {
+  return normalizeLegacyBreakTags(normalizeTexMathDelimiters(markdown))
+}
+
+// Older model replies sometimes use HTML line-break tags inside Markdown tables.
+// Convert only the inert, attribute-free variants; raw HTML remains disabled and
+// code spans/fences must retain their exact source text.
+function normalizeLegacyBreakTags(markdown: string) {
+  return markdown
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
+    .map((part) => {
+      if (part.startsWith("```") || part.startsWith("~~~")) return part
+      const chunks = part.split(/(`+[^`]*`+)/g)
+      return chunks.map((chunk) => {
+        if (chunk.startsWith("`") && chunk.endsWith("`")) return chunk
+        return chunk.replace(/<br\s*\/?>/gi, "&#10;")
+      }).join("")
     })
     .join("")
 }

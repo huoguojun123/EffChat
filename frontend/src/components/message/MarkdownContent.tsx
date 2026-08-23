@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type InputHTMLAttributes } from "react"
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type CSSProperties, type ImgHTMLAttributes, type InputHTMLAttributes } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -6,6 +6,7 @@ import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import { CodeBlock } from "./CodeBlock"
 import { InlineCode } from "./InlineCode"
+import { ImageLightbox } from "./ImageLightbox"
 import { markdownHasDefaultInlinePreview } from "./previewArtifact"
 import { LoadingIndicator } from "@/components/ui/loading-indicator"
 
@@ -67,6 +68,22 @@ export const MarkdownContent = memo(function MarkdownContent({
     input({ checked, ...props }: InputHTMLAttributes<HTMLInputElement>) {
       return <input {...props} checked={checked} aria-label={checked ? "已完成" : "未完成"} />
     },
+    a({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+      const external = isExternalMarkdownUrl(href)
+      return (
+        <a
+          {...props}
+          href={href}
+          target={external ? "_blank" : props.target}
+          rel={external ? "noreferrer" : props.rel}
+        >
+          {children}
+        </a>
+      )
+    },
+    img({ src, alt, title, ...props }: ImgHTMLAttributes<HTMLImageElement>) {
+      return <MarkdownImage src={src} alt={alt} title={title} {...props} />
+    },
     code({ className, children }: { className?: string; children?: React.ReactNode }) {
       const match = /language-([^\s]+)/.exec(className || "")
       const code = String(children ?? "").replace(/\n$/, "")
@@ -119,6 +136,58 @@ function normalizeTexMathDelimiters(markdown: string) {
       return normalizeInlineTexMath(part)
     })
     .join("")
+}
+
+const MarkdownImage = memo(function MarkdownImage({
+  src,
+  alt,
+  title,
+  ...props
+}: ImgHTMLAttributes<HTMLImageElement>) {
+  const [open, setOpen] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const label = alt?.trim() || "Markdown 图片"
+  const filename = title?.trim() || label
+
+  if (!src || failed) {
+    return (
+      <span className="markdown-image-fallback" role="img" aria-label={`${label}加载失败`}>
+        图片无法加载：{label}
+      </span>
+    )
+  }
+
+  return (
+    <figure className="markdown-image">
+      <button
+        type="button"
+        className="markdown-image-trigger"
+        aria-label={`放大图片：${label}`}
+        title={`放大图片：${label}`}
+        onClick={() => setOpen(true)}
+      >
+        <img
+          {...props}
+          src={src}
+          alt={label}
+          loading="lazy"
+          onError={() => setFailed(true)}
+        />
+      </button>
+      {title ? <figcaption>{title}</figcaption> : null}
+      <ImageLightbox open={open} url={src} filename={filename} onOpenChange={setOpen} />
+    </figure>
+  )
+})
+
+function isExternalMarkdownUrl(href: string | undefined) {
+  if (!href) return false
+  try {
+    const url = new URL(href, "https://effchat.invalid")
+    return (url.protocol === "http:" || url.protocol === "https:") && url.host !== "effchat.invalid"
+  } catch {
+    return false
+  }
 }
 
 function normalizeInlineTexMath(text: string) {

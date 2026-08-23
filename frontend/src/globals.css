@@ -652,6 +652,49 @@ html.app-route-leaving #root {
     border-radius: 8px;
   }
 
+  & .markdown-image {
+    display: inline-flex;
+    max-width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    margin-block: 0.65em;
+  }
+  & .markdown-image-trigger {
+    display: block;
+    max-width: 100%;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    cursor: zoom-in;
+    transition: border-color var(--motion-duration-control) ease, opacity var(--motion-duration-control) ease;
+  }
+  & .markdown-image-trigger:hover {
+    border-color: color-mix(in oklch, var(--ring), transparent 45%);
+  }
+  & .markdown-image-trigger:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  & .markdown-image figcaption {
+    max-width: 100%;
+    margin-block-start: 0.35em;
+    color: var(--muted-fg);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+  & .markdown-image-fallback {
+    display: inline-block;
+    max-width: 100%;
+    margin-block: 0.5em;
+    padding: 0.55em 0.75em;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--muted-fg);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+
   & .katex {
     max-width: 100%;
     font-size: 1.02em;

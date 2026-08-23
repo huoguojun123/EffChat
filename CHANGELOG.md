@@ -7,6 +7,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.5] - 2026-08-23
+
+### Fixed
+
+- Rebalanced mobile answer controls so version navigation, copy, retry, and usage remain aligned without wrapping or shrinking touch targets.
+- Replaced the hard chat topbar divider with a restrained translucent fade while preserving light and dark surface hierarchy.
+- Improved cross-platform Chinese body rendering with regular weight, platform-native CJK fallbacks, and tighter paragraph rhythm while retaining Plus Jakarta Sans for Latin text.
+- Widened the standard and compact desktop message columns and reduced excess assistant-block spacing without changing the 15px chat baseline, font-size slider, custom font slots, or user-message proportions.
+
+### Verification
+
+- Frontend lint, 330 unit tests, production/PWA build, 12-case responsive Playwright coverage, and a non-destructive local unified-image update passed; schema and persisted data were unchanged, and Korea was not accessed.
+
 ## [0.4.1-beta.4] - 2026-08-22
 
 ### Fixed
@@ -204,7 +217,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.4...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.5...HEAD
+[0.4.1-beta.5]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.5
 [0.4.1-beta.4]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.4
 [0.4.1-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.3
 [0.4.1-beta.2]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.2

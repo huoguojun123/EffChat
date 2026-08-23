@@ -25,15 +25,24 @@ describe("syntax highlight HTML safety", () => {
   })
 
   it.each([
-    ["rb", "ruby"],
+    ["bat", "bat"],
     ["cmd", "bat"],
+    ["c", "c"],
+    ["cc", "cpp"],
+    ["cpp", "cpp"],
     ["c++", "cpp"],
     ["cs", "csharp"],
-    ["ps1", "powershell"],
+    ["c#", "csharp"],
     ["kt", "kotlin"],
+    ["kts", "kotlin"],
+    ["php", "php"],
+    ["ps", "powershell"],
+    ["ps1", "powershell"],
+    ["rb", "ruby"],
+    ["svelte", "svelte"],
     ["swift", "swift"],
     ["vue", "vue"],
-  ])("highlights the supported %s alias as %s", async (alias) => {
+  ])("highlights the supported %s fence through the %s loader", async (alias) => {
     const html = await highlightCodeToHtml("const answer = 42", alias)
 
     expect(html).toContain("--shiki-light")

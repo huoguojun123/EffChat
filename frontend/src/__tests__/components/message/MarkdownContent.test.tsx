@@ -170,4 +170,13 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain("系统架构")
     expect(html).toContain('data-testid="mock-image-lightbox"')
   })
+
+  it("preserves extracted hard line breaks in document markdown", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"第一行\n第二行"} variant="document" />
+    )
+
+    expect(html).toContain("第一行<br/>")
+    expect(html).toContain("第二行")
+  })
 })

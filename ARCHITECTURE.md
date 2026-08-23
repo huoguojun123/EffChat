@@ -275,7 +275,7 @@ Admin 用户以及个人、公开、共享 Prompt 列表统一返回真实 `tota
 
 字体槽位选择由独立 repository 职责按 typed slot 提交，只更新目标配置键；中文槽位与 legacy 兼容键在同一 transaction 内镜像。目标字体行使用 `FOR UPDATE` 与禁用/删除串行化：生命周期 mutation 在同一 transaction 更新资产并只条件清除仍引用该字体的槽位，数据库失败时资产、selection 和物理文件都保持原状。Admin 的 update/delete 响应同时返回 committed `selected_font_ids`；前端按槽位维护 generation，只合并发起槽位，禁用/删除会 fence 旧选择响应，同 action 的旧 `finally` 不能释放新 busy，失败后通过有 generation 的字体列表请求恢复 canonical 状态。该边界不引入通用配置事务框架或任务队列。
 
-聊天正文的中文与 Latin 字体 face 使用互斥 `unicode-range` 建立字形所有权：CJK/Han/Kana/Hangul/full-width 区间由中文槽位负责，ASCII、Latin 扩展与常用西文符号由英文槽位负责，因此同时包含 ASCII 的 CJK 字体不会遮蔽英文配置。未配置管理员字体时，正文、Composer 和空会话欢迎引文回退到 `--font-sans` 的跨平台系统无衬线栈（Apple 系统字体、Segoe UI、Noto Sans SC、Microsoft YaHei、PingFang SC），以减少 Windows/macOS 字体度量和字形风格差异；代码槽位保持独立 `--chat-code-font-family` 且不加字符范围，以支持源码中的 Unicode 标识符、字符串和注释。该路由只改变浏览器 glyph 选择，不改变字体文件、槽位持久化、显式 null 或生命周期事务。
+聊天正文的中文与 Latin 字体 face 使用互斥 `unicode-range` 建立字形所有权：CJK/Han/Kana/Hangul/full-width 区间由中文槽位负责，ASCII、Latin 扩展与常用西文符号由英文槽位负责，因此同时包含 ASCII 的 CJK 字体不会遮蔽英文配置。未配置管理员字体时，英文优先使用 Plus Jakarta Sans，中文按平台优先回退到 Apple 系统字体、Segoe UI/Microsoft YaHei、PingFang SC，Noto Sans SC 作为 web fallback，以减少官网对比场景下的字面疏松和跨平台度量差异；聊天消息列使用标准/紧凑桌面共享最大宽度 token，回答块的桌面上下节奏略收紧，移动端保留原有触摸与阅读留白；代码槽位保持独立 `--chat-code-font-family` 且不加字符范围，以支持源码中的 Unicode 标识符、字符串和注释。该路由只改变浏览器 glyph 选择和消息列几何，不改变字体文件、槽位持久化、显式 null 或生命周期事务。
 
 注册与登录共享认证错误边界：注册用户名、邮箱、昵称、密码和 preferences 的本地约束为稳定 400，用户名或邮箱重名为 409，登录的未知账号与错误密码统一为 `invalid_credentials` 401，待审核或停用账号为受控 401，限流为带 `Retry-After` 的 retryable 429；repository、注册事务、密码哈希与 token 签发故障为带 request ID 的 retryable 5xx。注册在数据库查询和 bcrypt 前完成可判定输入校验，repository 在实际 registration unique constraint owner 保留 conflict 分类；首用户管理员、后续用户待审批和现有限流计数/重置算法不变。
 

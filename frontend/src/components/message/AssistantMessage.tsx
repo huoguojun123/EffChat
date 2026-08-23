@@ -104,13 +104,13 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
   }
 
   return (
-    <div className="group py-5 sm:py-6">
+    <div className="group py-5">
       <div className="flex items-start gap-0 sm:gap-4">
         <div className="hidden w-11 shrink-0 justify-center pt-1 sm:flex">
           <AppLogo className="h-8 w-8 text-foreground/80" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="w-full space-y-3">
+          <div className="w-full space-y-2.5">
             <MessageDate message={message} />
             {isError ? (
               <ErrorNotice detail={errorDetail} diagnostic={errorDiagnostic} onRetry={isLastAssistant ? handleRetry : undefined} retrying={retryBusy} />
@@ -124,8 +124,8 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
               </>
             )}
             {actionError ? <MessageStateLine label={actionError} tone="error" /> : null}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+            <div data-testid="assistant-actions" className="flex flex-nowrap items-center justify-between gap-2">
+              <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden md:gap-2">
                 {canSwitchAnswer && navigation ? (
                   <AnswerAttemptControls
                     navigation={navigation}
@@ -170,18 +170,18 @@ function AnswerAttemptControls({
   const hasNext = typeof navigation.next_attempt_id === "number"
   const switching = switchingAttempt !== null || deleting
   return (
-    <div className="flex h-8 items-center border-r border-border/60 pr-2 sm:h-7">
+    <div data-testid="answer-attempt-controls" className="flex h-8 shrink-0 items-center border-r border-border/60 pr-1 md:h-7 md:pr-2">
       <button
         type="button"
         title="查看上一个回答"
         aria-label="查看上一个回答"
         disabled={!hasPrevious || switching}
         onClick={() => hasPrevious && onSelect(navigation.previous_attempt_id!)}
-        className="inline-flex h-9 w-9 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-foreground disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
+        className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-foreground disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
       >
         {switchingAttempt === navigation.previous_attempt_id ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />}
       </button>
-      <span className="min-w-10 select-none text-center text-xs tabular-nums text-muted-foreground">
+      <span className="min-w-8 select-none text-center text-xs tabular-nums text-muted-foreground">
         {navigation.attempt_number}/{navigation.attempt_count}
       </span>
       <button
@@ -190,7 +190,7 @@ function AnswerAttemptControls({
         aria-label="查看下一个回答"
         disabled={!hasNext || switching}
         onClick={() => hasNext && onSelect(navigation.next_attempt_id!)}
-        className="inline-flex h-9 w-9 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-foreground disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
+        className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-foreground disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
       >
         {switchingAttempt === navigation.next_attempt_id ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
       </button>
@@ -200,7 +200,7 @@ function AnswerAttemptControls({
         aria-label="删除当前回答"
         disabled={switching || navigation.attempt_count <= 1}
         onClick={onDelete}
-        className="inline-flex h-9 w-9 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-rose-600 disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
+        className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors motion-control hover:text-rose-600 disabled:pointer-events-none disabled:opacity-35 sm:h-8 sm:w-8"
       >
         {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
       </button>
@@ -345,7 +345,8 @@ function UsageSummary({ message }: { message: Message }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          data-testid="assistant-usage"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:px-2"
         >
           <span>{summary}</span>
           {open ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -385,10 +386,12 @@ function ActionButton({
     <button
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      aria-label={label}
+      title={label}
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-0 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-40 md:w-auto md:justify-center md:px-2"
     >
       {children}
-      <span>{label}</span>
+      <span className="max-md:hidden">{label}</span>
     </button>
   )
 }

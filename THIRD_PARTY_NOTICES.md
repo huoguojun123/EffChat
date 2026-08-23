@@ -77,6 +77,18 @@ inherit a fallback automatically.
 | tailwindcss-animate | MIT | <https://github.com/jamiebuilds/tailwindcss-animate> |
 | Zustand | MIT | <https://github.com/pmndrs/zustand> |
 
+### Runtime Web Fonts
+
+The default UI font stack references these families from Google Fonts at
+runtime. The repository does not redistribute their font binaries; each
+upstream license still applies to any self-hosted copy or packaged asset.
+
+| Font | License | Source |
+| --- | --- | --- |
+| Plus Jakarta Sans | SIL Open Font License 1.1 | <https://github.com/tokotype/PlusJakartaSans> |
+| Noto Sans SC | SIL Open Font License 1.1 | <https://github.com/notofonts/noto-cjk> |
+| JetBrains Mono | SIL Open Font License 1.1 | <https://github.com/JetBrains/JetBrainsMono> |
+
 ## Python Extractor
 
 | Component | License | Source |

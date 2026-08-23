@@ -34,9 +34,9 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --radius: 0.625rem;
-  /* Prefer native sans families so CJK and Latin glyphs keep comparable
-     metrics on Windows and macOS without requiring a downloaded webfont. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
+  /* Keep the loaded Latin/CJK sans families together, with platform fallbacks
+     for offline or blocked font requests. */
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
   --font-serif: Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, Cambria, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
@@ -55,7 +55,7 @@
   --settings-dialog-width: 600px;
   --chat-composer-height: 54px;
   --chat-composer-padding-y: 15px;
-  --chat-content-max-width: 1180px;
+  --chat-content-max-width: 1240px;
   --empty-greeting-max-width: min(48rem, 82vw);
   --empty-greeting-font-size: 1.35rem;
   --empty-greeting-line-height: 2.25rem;
@@ -457,14 +457,14 @@ html.app-route-leaving #root {
 /* ===== Markdown Body — replicated from @lobehub/ui Markdown chat variant ===== */
 .markdown-body {
   --md-font-size: calc(15px * var(--chat-font-scale, 1));
-  --md-line-height: 1.52;
+  --md-line-height: 1.5;
 
   font-size: var(--md-font-size);
   line-height: var(--md-line-height);
   overflow-wrap: break-word;
   width: 100%;
   & p {
-    margin-block: 0.2em;
+    margin-block: 0.15em;
     line-height: var(--md-line-height);
     letter-spacing: 0.01em;
   }
@@ -898,7 +898,7 @@ html.app-route-leaving #root {
     --settings-dialog-width: 560px;
     --chat-composer-height: 50px;
     --chat-composer-padding-y: 13px;
-    --chat-content-max-width: 1120px;
+    --chat-content-max-width: 1200px;
     --empty-greeting-max-width: min(44rem, 74vw);
     --empty-greeting-font-size: 1.15rem;
     --empty-greeting-line-height: 2rem;
@@ -995,7 +995,23 @@ html.app-route-leaving #root {
 [data-chat-scroll-container] {
   font-family: var(--chat-font-family, var(--font-sans));
   font-size: calc(15px * var(--chat-font-scale, 1));
-  font-weight: 500;
+  /* Body copy stays at regular weight. Headings, strong text, and controls
+     declare their own emphasis so CJK paragraphs do not inherit a synthetic
+     medium face and look heavier than the Latin fallback. */
+  font-weight: 400;
+}
+
+/* The translucent topbar should merge into the reading surface instead of
+   leaving a hard rule across the first message. Keep the fade decorative so
+   it cannot steal clicks from the controls beneath it. */
+.chat-topbar-surface::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 0.75rem;
+  pointer-events: none;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 78%, transparent), transparent);
 }
 [data-chat-scroll-container] .text-\[15px\] {
   font-size: calc(15px * var(--chat-font-scale, 1));

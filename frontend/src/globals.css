@@ -676,7 +676,7 @@ html.app-route-leaving #root {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
-  & .markdown-image figcaption {
+  & .markdown-image-caption {
     max-width: 100%;
     margin-block-start: 0.35em;
     color: var(--muted-fg);

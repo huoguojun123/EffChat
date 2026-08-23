@@ -145,11 +145,11 @@ const MarkdownImage = memo(function MarkdownImage({
   ...props
 }: ImgHTMLAttributes<HTMLImageElement>) {
   const [open, setOpen] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [failedSrc, setFailedSrc] = useState<string>()
   const label = alt?.trim() || "Markdown 图片"
   const filename = title?.trim() || label
 
-  if (!src || failed) {
+  if (!src || failedSrc === src) {
     return (
       <span className="markdown-image-fallback" role="img" aria-label={`${label}加载失败`}>
         图片无法加载：{label}
@@ -158,7 +158,7 @@ const MarkdownImage = memo(function MarkdownImage({
   }
 
   return (
-    <figure className="markdown-image">
+    <span className="markdown-image">
       <button
         type="button"
         className="markdown-image-trigger"
@@ -171,12 +171,12 @@ const MarkdownImage = memo(function MarkdownImage({
           src={src}
           alt={label}
           loading="lazy"
-          onError={() => setFailed(true)}
+          onError={() => setFailedSrc(src)}
         />
       </button>
-      {title ? <figcaption>{title}</figcaption> : null}
+      {title ? <span className="markdown-image-caption">{title}</span> : null}
       <ImageLightbox open={open} url={src} filename={filename} onOpenChange={setOpen} />
-    </figure>
+    </span>
   )
 })
 

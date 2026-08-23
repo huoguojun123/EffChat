@@ -169,6 +169,8 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain('alt="架构图"')
     expect(html).toContain("系统架构")
     expect(html).toContain('data-testid="mock-image-lightbox"')
+    expect(html).not.toContain("<figure")
+    expect(html).not.toContain("<figcaption")
   })
 
   it("preserves extracted hard line breaks in document markdown", () => {

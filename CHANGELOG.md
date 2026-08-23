@@ -7,6 +7,18 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.6] - 2026-08-23
+
+### Fixed
+
+- Normalized legacy bare `<br>`, `<br/>`, and `<br />` tags emitted by historical model responses so they render as line breaks instead of visible tags in regular Markdown and table cells.
+- Kept fenced code, inline code, attributed HTML, scripts, and other raw HTML outside this compatibility conversion and unchanged by the renderer safety boundary.
+
+### Verification
+
+- Markdown-focused tests (17/17), the full frontend suite (58 files, 354 tests), lint, production/PWA build, and non-destructive local Docker verification passed.
+- No migration, API, deployment-topology, or persisted-user-data changes; Korea was not accessed or updated.
+
 ## [0.4.1-beta.5] - 2026-08-23
 
 ### Fixed
@@ -217,7 +229,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Refreshed compatible frontend dependency patches for Mermaid rendering,
   sanitization, identifier generation, and build-time URI/glob processing.
 
-[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.5...HEAD
+[Unreleased]: https://github.com/huoguojun123/EffChat/compare/v0.4.1-beta.6...HEAD
+[0.4.1-beta.6]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.6
 [0.4.1-beta.5]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.5
 [0.4.1-beta.4]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.4
 [0.4.1-beta.3]: https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.3

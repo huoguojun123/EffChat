@@ -50,7 +50,7 @@ docker compose up -d
 
 ## Registry 镜像部署
 
-需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用 `docker-compose.registry.yml`。模板中的四个 EffChat 角色都引用 `${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.1-beta.5}`；migration SQL 与 runner 随同一镜像发布，不再挂载宿主机源码。
+需要从公开 Docker Hub beta 镜像运行、而不在部署机编译源码时，使用 `docker-compose.registry.yml`。模板中的四个 EffChat 角色都引用 `${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.1-beta.6}`；migration SQL 与 runner 随同一镜像发布，不再挂载宿主机源码。
 
 ## 组件
 

@@ -7,6 +7,12 @@ vi.mock("@/components/message/CodeBlock", () => ({
   CodeBlock: ({ code, allowPreview }: { code: string; allowPreview?: boolean }) => <pre className="mock-code-block" data-allow-preview={String(allowPreview)}>{code}</pre>,
 }))
 
+vi.mock("@/components/message/ImageLightbox", () => ({
+  ImageLightbox: ({ open, url, filename }: { open: boolean; url: string; filename: string }) => (
+    <div data-testid="mock-image-lightbox" data-open={String(open)} data-url={url} data-filename={filename} />
+  ),
+}))
+
 describe("MarkdownContent rendering", () => {
   it("renders inline and block math as KaTeX markup", () => {
     const html = renderToStaticMarkup(
@@ -108,5 +114,82 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain("<th>multi<br/>\nline</th>")
     expect(html).toContain("<th>&lt;tag&gt;</th>")
     expect(html).not.toContain("<tag>")
+  })
+
+  it("renders read-only task lists with accessible state labels", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"- [x] 已完成\n- [ ] 待处理"} />
+    )
+
+    expect(html).toContain('class="contains-task-list"')
+    expect(html).toContain('class="task-list-item"')
+    expect(html).toContain('type="checkbox"')
+    expect(html).toContain('aria-label="已完成"')
+    expect(html).toContain('aria-label="未完成"')
+    expect(html).toContain('disabled=""')
+  })
+
+  it("renders GFM footnotes with a return link", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"说明[^1]\n\n[^1]: 补充说明"} />
+    )
+
+    expect(html).toContain('data-footnote-ref="true"')
+    expect(html).toContain('data-footnote-backref=""')
+    expect(html).toContain('class="footnotes"')
+  })
+
+  it("opens external links safely while keeping internal anchors in place", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"[外部](https://example.com) [本页](#section) [站内](/docs)"} />
+    )
+
+    expect(html).toContain('href="https://example.com"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noreferrer"')
+    expect(html).toContain('href="#section"')
+    expect(html).toContain('href="/docs"')
+    expect(html.match(/target="_blank"/g)).toHaveLength(1)
+  })
+
+  it("does not allow unsafe link schemes", () => {
+    const html = renderToStaticMarkup(<MarkdownContent content="[危险链接](javascript:alert(1))" />)
+
+    expect(html).not.toContain("javascript:")
+  })
+
+  it("renders Markdown images as accessible lightbox triggers", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={'![架构图](https://example.com/architecture.png "系统架构")'} />
+    )
+
+    expect(html).toContain('class="markdown-image"')
+    expect(html).toContain('aria-label="放大图片：架构图"')
+    expect(html).toContain('loading="lazy"')
+    expect(html).toContain('alt="架构图"')
+    expect(html).toContain("系统架构")
+    expect(html).toContain('data-testid="mock-image-lightbox"')
+    expect(html).not.toContain("<figure")
+    expect(html).not.toContain("<figcaption")
+  })
+
+  it("preserves extracted hard line breaks in document markdown", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"第一行\n第二行"} variant="document" />
+    )
+
+    expect(html).toContain("第一行<br/>")
+    expect(html).toContain("第二行")
+  })
+
+  it("normalizes legacy break tags without changing code", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"| 项目 | 说明 |\n| --- | --- |\n| service/\u200bimpl/ | 业务层<br>定义接口 |\n\n行内代码 `<br>`\n\n```html\n<br/>\n```"} />
+    )
+
+    expect(html).toContain("业务层<br/>")
+    expect(html).toContain('行内代码 <code class="inline-code-highlight shiki">&lt;br&gt;</code>')
+    expect(html).not.toContain("业务层&lt;br&gt;定义接口")
+    expect(html).toContain('<pre class="mock-code-block" data-allow-preview="true">&lt;br/&gt;</pre>')
   })
 })

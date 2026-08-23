@@ -24,6 +24,31 @@ describe("syntax highlight HTML safety", () => {
     expect(html).toContain("--shiki-dark")
   })
 
+  it.each([
+    ["bat", "bat"],
+    ["cmd", "bat"],
+    ["c", "c"],
+    ["cc", "cpp"],
+    ["cpp", "cpp"],
+    ["c++", "cpp"],
+    ["cs", "csharp"],
+    ["c#", "csharp"],
+    ["kt", "kotlin"],
+    ["kts", "kotlin"],
+    ["php", "php"],
+    ["ps", "powershell"],
+    ["ps1", "powershell"],
+    ["rb", "ruby"],
+    ["svelte", "svelte"],
+    ["swift", "swift"],
+    ["vue", "vue"],
+  ])("highlights the supported %s fence through the %s loader", async (alias) => {
+    const html = await highlightCodeToHtml("const answer = 42", alias)
+
+    expect(html).toContain("--shiki-light")
+    expect(html).toContain("--shiki-dark")
+  })
+
   it("escapes inline HTML snippets before rendering inline code", async () => {
     const html = await highlightInlineCodeToHtml("<b onclick='alert(1)'>x</b>")
 

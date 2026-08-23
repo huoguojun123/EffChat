@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react"
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type CSSProperties, type ImgHTMLAttributes, type InputHTMLAttributes } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -6,6 +6,7 @@ import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import { CodeBlock } from "./CodeBlock"
 import { InlineCode } from "./InlineCode"
+import { ImageLightbox } from "./ImageLightbox"
 import { markdownHasDefaultInlinePreview } from "./previewArtifact"
 import { LoadingIndicator } from "@/components/ui/loading-indicator"
 
@@ -26,7 +27,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 }: Props) {
   const blockIndexRef = useRef(0)
   blockIndexRef.current = 0
-  const normalizedContent = useMemo(() => normalizeTexMathDelimiters(content), [content])
+  const normalizedContent = useMemo(() => normalizeMarkdownContent(content), [content])
   const preparationIdentity = `${ownerKey}:${normalizedContent}`
   const [pendingState, setPendingState] = useState<{ identity: string; keys: Set<string> }>(() => ({
     identity: preparationIdentity,
@@ -63,6 +64,25 @@ export const MarkdownContent = memo(function MarkdownContent({
   const components = useMemo(() => ({
     pre({ children }: { children?: React.ReactNode }) {
       return <>{children}</>
+    },
+    input({ checked, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+      return <input {...props} checked={checked} aria-label={checked ? "已完成" : "未完成"} />
+    },
+    a({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+      const external = isExternalMarkdownUrl(href)
+      return (
+        <a
+          {...props}
+          href={href}
+          target={external ? "_blank" : props.target}
+          rel={external ? "noreferrer" : props.rel}
+        >
+          {children}
+        </a>
+      )
+    },
+    img({ src, alt, title, ...props }: ImgHTMLAttributes<HTMLImageElement>) {
+      return <MarkdownImage src={src} alt={alt} title={title} {...props} />
     },
     code({ className, children }: { className?: string; children?: React.ReactNode }) {
       const match = /language-([^\s]+)/.exec(className || "")
@@ -116,6 +136,79 @@ function normalizeTexMathDelimiters(markdown: string) {
       return normalizeInlineTexMath(part)
     })
     .join("")
+}
+
+function normalizeMarkdownContent(markdown: string) {
+  return normalizeLegacyBreakTags(normalizeTexMathDelimiters(markdown))
+}
+
+// Older model replies sometimes use HTML line-break tags inside Markdown tables.
+// Convert only the inert, attribute-free variants; raw HTML remains disabled and
+// code spans/fences must retain their exact source text.
+function normalizeLegacyBreakTags(markdown: string) {
+  return markdown
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
+    .map((part) => {
+      if (part.startsWith("```") || part.startsWith("~~~")) return part
+      const chunks = part.split(/(`+[^`]*`+)/g)
+      return chunks.map((chunk) => {
+        if (chunk.startsWith("`") && chunk.endsWith("`")) return chunk
+        return chunk.replace(/<br\s*\/?>/gi, "&#10;")
+      }).join("")
+    })
+    .join("")
+}
+
+const MarkdownImage = memo(function MarkdownImage({
+  src,
+  alt,
+  title,
+  ...props
+}: ImgHTMLAttributes<HTMLImageElement>) {
+  const [open, setOpen] = useState(false)
+  const [failedSrc, setFailedSrc] = useState<string>()
+  const label = alt?.trim() || "Markdown 图片"
+  const filename = title?.trim() || label
+
+  if (!src || failedSrc === src) {
+    return (
+      <span className="markdown-image-fallback" role="img" aria-label={`${label}加载失败`}>
+        图片无法加载：{label}
+      </span>
+    )
+  }
+
+  return (
+    <span className="markdown-image">
+      <button
+        type="button"
+        className="markdown-image-trigger"
+        aria-label={`放大图片：${label}`}
+        title={`放大图片：${label}`}
+        onClick={() => setOpen(true)}
+      >
+        <img
+          {...props}
+          src={src}
+          alt={label}
+          loading="lazy"
+          onError={() => setFailedSrc(src)}
+        />
+      </button>
+      {title ? <span className="markdown-image-caption">{title}</span> : null}
+      <ImageLightbox open={open} url={src} filename={filename} onOpenChange={setOpen} />
+    </span>
+  )
+})
+
+function isExternalMarkdownUrl(href: string | undefined) {
+  if (!href) return false
+  try {
+    const url = new URL(href, "https://effchat.invalid")
+    return (url.protocol === "http:" || url.protocol === "https:") && url.host !== "effchat.invalid"
+  } catch {
+    return false
+  }
 }
 
 function normalizeInlineTexMath(text: string) {

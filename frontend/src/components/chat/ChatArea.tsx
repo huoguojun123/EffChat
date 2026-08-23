@@ -210,7 +210,7 @@ export function ChatArea({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <header data-testid="chat-topbar" className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 border-b border-border/35 bg-background/78 px-2 backdrop-blur-md sm:gap-2 sm:px-3">
+      <header data-testid="chat-topbar" className="chat-topbar-surface pointer-events-none absolute inset-x-0 top-0 z-30 flex h-12 items-center gap-1.5 border-b-0 bg-background/78 px-2 backdrop-blur-md sm:gap-2 sm:px-3">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

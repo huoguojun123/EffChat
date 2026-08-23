@@ -38,6 +38,13 @@ const messages = [
     has_tool_calls: true,
     has_reasoning: true,
     created_at: "2026-08-16T00:01:01Z",
+    answer_navigation: {
+      attempt_id: 2,
+      attempt_number: 2,
+      attempt_count: 2,
+      previous_attempt_id: 1,
+      can_switch: true,
+    },
     message_data: {
       role: "assistant",
       content: "桌面密度回归内容。",
@@ -156,7 +163,7 @@ async function assertChatDensity(page: Page, expected: { spacing: string; sideba
   expect(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)")
   expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
   expect(await page.getByTestId("chat-input").evaluate((element) => getComputedStyle(element).fontSize)).toBe("15px")
-  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Segoe UI")
+  expect(await page.getByText("桌面密度回归内容。", { exact: true }).evaluate((element) => getComputedStyle(element).fontFamily)).toContain("Plus Jakarta Sans")
   expect(await page.getByTestId("composer-surface").evaluate((element) => getComputedStyle(element).backdropFilter)).toBe("none")
   const messageSurfaces = await page.evaluate(() => {
     const user = document.querySelector<HTMLElement>('[data-testid="user-message-surface"]')
@@ -268,7 +275,17 @@ test("mobile chat chrome keeps equal top controls and a bottom breathing room", 
       expect(Math.round((await control.boundingBox())?.height || 0)).toBe(32)
   }
   expect(await topbar.evaluate((element) => getComputedStyle(element).backdropFilter)).not.toBe("none")
+  expect(await topbar.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe("0px")
+  expect(await topbar.evaluate((element) => getComputedStyle(element, "::after").content)).toBe('""')
   expect(Number.parseFloat(await page.getByTestId("chat-composer-dock").evaluate((element) => getComputedStyle(element).paddingBottom))).toBeGreaterThanOrEqual(8)
+  const assistantActions = page.getByTestId("assistant-actions")
+  const usage = page.getByTestId("assistant-usage")
+  await expect(assistantActions).toBeVisible()
+  await expect(usage).toBeVisible()
+  const actionsBox = await assistantActions.boundingBox()
+  const usageBox = await usage.boundingBox()
+  expect(Math.abs((actionsBox?.y ?? 0) - (usageBox?.y ?? 0))).toBeLessThanOrEqual(1)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await context.close()
 })
 

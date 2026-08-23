@@ -36,7 +36,7 @@
   --radius: 0.625rem;
   /* Prefer native sans families so CJK and Latin glyphs keep comparable
      metrics on Windows and macOS without requiring a downloaded webfont. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
   --font-serif: Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, Cambria, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
@@ -996,6 +996,19 @@ html.app-route-leaving #root {
   font-family: var(--chat-font-family, var(--font-sans));
   font-size: calc(15px * var(--chat-font-scale, 1));
   font-weight: 500;
+}
+
+/* The translucent topbar should merge into the reading surface instead of
+   leaving a hard rule across the first message. Keep the fade decorative so
+   it cannot steal clicks from the controls beneath it. */
+.chat-topbar-surface::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 0.75rem;
+  pointer-events: none;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--bg) 78%, transparent), transparent);
 }
 [data-chat-scroll-container] .text-\[15px\] {
   font-size: calc(15px * var(--chat-font-scale, 1));

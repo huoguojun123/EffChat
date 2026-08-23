@@ -995,7 +995,10 @@ html.app-route-leaving #root {
 [data-chat-scroll-container] {
   font-family: var(--chat-font-family, var(--font-sans));
   font-size: calc(15px * var(--chat-font-scale, 1));
-  font-weight: 500;
+  /* Body copy stays at regular weight. Headings, strong text, and controls
+     declare their own emphasis so CJK paragraphs do not inherit a synthetic
+     medium face and look heavier than the Latin fallback. */
+  font-weight: 400;
 }
 
 /* The translucent topbar should merge into the reading surface instead of

@@ -34,8 +34,8 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --radius: 0.625rem;
-  /* Prefer native sans families so CJK and Latin glyphs keep comparable
-     metrics on Windows and macOS without requiring a downloaded webfont. */
+  /* Keep the loaded Latin/CJK sans families together, with platform fallbacks
+     for offline or blocked font requests. */
   --font-sans: "Plus Jakarta Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
   --font-serif: Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, Cambria, "Times New Roman", serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

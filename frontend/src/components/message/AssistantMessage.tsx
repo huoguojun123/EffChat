@@ -125,7 +125,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
             )}
             {actionError ? <MessageStateLine label={actionError} tone="error" /> : null}
             <div data-testid="assistant-actions" className="flex flex-nowrap items-center justify-between gap-2">
-              <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden sm:gap-2">
+              <div className="flex min-w-0 shrink items-center gap-1 overflow-hidden md:gap-2">
                 {canSwitchAnswer && navigation ? (
                   <AnswerAttemptControls
                     navigation={navigation}
@@ -170,7 +170,7 @@ function AnswerAttemptControls({
   const hasNext = typeof navigation.next_attempt_id === "number"
   const switching = switchingAttempt !== null || deleting
   return (
-    <div data-testid="answer-attempt-controls" className="flex h-8 shrink-0 items-center border-r border-border/60 pr-1 sm:h-7 sm:pr-2">
+    <div data-testid="answer-attempt-controls" className="flex h-8 shrink-0 items-center border-r border-border/60 pr-1 md:h-7 md:pr-2">
       <button
         type="button"
         title="查看上一个回答"
@@ -346,7 +346,7 @@ function UsageSummary({ message }: { message: Message }) {
         <button
           type="button"
           data-testid="assistant-usage"
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-2"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:px-2"
         >
           <span>{summary}</span>
           {open ? <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -388,10 +388,10 @@ function ActionButton({
       disabled={disabled}
       aria-label={label}
       title={label}
-      className="inline-flex h-8 w-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-0 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-40 sm:w-auto sm:justify-center sm:px-2"
+      className="inline-flex h-8 w-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-0 text-xs font-medium text-muted-foreground transition-colors motion-control hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-40 md:w-auto md:justify-center md:px-2"
     >
       {children}
-      <span className="max-sm:hidden">{label}</span>
+      <span className="max-md:hidden">{label}</span>
     </button>
   )
 }

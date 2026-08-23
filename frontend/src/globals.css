@@ -518,6 +518,53 @@ html.app-route-leaving #root {
     margin-inline-start: 1em;
   }
 
+  & .contains-task-list {
+    padding-inline-start: 0;
+  }
+  & .task-list-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55em;
+    margin-inline-start: 0;
+  }
+  & .task-list-item::before {
+    content: none;
+  }
+  & .task-list-item > input[type="checkbox"] {
+    width: 1em;
+    height: 1em;
+    flex: 0 0 auto;
+    margin: calc((var(--md-line-height) - 1em) * 0.5) 0 0;
+    accent-color: var(--primary);
+  }
+
+  & .footnotes {
+    margin-block: 1.1em 0.2em;
+    padding-block-start: 0.75em;
+    border-block-start: 1px solid color-mix(in oklch, var(--border), transparent 25%);
+    font-size: 0.85em;
+  }
+  & .footnotes ol {
+    margin-block: 0.4em 0;
+    padding-inline-start: 1.5em;
+  }
+  & .footnotes li {
+    padding-inline-start: 0.2em;
+  }
+  & .footnotes .data-footnote-backref {
+    margin-inline-start: 0.35em;
+    color: var(--muted-fg);
+    text-decoration: none;
+  }
+  & .footnotes .data-footnote-backref:hover {
+    color: var(--foreground);
+    text-decoration: underline;
+  }
+  & a[data-footnote-ref] {
+    scroll-margin-block: 1rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   & code:not(pre code) {
     display: inline;
     margin-inline: 0.14em;

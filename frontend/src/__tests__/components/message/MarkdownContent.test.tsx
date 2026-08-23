@@ -109,4 +109,27 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain("<th>&lt;tag&gt;</th>")
     expect(html).not.toContain("<tag>")
   })
+
+  it("renders read-only task lists with accessible state labels", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"- [x] 已完成\n- [ ] 待处理"} />
+    )
+
+    expect(html).toContain('class="contains-task-list"')
+    expect(html).toContain('class="task-list-item"')
+    expect(html).toContain('type="checkbox"')
+    expect(html).toContain('aria-label="已完成"')
+    expect(html).toContain('aria-label="未完成"')
+    expect(html).toContain('disabled=""')
+  })
+
+  it("renders GFM footnotes with a return link", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent content={"说明[^1]\n\n[^1]: 补充说明"} />
+    )
+
+    expect(html).toContain('data-footnote-ref="true"')
+    expect(html).toContain('data-footnote-backref=""')
+    expect(html).toContain('class="footnotes"')
+  })
 })

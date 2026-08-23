@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react"
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type InputHTMLAttributes } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -63,6 +63,9 @@ export const MarkdownContent = memo(function MarkdownContent({
   const components = useMemo(() => ({
     pre({ children }: { children?: React.ReactNode }) {
       return <>{children}</>
+    },
+    input({ checked, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+      return <input {...props} checked={checked} aria-label={checked ? "已完成" : "未完成"} />
     },
     code({ className, children }: { className?: string; children?: React.ReactNode }) {
       const match = /language-([^\s]+)/.exec(className || "")

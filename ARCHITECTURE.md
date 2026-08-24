@@ -62,6 +62,7 @@ backend (Gin)
 
 - `src/components/chat`：聊天区、输入框、模型选择、文件抽屉和附件上传。
 - `src/components/message`：用户/助手消息、Markdown、代码块、思考过程、工具调用树；助手正文与思考过程复用同一安全 Markdown 渲染器，思考过程保持紧凑字号并关闭 artifact 预览。Markdown 使用 GFM、数学公式和受控代码/图表预览；任务列表保持只读，脚注提供返回链接，外部链接新窗口打开，Markdown 图片复用现有 ImageLightbox。Chat 与 Document 当前都保留 `remark-breaks` 的硬换行契约，以免提取表格和段落中的显式换行被折叠；兼容历史模型常在表格中输出的无属性 `<br>`/`<br/>`/`<br />` 会先转为安全换行，但代码围栏与行内代码原样保留，其他 raw HTML 仍被禁止。代码高亮按需加载已登记的常见语言，未知 fence 继续安全回退纯文本。
+- 超过 60 轮的对话轮次 rail 只让按钮 viewport 垂直滚动；标题/助手概览气泡由 rail 外层 sibling 定位，避免被 `overflow-y-auto` 的横向裁切吞掉。超过 500 轮仍使用视口附近虚拟化，预览位置按轮次索引与当前 scrollTop 计算；滚动时清理旧 hover/focus 预览，按钮选择与键盘导航契约不变。
 - `src/components/workspace`：HTML/SVG/Mermaid/Graphviz/思维导图预览器，以及保留但不再由普通入口触发的旧右侧工作区。
 - `src/components/admin`：受权限保护的 `/admin/:section` 独立页面；按模型与服务、治理与用量、提示与知识、系统分组，按当前栏目懒加载数据。
 - `src/stores`：Zustand 状态，包括认证、会话消息、模型列表、UI 状态和系统信息。
@@ -100,6 +101,8 @@ PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化�
 6. 后端即使前端 SSE 断开，也尽量继续跑完当前 run 并落库。
 7. terminal 决策形成后，RunHub 会冻结迟到输出和取消；瞬时数据库或连接故障使用独立的有界单次上下文重试同一原子提交，只有数据库返回 canonical terminal 后才向所有订阅者发布一次终态。进程在恢复期间退出时，启动 reconciliation 将遗留的 durable running run 转成可重试的 `server_restarted` 终态。
 8. 前端在重连、刷新或 run 完成后从 DB 同步真实消息，保留仍未落库的本地 pending 消息。
+9. 可见的 active session 额外通过轻量 `GET /sessions/:id/message-cursor` 检查 `sessions.updated_at` 与最新 durable message ID；cursor 变化后才复用 `message-window?latest=true` 合并消息，因此手机、桌面和多标签页可以在没有自身 SSE run 的情况下收敛。hidden 页面暂停检查，回到前台/联网立即检查；本地 streaming、compaction 和分页 generation 仍优先，不把 RunHub 变成跨设备消息总线。
+10. 同一会话、同一消息窗口 generation 的 cursor 对账与 active-run 恢复共用一个 latest-window 同步任务，避免两个并发请求相互作废并使恢复在 resume SSE 前退出。窗口或会话 generation 改变时仍建立新任务并拒绝旧响应；run-specific 调用在共享同步完成后再次核对当前 request ID。
 
 模型渠道的 provider、模型家族与 wire protocol 分开解析。`openai_compatible` 继续走 Chat Completions 兼容协议；`openai_responses` 通过官方 Eino Responses 组件接入 `/v1/responses`。主对话保留 `schema.AgenticMessage` 到 Eino `NewTypedChatModelAgent`，由稳定版 Eino 的 typed ReAct graph 下发本地 Tool schema、执行 Tool 并回送 function result；仅在 Agent 事件出口转换为 EffChat 既有 SSE、RunHub、usage 和 PostgreSQL 消息契约。标题、probe、压缩、记忆维护和网页提炼等不执行本地 Tool 的 utility 调用仍可使用经典消息 adapter，不复制 ReAct、SSE parser 或第二套运行时。Responses 请求固定 `store=false`，不使用 `previous_response_id`、Conversations API、hosted tools 或 MCP runtime。
 
@@ -131,7 +134,11 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 空请求创建会话只使用管理员配置的全局默认模型，不按目录排序猜测模型。`GET /sessions/readiness` 复用与真实创建相同的默认模型、用户权限和渠道可运行校验：配置缺失或安全的模型状态返回 `200 + ready=false` 与稳定 code，repository 故障仍是可追踪 5xx。前端在 readiness 未知或 blocked 时不发送空创建请求；侧栏与空会话入口共享一个 busy/error owner，重复点击不会产生并发创建。系统尚无 runnable public 模型时允许空默认作为 bootstrap 状态；一旦存在可运行的公共模型，Admin 清空 `default_model_id` 会在写事务前被拒绝并保留旧值。
 
-前端消息正文只维护一个当前窗口 generation。切换会话、账户 reset、latest/full reload、around 跳转和显式窗口替换都会先递增 generation、失效旧分页并释放 loading；older/newer 同一时刻只有一个方向拥有分页请求，响应还必须匹配 session、generation、方向 owner 和原 cursor 才能合并。RunHub/SSE terminal 对账捕获同一 generation，并与首次加载、刷新共用 latest message-window 可见投影，不能再用包含失效压缩摘要的 legacy paged messages 投影覆盖活动 UI；已加载的旧页继续由窗口边界保留。历史窗口不会被迟到 durable sync 改写；full reload 替换 durable 行，只保留尚待服务端对应记录接管的本地 optimistic 消息。滚动锚点同样绑定 generation，窗口替换后旧 observer 或 timeout 不能继续调整 scrollTop。
+前端消息正文只维护一个当前窗口 generation。切换会话、账户 reset、latest/full reload、around 跳转和显式窗口替换都会先递增 generation、失效旧分页并释放 loading；older/newer 同一时刻只有一个方向拥有分页请求，响应还必须匹配 session、generation、方向 owner 和原 cursor 才能合并。RunHub/SSE terminal 对账与可见客户端 cursor 对账捕获同一 generation，并与首次加载、刷新共用 latest message-window 可见投影，不能再用包含失效压缩摘要的 legacy paged messages 投影覆盖活动 UI；已加载的旧页继续由窗口边界保留。历史窗口不会被迟到 durable sync 改写；full reload 替换 durable 行，只保留尚待服务端对应记录接管的本地 optimistic 消息。滚动锚点同样绑定 generation，窗口替换后旧 observer 或 timeout 不能继续调整 scrollTop。
+
+本地失败 assistant 与 `incomplete` / `unsaved` partial output 属于不同展示事实：普通 error-only 副本在 retry 被服务端接受后才移除，准入拒绝时保留原回答；partial output 不被静默删除。latest-window 对账按 request/run 归属把尚未被 durable 结果接管的本地 assistant 留在所属 user turn，不能统一追加到消息列表末尾。`message_complete` 创建的 finalizing assistant 已占用当前流式展示槽，不能再并列渲染空 StreamingMessage。模型内部 `model_retry` 只提供短暂的 attempt/总次数和客户端剩余时间提示，正文、thinking、工具或终态到达后立即清除；服务端事件仍是权威状态。
+
+聊天自动跟随只在用户仍位于底部附近且未主动暂停时执行。首次新增消息可平滑进入视口，token 增量与布局校正继续按帧即时跟随；列表底部使用独立 `--chat-scroll-gap` 在 composer inset 之外保留阅读间距。新增 assistant segment 只在首次挂载时轻量淡入，不因每个 delta 重播动画，用户主动滚动后不会被抢回底部。
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功。`PATCH /session-folders/:id` 的 `name` 与 `pinned` 是同一个 owner-scoped 原子 mutation：空 payload 在写入前拒绝，实际携带的字段由一条 `UPDATE ... RETURNING` 同时提交并返回 canonical folder；名称唯一约束或数据库失败不能留下只改名称或只改置顶的半状态。
 

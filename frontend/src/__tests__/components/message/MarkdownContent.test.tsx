@@ -60,6 +60,13 @@ describe("MarkdownContent rendering", () => {
     expect(html).not.toContain("cdn.jsdelivr.net")
   })
 
+  it("contains ordinary markdown inside a shrinkable content root", () => {
+    const html = renderToStaticMarkup(<MarkdownContent content="a very long https://example.test/path/to/a-token" />)
+
+    expect(html).toContain("markdown-body")
+    expect(html).toContain("min-w-0 max-w-full")
+  })
+
   it("renders reasoning as compact markdown without artifact previews", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent

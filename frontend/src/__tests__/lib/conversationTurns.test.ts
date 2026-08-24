@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildConversationTurns, conversationTurnMarkerRange, conversationTurnRailMode } from "@/lib/conversationTurns"
+import { buildConversationTurns, conversationTurnMarkerRange, conversationTurnPreviewTop, conversationTurnRailMode } from "@/lib/conversationTurns"
 import type { Message } from "@/types"
 
 function message(id: number, role: "user" | "assistant" | "tool", content: string) {
@@ -83,5 +83,12 @@ describe("conversationTurnRailMode", () => {
     [5000, true, true],
   ])("classifies %i turns", (count, scrollable, virtual) => {
     expect(conversationTurnRailMode(count)).toEqual({ scrollable, virtual })
+  })
+})
+
+describe("conversationTurnPreviewTop", () => {
+  it("keeps the preview aligned with the visible marker after scrolling", () => {
+    expect(conversationTurnPreviewTop(120, 1000)).toBe(205)
+    expect(conversationTurnPreviewTop(0, 0)).toBe(5)
   })
 })

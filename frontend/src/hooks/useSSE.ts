@@ -38,9 +38,16 @@ interface ReconciliationTask {
   promise: Promise<void>
 }
 
+interface MessageSyncTask {
+  activeSessionGeneration: number
+  messageWindowGeneration: number
+  promise: Promise<boolean>
+}
+
 let activeStream: ClientStream | null = null
 const reconciliationGenerations = new Map<number, number>()
 const reconciliationTasks = new Map<number, ReconciliationTask>()
+const messageSyncTasks = new Map<number, MessageSyncTask>()
 
 function beginStream(sessionId: number, requestId: string): ClientStream {
   activeStream?.controller.abort()
@@ -98,6 +105,7 @@ export function useSSE() {
   const addStreamToolCall = useChatStore((s) => s.addStreamToolCall)
   const updateStreamToolCall = useChatStore((s) => s.updateStreamToolCall)
   const commitStreamingMessage = useChatStore((s) => s.commitStreamingMessage)
+  const prepareRetryPresentation = useChatStore((s) => s.prepareRetryPresentation)
   const resumeActiveRunRef = useRef<((sessionId: number) => Promise<void>) | null>(null)
 
   const isCurrentSession = useCallback((sessionId: number) => {
@@ -108,35 +116,54 @@ export function useSSE() {
     sessionId: number,
     expectedRequestId?: string,
   ) => {
-    const generation = nextReconciliationGeneration(sessionId)
     const initialState = useChatStore.getState()
     const activeSessionGeneration = initialState.activeSessionGeneration
     const messageWindowGeneration = initialState.messageWindowGeneration
-    const res = await listMessageWindow(sessionId, { latest: true, turnLimit: 16 })
-    const state = useChatStore.getState()
+    let task = messageSyncTasks.get(sessionId)
     if (
-      state.activeSessionId !== sessionId
-      || state.activeSessionGeneration !== activeSessionGeneration
-      || state.messageWindowGeneration !== messageWindowGeneration
-      || reconciliationGenerations.get(sessionId) !== generation
-      || (expectedRequestId !== undefined && state.streaming.requestId !== expectedRequestId)
-    ) return false
-    const incoming = res.messages || []
-    if (state.hasNewerMessages) return true
-    const oldestIncomingID = incoming.reduce<number | null>((oldest, message) => (
-      oldest === null || message.id < oldest ? message.id : oldest
-    ), null)
-    const hasLoadedOlderPage = oldestIncomingID !== null
-      && state.messages.some((message) => !message.is_local && message.id < oldestIncomingID)
-    if (!syncMessages(incoming, messageWindowGeneration)) return false
+      !task
+      || task.activeSessionGeneration !== activeSessionGeneration
+      || task.messageWindowGeneration !== messageWindowGeneration
+    ) {
+      const generation = nextReconciliationGeneration(sessionId)
+      const promise = (async () => {
+        const res = await listMessageWindow(sessionId, { latest: true, turnLimit: 16 })
+        const state = useChatStore.getState()
+        if (
+          state.activeSessionId !== sessionId
+          || state.activeSessionGeneration !== activeSessionGeneration
+          || state.messageWindowGeneration !== messageWindowGeneration
+          || reconciliationGenerations.get(sessionId) !== generation
+        ) return false
+        const incoming = res.messages || []
+        if (state.hasNewerMessages) return true
+        const oldestIncomingID = incoming.reduce<number | null>((oldest, message) => (
+          oldest === null || message.id < oldest ? message.id : oldest
+        ), null)
+        const hasLoadedOlderPage = oldestIncomingID !== null
+          && state.messages.some((message) => !message.is_local && message.id < oldestIncomingID)
+        if (!syncMessages(incoming, messageWindowGeneration)) return false
+        const current = useChatStore.getState()
+        if (current.messageWindowGeneration !== messageWindowGeneration) return false
+        useChatStore.setState({
+          hasMoreMessages: hasLoadedOlderPage ? state.hasMoreMessages : !!res.has_older,
+          hasNewerMessages: !!res.has_newer,
+          isLoadingOlder: false,
+        })
+        return true
+      })()
+      task = { activeSessionGeneration, messageWindowGeneration, promise }
+      messageSyncTasks.set(sessionId, task)
+      const clearTask = () => {
+        if (messageSyncTasks.get(sessionId)?.promise === promise) messageSyncTasks.delete(sessionId)
+      }
+      void promise.then(clearTask, clearTask)
+    }
+
+    const synced = await task.promise
+    if (!synced) return false
     const current = useChatStore.getState()
-    if (current.messageWindowGeneration !== messageWindowGeneration) return false
-    useChatStore.setState({
-      hasMoreMessages: hasLoadedOlderPage ? state.hasMoreMessages : !!res.has_older,
-      hasNewerMessages: !!res.has_newer,
-      isLoadingOlder: false,
-    })
-    return true
+    return expectedRequestId === undefined || current.streaming.requestId === expectedRequestId
   }, [syncMessages])
 
   const ownsReconciliationTask = useCallback((task: ReconciliationTask) => {
@@ -725,7 +752,11 @@ export function useSSE() {
       },
     }
     try {
-      await runStream(sessionId, request, requestId)
+      await runStream(sessionId, request, requestId, () => {
+        // Only replace the visible tail after server admission succeeds. A
+        // rejected retry must leave the previous answer available to read.
+        prepareRetryPresentation(messageId)
+      })
     } catch (err) {
       if (!isCompactionRequired(err)) throw err
       if (!isCurrentSession(sessionId)) throw new Error("会话已切换，消息未发送", { cause: err })
@@ -744,9 +775,11 @@ export function useSSE() {
         throw new Error("当前上下文无法再缩短，无法重新生成。请新建会话或缩短本轮内容", { cause: err })
       }
       if (!isCurrentSession(sessionId)) throw new Error("会话已切换，消息未发送", { cause: err })
-      await runStream(sessionId, request, requestId)
+      await runStream(sessionId, request, requestId, () => {
+        prepareRetryPresentation(messageId)
+      })
     }
-  }, [isCurrentSession, runStream, startCompactionInternal, syncSessionMessages])
+  }, [isCurrentSession, prepareRetryPresentation, runStream, startCompactionInternal, syncSessionMessages])
 
   const editRetryMessage = useCallback(async (sessionId: number, messageId: number, content: string) => {
     const requestId = safeUUID()
@@ -1085,7 +1118,7 @@ export function useSSE() {
     if (ownsCurrentView && useChatStore.getState().streaming.requestId === stream.requestId) resetStreaming()
   }, [resetStreaming])
 
-  return { sendMessage, retryMessage, editRetryMessage, resumeActiveRun, startCompaction, abort, disconnectActiveStream }
+  return { sendMessage, retryMessage, editRetryMessage, resumeActiveRun, syncSessionMessages, startCompaction, abort, disconnectActiveStream }
 }
 
 function snapshotToolCalls(run: ActiveRunSnapshot): ToolCall[] {

@@ -116,6 +116,22 @@ func ListMessageWindowHandler(messageService *service.MessageService) gin.Handle
 	}
 }
 
+func GetSessionMessageCursorHandler(messageService *service.MessageService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || sessionID <= 0 {
+			writePublicError(c, http.StatusBadRequest, "session_id_invalid", "invalid session id", false)
+			return
+		}
+		cursor, err := messageService.GetSessionMessageCursor(c.Request.Context(), sessionID, middleware.GetUserID(c))
+		if err != nil {
+			writeMessageReadError(c, "cursor", err)
+			return
+		}
+		c.JSON(http.StatusOK, cursor)
+	}
+}
+
 func messageWindowQuery(c *gin.Context) (repository.MessageWindowMode, int64, error) {
 	type option struct {
 		name string

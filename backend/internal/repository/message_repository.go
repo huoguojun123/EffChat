@@ -41,6 +41,11 @@ type MessageWindow struct {
 	HasNewer    bool
 }
 
+type SessionMessageCursor struct {
+	LatestMessageID int64
+	UpdatedAt       time.Time
+}
+
 const messageLogicalIDSQL = `
 	CASE
 		WHEN COALESCE(m.message_data->'metadata'->>'compaction_summary', '') = 'true'
@@ -75,6 +80,27 @@ var (
 
 func NewMessageRepository(db *sql.DB) *MessageRepository {
 	return &MessageRepository{db: db}
+}
+
+// GetSessionMessageCursor reads only durable activity metadata. The cursor is
+// intentionally separate from message-window payloads so visible clients can
+// check for external changes without repeatedly transferring message bodies.
+func (r *MessageRepository) GetSessionMessageCursor(ctx context.Context, sessionID int64) (*SessionMessageCursor, error) {
+	cursor := &SessionMessageCursor{}
+	err := r.db.QueryRowContext(ctx, `
+		SELECT s.updated_at, COALESCE(MAX(m.id), 0)
+		FROM sessions s
+		LEFT JOIN messages m ON m.session_id = s.id AND m.deleted_at IS NULL
+		WHERE s.id = $1 AND s.deleted_at IS NULL
+		GROUP BY s.updated_at
+	`, sessionID).Scan(&cursor.UpdatedAt, &cursor.LatestMessageID)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get session message cursor: %w", err)
+	}
+	return cursor, nil
 }
 
 // dbExecutor 抽象 *sql.DB 与 *sql.Tx 的公共方法，使写入逻辑可在事务内外复用。

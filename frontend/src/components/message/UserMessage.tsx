@@ -117,8 +117,8 @@ export function UserMessage({
   const emptyEdit = !editContent.trim() && files.length === 0
 
   return (
-    <div className="group flex justify-end py-4 pl-8 sm:py-5 sm:pl-10">
-      <div className="max-w-[min(88%,48rem)] space-y-1.5">
+    <div className="group flex min-w-0 max-w-full justify-end py-4 pl-8 sm:py-5 sm:pl-10">
+      <div className="min-w-0 max-w-[min(88%,48rem)] space-y-1.5">
         {files.length > 0 && (
           <div className="flex flex-wrap justify-end gap-1.5">
             {files.map((f, i) => (
@@ -250,7 +250,7 @@ function UserText({ text }: { text: string }) {
           <div
             ref={innerRef}
             data-testid="user-message-surface"
-            className="message-user-surface rounded-2xl border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_2px_10px_-9px_rgba(0,0,0,0.2)] whitespace-pre-wrap sm:px-5 sm:py-3"
+            className="message-user-surface message-plain-text rounded-2xl border px-4 py-2.5 text-[15px] leading-relaxed shadow-[0_2px_10px_-9px_rgba(0,0,0,0.2)] whitespace-pre-wrap sm:px-5 sm:py-3"
           >
             {text}
           </div>

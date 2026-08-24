@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -102,6 +103,46 @@ func TestMessageRepositoryConversationTurnsAndWindows(t *testing.T) {
 	assertWindow(MessageWindowAfter, turnIDs[1], turnIDs[2:4], true, true)
 	assertWindow(MessageWindowAround, turnIDs[0], turnIDs[:4], false, true)
 	assertWindow(MessageWindowAround, turnIDs[5], turnIDs[2:], true, false)
+}
+
+func TestSessionMessageCursorTracksDurableMessages(t *testing.T) {
+	db := setupTestDB(t)
+	t.Cleanup(func() { _ = db.Close() })
+	userID := createRepositoryTestUser(t, db, "message_cursor")
+	session := &model.Session{UserID: userID, Title: "cursor", ModelID: "m", Provider: "p", MessageFormat: "v1", Metadata: []byte(`{}`)}
+	if err := NewSessionRepository(db).Create(session); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec("DELETE FROM messages WHERE session_id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM sessions WHERE id = $1", session.ID)
+		_, _ = db.Exec("DELETE FROM users WHERE id = $1", userID)
+	})
+
+	repo := NewMessageRepository(db)
+	first := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"user","content":"first"}`)}
+	if err := repo.CreateForActiveSession(context.Background(), session.ID, userID, first); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := repo.GetSessionMessageCursor(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.LatestMessageID != first.ID || cursor.UpdatedAt.IsZero() {
+		t.Fatalf("cursor after first message = %+v", cursor)
+	}
+
+	second := &model.Message{SessionID: session.ID, SchemaVersion: "v1", MessageData: []byte(`{"role":"assistant","content":"second"}`)}
+	if err := repo.CreateForActiveSession(context.Background(), session.ID, userID, second); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := repo.GetSessionMessageCursor(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LatestMessageID != second.ID || updated.UpdatedAt.Before(cursor.UpdatedAt) {
+		t.Fatalf("cursor after second message = %+v, previous = %+v", updated, cursor)
+	}
 }
 
 func TestMessageRepositoryWindowUsesActiveCompactionCheckpoint(t *testing.T) {

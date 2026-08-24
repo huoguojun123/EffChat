@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog"
 import { ChevronDown, ChevronRight, Loader2, Undo2 } from "lucide-react"
 import { prefersReducedMotion } from "@/lib/motionPreference"
-import { buildConversationTurns, conversationTurnMarkerRange, conversationTurnRailMode, type ConversationTurn } from "@/lib/conversationTurns"
+import { buildConversationTurns, conversationTurnMarkerRange, conversationTurnPreviewTop, conversationTurnRailMode, type ConversationTurn } from "@/lib/conversationTurns"
 import { useSearchParams } from "react-router"
 
 const INITIAL_BOTTOM_LOCK_MS = 1400
@@ -101,13 +101,12 @@ export function MessageList() {
   const editableUserMessageId = !hasNewerMessages && editLifecycleReady && !streamingHasOutput
     ? editableTailUserMessageId(visibleMessages)
     : null
-  const durableStreamMessageExists = Boolean(
+  const streamMessageExists = Boolean(
     isStreaming
       && streamingRequestId
       && visibleMessages.some((message) => (
-        !message.is_local
-        && message.role === "assistant"
-        && messageRunId(message) === streamingRequestId
+        message.role === "assistant"
+        && (message.local_request_id === streamingRequestId || messageRunId(message) === streamingRequestId)
       )),
   )
   const compacting = Boolean(compactionOwner)
@@ -285,7 +284,7 @@ export function MessageList() {
       return
     }
     previousMessageCountRef.current = messages.length
-    if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(false)
+    if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(true)
   }, [messages.length, scrollToBottom])
 
   // 流式增量时跟随底部；原生 overflow-anchor 负责非底部时的视口稳定。
@@ -458,12 +457,12 @@ export function MessageList() {
       <div
         ref={scrollRef}
         data-chat-scroll-container="true"
-        className="absolute inset-0 overflow-y-auto overscroll-contain scrollbar-thin"
+        className="absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-thin"
       >
         <div
           ref={listRef}
-          className={`mx-auto w-full max-w-[var(--chat-content-max-width)] px-4 pt-16 transition-opacity duration-[160ms] ease-out motion-reduce:transition-none ${windowSwitching ? "opacity-0" : "opacity-100"}`}
-          style={{ paddingBottom: "var(--chat-composer-inset, 1rem)" }}
+          className={`mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)] px-4 pt-16 transition-opacity duration-[160ms] ease-out motion-reduce:transition-none ${windowSwitching ? "opacity-0" : "opacity-100"}`}
+          style={{ paddingBottom: "calc(var(--chat-composer-inset, 1rem) + var(--chat-scroll-gap, 0.875rem))" }}
           data-testid="message-list"
         >
           {visibleMessages.map((msg) => (
@@ -473,6 +472,7 @@ export function MessageList() {
                 if (element) turnAnchorsRef.current.set(msg.id, element)
                 else turnAnchorsRef.current.delete(msg.id)
               } : undefined}
+              className="min-w-0 max-w-full"
               data-testid="message-item"
               data-message-id={msg.id}
               data-role={msg.message_data.role}
@@ -497,7 +497,7 @@ export function MessageList() {
               )}
             </div>
           ))}
-          {isStreaming && !durableStreamMessageExists && (
+          {isStreaming && !streamMessageExists && (
             <div className="animate-msg-in">
               <StreamingMessage />
             </div>
@@ -547,6 +547,7 @@ function ConversationTurnRail({
   const rowHeight = 10
   const viewportHeight = 520
   const { start, end } = conversationTurnMarkerRange(turns.length, scrollTop, viewportHeight, rowHeight)
+  const previewTurn = interactionIndex == null ? null : turns[interactionIndex]
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -594,7 +595,10 @@ function ConversationTurnRail({
           window.clearTimeout(followResumeTimerRef.current)
           followResumeTimerRef.current = window.setTimeout(() => setFollowRevision((value) => value + 1), 1200)
         }}
-        onScroll={(event) => { if (virtual) setScrollTop(event.currentTarget.scrollTop) }}
+        onScroll={(event) => {
+          setScrollTop(event.currentTarget.scrollTop)
+          setInteractionIndex(null)
+        }}
         className={`pointer-events-auto outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${scrollable ? "overflow-y-auto overscroll-contain [scrollbar-width:none]" : "flex flex-col justify-center"}`}
         style={{ height: scrollable ? "min(60vh, 520px)" : "auto" }}
       >
@@ -624,18 +628,31 @@ function ConversationTurnRail({
                     : "w-2.5 bg-muted-foreground/28"
                 }`}
               />
-              <span className="conversation-turn-preview pointer-events-none absolute left-7 top-1/2 w-72 rounded-lg border border-border/55 bg-popover/88 px-3 py-2.5 text-left text-popover-foreground shadow-[0_12px_36px_rgba(0,0,0,0.14)] backdrop-blur-xl xl:w-80">
-                <span className="block truncate text-sm font-medium">{turn.title}</span>
-                {turn.assistantPreview ? (
-                  <span className="mt-1.5 line-clamp-3 block text-xs leading-5 text-muted-foreground">{turn.assistantPreview}</span>
-                ) : null}
-              </span>
+              {!scrollable ? (
+                <span className="conversation-turn-preview pointer-events-none absolute left-7 top-1/2 w-72 rounded-lg border border-border/55 bg-popover/88 px-3 py-2.5 text-left text-popover-foreground shadow-[0_12px_36px_rgba(0,0,0,0.14)] backdrop-blur-xl xl:w-80">
+                  <span className="block truncate text-sm font-medium">{turn.title}</span>
+                  {turn.assistantPreview ? (
+                    <span className="mt-1.5 line-clamp-3 block text-xs leading-5 text-muted-foreground">{turn.assistantPreview}</span>
+                  ) : null}
+                </span>
+              ) : null}
             </button>
           )
         })}
         </div>
       </div>
       {scrollable ? <><div className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-background to-transparent" /><div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" /></> : null}
+      {scrollable && previewTurn ? (
+        <span
+          className="conversation-turn-preview conversation-turn-preview-visible pointer-events-none absolute left-7 z-30 w-72 rounded-lg border border-border/55 bg-popover/88 px-3 py-2.5 text-left text-popover-foreground shadow-[0_12px_36px_rgba(0,0,0,0.14)] backdrop-blur-xl xl:w-80"
+          style={{ top: conversationTurnPreviewTop(interactionIndex ?? 0, scrollTop, rowHeight) }}
+        >
+          <span className="block truncate text-sm font-medium">{previewTurn.title}</span>
+          {previewTurn.assistantPreview ? (
+            <span className="mt-1.5 line-clamp-3 block text-xs leading-5 text-muted-foreground">{previewTurn.assistantPreview}</span>
+          ) : null}
+        </span>
+      ) : null}
       </div>
     </nav>
   )

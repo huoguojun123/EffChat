@@ -462,7 +462,12 @@ html.app-route-leaving #root {
   font-size: var(--md-font-size);
   line-height: var(--md-line-height);
   overflow-wrap: break-word;
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
+  & p, & li, & blockquote, & a {
+    overflow-wrap: anywhere;
+  }
   & p {
     margin-block: 0.15em;
     line-height: var(--md-line-height);
@@ -1117,6 +1122,13 @@ html.app-route-leaving #root {
 .message-user-surface {
   background: var(--popover);
   border-color: var(--border);
+}
+
+.message-plain-text {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .message-user-fade {

@@ -458,7 +458,7 @@ export function MessageList() {
       <div
         ref={scrollRef}
         data-chat-scroll-container="true"
-        className="absolute inset-0 overflow-y-auto overscroll-contain scrollbar-thin"
+        className="absolute inset-0 overflow-x-hidden overflow-y-auto overscroll-contain scrollbar-thin"
       >
         <div
           ref={listRef}

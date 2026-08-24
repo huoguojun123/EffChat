@@ -7,6 +7,24 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.7] - 2026-08-24
+
+### Fixed
+
+- Stabilized retry presentation so an assistant answer is replaced only after the retry is accepted by the HTTP/SSE or durable-run admission path.
+- Kept local assistant output attached to its user turn during retry, synchronization, and finalization instead of appending late responses to the end of the conversation.
+- Shared same-generation message-window reconciliation between cursor polling and active-run recovery, preventing one tab from invalidating another tab's live recovery.
+- Replaced the ambiguous automatic retry notice with a live attempt counter and deadline-based countdown, and added a small, stable scroll gap above the composer for streamed answers.
+
+### Changed
+
+- Published the bilingual README with English as the default entry point and a separate Simplified Chinese guide. Screenshots remain the current sanitized assets and can be refined in a later documentation pass.
+
+### Verification
+
+- Frontend lint, 364 Vitest tests, production/PWA build, focused retry and cross-tab Playwright coverage, and non-destructive local unified-image validation passed.
+- No database, API, migration, deployment topology, Korea, or persisted-user-data changes.
+
 ## [0.4.1-beta.6] - 2026-08-23
 
 ### Fixed

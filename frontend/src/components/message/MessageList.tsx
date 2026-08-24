@@ -101,13 +101,12 @@ export function MessageList() {
   const editableUserMessageId = !hasNewerMessages && editLifecycleReady && !streamingHasOutput
     ? editableTailUserMessageId(visibleMessages)
     : null
-  const durableStreamMessageExists = Boolean(
+  const streamMessageExists = Boolean(
     isStreaming
       && streamingRequestId
       && visibleMessages.some((message) => (
-        !message.is_local
-        && message.role === "assistant"
-        && messageRunId(message) === streamingRequestId
+        message.role === "assistant"
+        && (message.local_request_id === streamingRequestId || messageRunId(message) === streamingRequestId)
       )),
   )
   const compacting = Boolean(compactionOwner)
@@ -285,7 +284,7 @@ export function MessageList() {
       return
     }
     previousMessageCountRef.current = messages.length
-    if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(false)
+    if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(true)
   }, [messages.length, scrollToBottom])
 
   // 流式增量时跟随底部；原生 overflow-anchor 负责非底部时的视口稳定。
@@ -463,7 +462,7 @@ export function MessageList() {
         <div
           ref={listRef}
           className={`mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)] px-4 pt-16 transition-opacity duration-[160ms] ease-out motion-reduce:transition-none ${windowSwitching ? "opacity-0" : "opacity-100"}`}
-          style={{ paddingBottom: "var(--chat-composer-inset, 1rem)" }}
+          style={{ paddingBottom: "calc(var(--chat-composer-inset, 1rem) + var(--chat-scroll-gap, 0.875rem))" }}
           data-testid="message-list"
         >
           {visibleMessages.map((msg) => (
@@ -498,7 +497,7 @@ export function MessageList() {
               )}
             </div>
           ))}
-          {isStreaming && !durableStreamMessageExists && (
+          {isStreaming && !streamMessageExists && (
             <div className="animate-msg-in">
               <StreamingMessage />
             </div>

@@ -839,6 +839,52 @@ describe("syncMessages", () => {
     expect(useChatStore.getState().messages[2].message_data.content).toBe("latest user updated")
   })
 
+  it("把未被服务端接管的失败 assistant 放回所属 user turn", () => {
+    useChatStore.setState({
+      messages: [
+        user(1, "first question", {
+          is_local: false,
+          local_state: "persisted",
+          message_data: { role: "user", content: "first question" },
+        }),
+        assistant(-1, "", {
+          is_local: true,
+          local_state: "failed_local",
+          message_data: { role: "assistant", content: "", metadata: { error: true, error_detail: "temporary failure" } },
+        }),
+        user(2, "second question", {
+          is_local: false,
+          local_state: "persisted",
+          message_data: { role: "user", content: "second question", metadata: { run_id: "run-second" } },
+        }),
+        assistant(3, "second answer", {
+          is_local: false,
+          local_state: "persisted",
+          message_data: { role: "assistant", content: "second answer", metadata: { run_id: "run-second" } },
+        }),
+      ],
+    })
+
+    useChatStore.getState().syncMessages([
+      user(1, "first question", {
+        message_data: { role: "user", content: "first question" },
+      }),
+      user(2, "second question", {
+        message_data: { role: "user", content: "second question", metadata: { run_id: "run-second" } },
+      }),
+      assistant(3, "second answer", {
+        message_data: { role: "assistant", content: "second answer", metadata: { run_id: "run-second" } },
+      }),
+    ])
+
+    expect(useChatStore.getState().messages.map((message) => message.message_data.content)).toEqual([
+      "first question",
+      "",
+      "second question",
+      "second answer",
+    ])
+  })
+
   it("对账最新窗口时替换已被重试软删除的 durable 后缀", () => {
     useChatStore.setState({
       messages: [
@@ -1538,5 +1584,38 @@ describe("editable tail replacement", () => {
       user_preview: "edited",
     })])
     expect(useChatStore.getState().totalConversationTurns).toBe(1)
+  })
+})
+
+describe("retry presentation", () => {
+  it("removes a disposable local error card while preserving partial output", () => {
+    const userMessage = user(10, "question")
+    const errorMessage = assistant(11, "", {
+      is_local: true,
+      local_state: "failed_local",
+      local_request_id: "run-error",
+      message_data: { role: "assistant", content: "", metadata: { error: true } },
+    })
+    const partialMessage = assistant(12, "partial", {
+      is_local: true,
+      local_state: "failed_local",
+      local_request_id: "run-partial",
+      message_data: { role: "assistant", content: "partial", metadata: { unsaved: true } },
+    })
+    useChatStore.setState({ messages: [userMessage, errorMessage, partialMessage] })
+
+    useChatStore.getState().prepareRetryPresentation(userMessage.id)
+
+    expect(useChatStore.getState().messages).toEqual([userMessage, partialMessage])
+  })
+
+  it("trims an assistant retry target back to its user turn", () => {
+    const userMessage = user(20, "question")
+    const oldAnswer = assistant(21, "old answer")
+    useChatStore.setState({ messages: [userMessage, oldAnswer] })
+
+    useChatStore.getState().prepareRetryPresentation(oldAnswer.id)
+
+    expect(useChatStore.getState().messages).toEqual([userMessage])
   })
 })

@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
       }),
       loadMessages: vi.fn(async () => true),
       beginEditRetry: vi.fn(() => true),
+      prepareRetryPresentation: vi.fn(),
       confirmUserMessageForRequest: vi.fn(),
       updateMessagesByRequest: vi.fn(),
       updateStreaming: vi.fn((partial) => {
@@ -971,6 +972,28 @@ describe("useSSE", () => {
 
     expect(mocks.store.messages).toEqual(selectedMessages)
     expect((mocks.store.streaming as { status: string }).status).toBe("idle")
+    expect(mocks.store.prepareRetryPresentation).toHaveBeenCalledWith(10)
+  })
+
+  it("keeps the previous answer when retry admission is rejected", async () => {
+    const selectedMessages = [
+      { id: 9, session_id: 1, role: "user", message_data: { role: "user", content: "retry user" } },
+      { id: 10, session_id: 1, role: "assistant", message_data: { role: "assistant", content: "previous answer" } },
+    ]
+    mocks.listMessageWindow.mockResolvedValue({
+      messages: selectedMessages,
+      first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false,
+    })
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response(
+      JSON.stringify({ error: "当前回复仍在结束处理中，请稍后重试", code: "run_in_progress", retryable: true }),
+      { status: 409, headers: { "Content-Type": "application/json" } }
+    ))
+
+    const { retryMessage } = useSSE()
+    await expect(retryMessage(1, 10)).rejects.toThrow("当前回复仍在结束处理中")
+
+    expect(mocks.store.prepareRetryPresentation).not.toHaveBeenCalled()
+    expect(mocks.store.messages).toEqual(selectedMessages)
   })
 
   it("does not retry after protected compaction cannot shrink the context", async () => {
@@ -1294,6 +1317,22 @@ describe("useSSE", () => {
     await pending
 
     expect(mocks.store.syncMessages).not.toHaveBeenCalled()
+  })
+
+  it("shares one latest-window sync between cursor polling and active-run recovery", async () => {
+    const reconciliation = deferred<{ messages: never[]; first_turn_id: number; last_turn_id: number; has_older: boolean; has_newer: boolean }>()
+    mocks.listMessageWindow.mockReturnValue(reconciliation.promise)
+
+    const { syncSessionMessages } = useSSE()
+    const cursorSync = syncSessionMessages(1)
+    const recoverySync = syncSessionMessages(1)
+    expect(mocks.listMessageWindow).toHaveBeenCalledTimes(1)
+
+    reconciliation.resolve({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
+
+    await expect(cursorSync).resolves.toBe(true)
+    await expect(recoverySync).resolves.toBe(true)
+    expect(mocks.store.syncMessages).toHaveBeenCalledTimes(1)
   })
 
   it("rolls back a failed provider attempt before committing the retry", async () => {

@@ -4,7 +4,7 @@ import * as sessionsApi from "@/api/sessions"
 import type { SessionFolderScope } from "@/api/sessions"
 import { ApiError } from "@/api/client"
 import * as messagesApi from "@/api/messages"
-import { cloneToolCall, messageRunId, normalizeMessages } from "@/lib/chatMessages"
+import { cloneToolCall, isErrorAssistant, messageRunId, normalizeMessages } from "@/lib/chatMessages"
 import { createLocalMessageId } from "@/lib/localMessageId"
 
 interface StreamingState {
@@ -87,6 +87,7 @@ interface ChatState {
   confirmUserMessageForRequest: (requestId: string, messageId: number) => void
   removeLocalMessagesByRequest: (requestId: string) => void
   trimMessagesForRetry: (assistantMessageId: number) => void
+  prepareRetryPresentation: (messageId: number) => void
   updateStreaming: (partial: Partial<StreamingState>) => void
   resetStreaming: () => void
   appendStreamContent: (delta: string) => void
@@ -822,6 +823,40 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       return s
     }),
 
+  prepareRetryPresentation: (messageId: number) =>
+    set((s) => {
+      const targetIndex = s.messages.findIndex((message) => message.id === messageId)
+      if (targetIndex < 0) return s
+      const target = s.messages[targetIndex]
+      if (target.role === "assistant" && target.message_data.role === "assistant") {
+        for (let index = targetIndex - 1; index >= 0; index -= 1) {
+          const message = s.messages[index]
+          if (message.role === "user" && message.message_data.role === "user") {
+            // A retry replaces the visible tail of the selected answer. The
+            // server remains authoritative; a failed admission/stream will
+            // restore the durable answer during the existing sync.
+            return { messages: s.messages.slice(0, index + 1) }
+          }
+        }
+        return s
+      }
+      if (target.role !== "user" || target.message_data.role !== "user") return s
+
+      // A transport failure can leave an error-only local assistant after the
+      // user turn. Remove only that disposable presentation card; partial or
+      // unsaved output remains visible for copy/recovery.
+      return {
+        messages: s.messages.filter((message, index) => !(
+          index > targetIndex
+          && message.is_local
+          && message.role === "assistant"
+          && isErrorAssistant(message)
+          && message.message_data.metadata?.incomplete !== true
+          && message.message_data.metadata?.unsaved !== true
+        )),
+      }
+    }),
+
   updateStreaming: (partial: Partial<StreamingState>) =>
     set((s) => ({ streaming: { ...s.streaming, ...partial } })),
 
@@ -1061,7 +1096,40 @@ function mergeSyncedMessages(current: Message[], incoming: Message[]): Message[]
   }
   for (const message of synced) durableByID.set(message.id, message)
   const durable = [...durableByID.values()].sort(compareMessageLogicalOrder)
-  return [...durable, ...localOnly.map(normalizeMessage)]
+  // Keep an unclaimed local assistant beside the user turn that owns it.
+  // Appending every local message after the durable window makes a failed
+  // earlier turn appear below a later user message after reconciliation.
+  const merged = [...durable]
+  for (const message of localOnly) {
+    const local = normalizeMessage(message)
+    const runId = localMessageRunId(local)
+    let anchor = -1
+    if (runId) {
+      for (let index = merged.length - 1; index >= 0; index -= 1) {
+        if (localMessageRunId(merged[index]) === runId) {
+          anchor = index
+          break
+        }
+      }
+    }
+    if (anchor < 0) {
+      // Some locally-created error cards have no durable run ID. Preserve
+      // their relative position by anchoring after the nearest earlier
+      // message that survived reconciliation.
+      const currentIndex = current.findIndex((candidate) => candidate.id === local.id)
+      for (let index = currentIndex - 1; index >= 0 && anchor < 0; index -= 1) {
+        const previousID = current[index].id
+        anchor = merged.findIndex((candidate) => candidate.id === previousID)
+      }
+    }
+    if (anchor < 0) merged.push(local)
+    else merged.splice(anchor + 1, 0, local)
+  }
+  return merged
+}
+
+function localMessageRunId(message: Message) {
+  return message.local_request_id?.trim() || messageRunId(message)
 }
 
 function compareMessageLogicalOrder(left: Message, right: Message) {

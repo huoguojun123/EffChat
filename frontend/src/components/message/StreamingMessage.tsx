@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, useEffect, useState } from "react"
 import type { AssistantSegment } from "@/types"
 import { useChatStore } from "@/stores/chat"
 import { Loader2 } from "lucide-react"
@@ -8,9 +8,36 @@ import { ToolCallTree } from "./ToolCallTree"
 import { ReasoningPanel } from "./ReasoningPanel"
 import { useTypewriter } from "@/hooks/useTypewriter"
 import { groupAssistantSegments } from "./assistantSegments"
+import { formatRetryDelay } from "@/lib/streamingRetry"
 
 export function StreamingMessage() {
   const { content, thinking, toolCalls, segments, status, replayGap, retryTrace } = useChatStore((s) => s.streaming)
+  const [retryRemainingMs, setRetryRemainingMs] = useState(0)
+  const retryDelayMs = retryTrace?.delayMs ?? 0
+  const hasRetryTrace = retryTrace !== null && retryTrace !== undefined
+  const retryTraceKey = retryTrace
+    ? `${retryTrace.attempt}:${retryTrace.maxAttempts}:${retryTrace.delayMs}:${retryTrace.category}`
+    : null
+
+  useEffect(() => {
+    if (!hasRetryTrace) {
+      return
+    }
+
+    const deadline = Date.now() + Math.max(0, retryDelayMs)
+    const updateRemaining = () => {
+      const remaining = Math.max(0, deadline - Date.now())
+      setRetryRemainingMs(remaining)
+      return remaining > 0
+    }
+
+    updateRemaining()
+    const timer = window.setInterval(() => {
+      if (!updateRemaining()) window.clearInterval(timer)
+    }, 100)
+    return () => window.clearInterval(timer)
+  }, [hasRetryTrace, retryDelayMs, retryTraceKey])
+
   // 文本仍在到达时 active=true（恒速吐字）；syncing/收尾时直接对齐，避免拖尾。
   const revealing = status === "sending" || status === "streaming"
   const rows = groupAssistantSegments(segments)
@@ -30,7 +57,7 @@ export function StreamingMessage() {
             </div>
             {rows.length > 0 ? (
               rows.map((row, index) => (
-                <div key={index} className="space-y-3">
+                <div key={index} className="space-y-3 animate-msg-in">
                   {row.reasoning ? (
                     <StreamingReasoningSummary
                       reasoningKey={`stream:${index}`}
@@ -52,9 +79,12 @@ export function StreamingMessage() {
             ) : null}
 
             {retryTrace ? (
-              <div className="flex h-7 items-center gap-2 text-sm text-muted-foreground">
+              <div className="flex h-7 items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
                 <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                <span>第 {retryTrace.attempt} 次请求暂时失败，{formatRetryDelay(retryTrace.delayMs)}后自动重试</span>
+                <span>
+                  第 {retryTrace.attempt}/{retryTrace.maxAttempts} 次请求暂时失败，
+                  {retryRemainingMs > 0 ? `${formatRetryDelay(retryRemainingMs)}后自动重试` : "正在重新请求"}
+                </span>
               </div>
             ) : !content && !thinking && toolCalls.length === 0 ? (
               <div className="flex h-7 items-center gap-2 text-sm text-muted-foreground">
@@ -66,11 +96,6 @@ export function StreamingMessage() {
       </div>
     </div>
   )
-}
-
-function formatRetryDelay(delayMs: number) {
-  const seconds = Math.max(0, delayMs) / 1000
-  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)} 秒`
 }
 
 // StreamingText 用打字机恒速揭示文本，并在底部加一层渐隐遮罩，让新行从虚化处浮现，

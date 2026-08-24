@@ -1051,6 +1051,13 @@ html.app-route-leaving #root {
   transition-delay: 0s;
 }
 
+.conversation-turn-preview-visible {
+  visibility: visible;
+  opacity: 1;
+  transform: translate3d(0, -50%, 0) scale(1);
+  transition-delay: 0s;
+}
+
 .streaming-reveal {
   animation: streaming-reveal-in var(--motion-duration-surface) var(--motion-ease-standard);
 }

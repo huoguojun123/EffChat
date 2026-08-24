@@ -65,6 +65,13 @@ export function conversationTurnRailMode(count: number) {
   return { scrollable: count > 60, virtual: count > 500 }
 }
 
+// Scrollable rails render the preview outside the overflow viewport. Keeping
+// this coordinate calculation here makes virtual and non-virtual rails share
+// the same positioning contract.
+export function conversationTurnPreviewTop(index: number, scrollTop: number, rowHeight = 10) {
+  return index * rowHeight - scrollTop + rowHeight / 2
+}
+
 function previewText(content: string) {
   return content
     .replace(/```[\s\S]*?```/g, " [代码] ")

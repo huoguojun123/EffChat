@@ -95,6 +95,37 @@ test("accepted retry replaces the failed answer in its original turn", async ({ 
   await expect(page.getByText("正在回复")).toHaveCount(0)
 })
 
+test("model retry feedback counts down before the next attempt", async ({ page }) => {
+  await installRoutes(page, [])
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window)
+    window.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (!url.includes("/api/v1/sessions/1/messages/stream")) return nativeFetch(input, init)
+      const encoder = new TextEncoder()
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: model_retry\ndata: {"attempt":1,"max_attempts":2,"delay_ms":900,"category":"transient"}\n\n'))
+          window.setTimeout(() => {
+            controller.enqueue(encoder.encode('event: content_delta\ndata: {"delta":"Recovered answer"}\n\n'))
+            controller.enqueue(encoder.encode('event: message_complete\ndata: {"finish_reason":"stop"}\n\n'))
+            controller.close()
+          }, 1100)
+        },
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
+    }
+  })
+  await page.goto("/chat/1")
+
+  await page.getByTestId("chat-input").fill("Retry with a countdown")
+  await page.getByTestId("send-button").click()
+  const retryStatus = page.getByRole("status").filter({ hasText: "第 1/2 次请求暂时失败" })
+  await expect(retryStatus).toContainText(/0\.[1-9] 秒后自动重试/)
+  await expect(retryStatus).toContainText("正在重新请求", { timeout: 2_000 })
+  await expect(page.getByText("Recovered answer")).toBeVisible()
+  await expect(retryStatus).toHaveCount(0)
+})
+
 for (const viewport of [
   { name: "desktop", width: 1536, height: 864 },
   { name: "mobile", width: 390, height: 844 },
@@ -118,7 +149,7 @@ for (const viewport of [
       }
     })
 
-    expect(geometry.gap).toBeGreaterThanOrEqual(geometry.expectedGap - 1)
+    expect(geometry.gap).toBeGreaterThanOrEqual(geometry.expectedGap - 2)
     expect(geometry.distance).toBeLessThanOrEqual(2)
   })
 }

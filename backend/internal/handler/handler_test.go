@@ -130,6 +130,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 		auth.GET("/sessions/:id/export.md", ExportSessionMarkdownHandler(messageService))
 		auth.PUT("/sessions/:id/memory", SaveSessionMemoryHandler(sessionService, memoryRepo, nil, configRepo))
 		auth.GET("/sessions/:id/messages", ListMessagesHandler(messageService))
+		auth.GET("/sessions/:id/message-cursor", GetSessionMessageCursorHandler(messageService))
 		auth.POST("/sessions/:id/answer-attempts/:attempt_id/select", SelectAnswerAttemptHandler(messageService, sessionService, authService, nil))
 		auth.GET("/session-folders", ListSessionFoldersHandler(sessionFolderService))
 		auth.POST("/session-folders", CreateSessionFolderHandler(sessionFolderService))
@@ -1186,5 +1187,20 @@ func TestListMessages_EmptySession(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &msgResp)
 	if msgResp.Total != 0 {
 		t.Errorf("empty session: want 0 messages, got %d", msgResp.Total)
+	}
+
+	w = env.doRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d/message-cursor", session.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("message cursor: want 200, got %d", w.Code)
+	}
+	var cursor struct {
+		LatestMessageID  int64  `json:"latest_message_id"`
+		SessionUpdatedAt string `json:"session_updated_at"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &cursor); err != nil {
+		t.Fatalf("decode message cursor: %v", err)
+	}
+	if cursor.LatestMessageID != 0 || cursor.SessionUpdatedAt == "" {
+		t.Fatalf("empty message cursor = %+v", cursor)
 	}
 }

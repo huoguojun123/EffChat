@@ -181,6 +181,7 @@ func RegisterRoutes(r *gin.Engine, db *sql.DB, cfg *config.Config) (*service.Run
 				sessions.GET("/:id/messages", ListMessagesHandler(messageService))
 				sessions.GET("/:id/turns", ListConversationTurnsHandler(messageService))
 				sessions.GET("/:id/message-window", ListMessageWindowHandler(messageService))
+				sessions.GET("/:id/message-cursor", GetSessionMessageCursorHandler(messageService))
 				sessions.GET("/:id/runs/active", ActiveRunHandler(runHub, sessionService))
 				sessions.GET("/:id/runs/:run_id", RunStatusHandler(quotaService, sessionService))
 				sessions.GET("/:id/runs/:run_id/resume", ResumeRunHandler(runHub, sessionService, cfg.Run.HeartbeatInterval))

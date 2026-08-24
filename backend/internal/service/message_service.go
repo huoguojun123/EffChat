@@ -106,6 +106,11 @@ type MessageWindowResponse struct {
 	HasNewer    bool               `json:"has_newer"`
 }
 
+type SessionMessageCursorResponse struct {
+	LatestMessageID  int64  `json:"latest_message_id"`
+	SessionUpdatedAt string `json:"session_updated_at"`
+}
+
 type AnswerAttemptNavigation struct {
 	AttemptID         int64  `json:"attempt_id"`
 	AttemptNumber     int    `json:"attempt_number"`
@@ -494,6 +499,20 @@ func (s *MessageService) ListMessageWindow(sessionID, userID int64, mode reposit
 		LastTurnID:  window.LastTurnID,
 		HasOlder:    window.HasOlder,
 		HasNewer:    window.HasNewer,
+	}, nil
+}
+
+func (s *MessageService) GetSessionMessageCursor(ctx context.Context, sessionID, userID int64) (*SessionMessageCursorResponse, error) {
+	if _, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID); err != nil {
+		return nil, sessionLookupError(err)
+	}
+	cursor, err := s.messageRepo.GetSessionMessageCursor(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return &SessionMessageCursorResponse{
+		LatestMessageID:  cursor.LatestMessageID,
+		SessionUpdatedAt: cursor.UpdatedAt.Format(time.RFC3339Nano),
 	}, nil
 }
 

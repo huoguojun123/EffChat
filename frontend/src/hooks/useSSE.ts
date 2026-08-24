@@ -1085,7 +1085,7 @@ export function useSSE() {
     if (ownsCurrentView && useChatStore.getState().streaming.requestId === stream.requestId) resetStreaming()
   }, [resetStreaming])
 
-  return { sendMessage, retryMessage, editRetryMessage, resumeActiveRun, startCompaction, abort, disconnectActiveStream }
+  return { sendMessage, retryMessage, editRetryMessage, resumeActiveRun, syncSessionMessages, startCompaction, abort, disconnectActiveStream }
 }
 
 function snapshotToolCalls(run: ActiveRunSnapshot): ToolCall[] {

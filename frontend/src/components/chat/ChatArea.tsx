@@ -18,6 +18,7 @@ import { pickEmptyQuote } from "@/lib/emptyQuotes"
 import { prefersReducedMotion } from "@/lib/motionPreference"
 import { Files, PanelLeft, PanelLeftClose, Settings2, UploadCloud } from "lucide-react"
 import { chatSurfaceControlClass } from "./ChatInput.constants"
+import { getSessionMessageCursor } from "@/api/messages"
 
 export function ChatArea({
   sidebarOpen,
@@ -42,13 +43,16 @@ export function ChatArea({
   const sessionCreateError = useChatStore((s) => s.sessionCreateError)
   const loadSessionCreateReadiness = useChatStore((s) => s.loadSessionCreateReadiness)
   const streamingStatus = useChatStore((s) => s.streaming.status)
+  const isCompacting = useChatStore((s) => activeSessionId ? Boolean(s.compactionOwners[activeSessionId]) : false)
   const user = useAuthStore((s) => s.user)
   const location = useLocation()
-  const { resumeActiveRun, disconnectActiveStream } = useSSE()
+  const { resumeActiveRun, syncSessionMessages, disconnectActiveStream } = useSSE()
 
   const chatInputRef = useRef<ChatInputHandle>(null)
   const chatAreaRef = useRef<HTMLDivElement>(null)
   const composerDockRef = useRef<HTMLDivElement>(null)
+  const messageCursorRef = useRef<string | null>(null)
+  const cursorRequestRef = useRef<AbortController | null>(null)
   const [dragging, setDragging] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   // dragenter/leave 会在子元素间反复触发，用计数器判定真正离开整个区域。
@@ -139,6 +143,69 @@ export function ChatArea({
       document.removeEventListener("visibilitychange", handleVisibilityChange)
     }
   }, [activeSessionId, isLoadingMessages, isRouteSessionPending, resumeActiveRun])
+
+  // A visible chat page has no SSE stream when another device writes the same
+  // session. Poll only a small durable cursor, then reuse the existing window
+  // reconciliation so local streaming and older-page anchors remain intact.
+  useEffect(() => {
+    messageCursorRef.current = null
+    cursorRequestRef.current?.abort()
+    cursorRequestRef.current = null
+  }, [activeSessionId])
+
+  useEffect(() => {
+    if (!activeSessionId || isRouteSessionPending || isLoadingMessages || isCompacting || streamingStatus !== "idle") return
+    const sessionId = activeSessionId
+    let disposed = false
+
+    async function checkForExternalMessages() {
+      if (disposed || document.visibilityState !== "visible" || cursorRequestRef.current) return
+      const controller = new AbortController()
+      cursorRequestRef.current = controller
+      try {
+        const cursor = await getSessionMessageCursor(sessionId, controller.signal)
+        if (disposed || controller.signal.aborted || useChatStore.getState().activeSessionId !== sessionId) return
+        const key = `${cursor.latest_message_id}:${cursor.session_updated_at}`
+        const previous = messageCursorRef.current
+        if (!previous) {
+          const localLatestMessageID = useChatStore.getState().messages.reduce((latest, message) => (
+            message.is_local ? latest : Math.max(latest, message.id)
+          ), 0)
+          const sessionActivityStale = activeSession?.updated_at && activeSession.updated_at !== cursor.session_updated_at
+          if (cursor.latest_message_id > localLatestMessageID || sessionActivityStale) {
+            if (await syncSessionMessages(sessionId)) messageCursorRef.current = key
+          } else {
+            messageCursorRef.current = key
+          }
+          return
+        }
+        if (previous === key || useChatStore.getState().streaming.status !== "idle") return
+        if (await syncSessionMessages(sessionId)) messageCursorRef.current = key
+      } catch (error) {
+        if (!controller.signal.aborted) console.debug("session message cursor check failed", error)
+      } finally {
+        if (cursorRequestRef.current === controller) cursorRequestRef.current = null
+      }
+    }
+
+    const checkNow = () => {
+      if (document.visibilityState === "visible") void checkForExternalMessages()
+    }
+    void checkForExternalMessages()
+    const interval = window.setInterval(checkNow, 2500)
+    window.addEventListener("online", checkNow)
+    window.addEventListener("pageshow", checkNow)
+    document.addEventListener("visibilitychange", checkNow)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+      window.removeEventListener("online", checkNow)
+      window.removeEventListener("pageshow", checkNow)
+      document.removeEventListener("visibilitychange", checkNow)
+      cursorRequestRef.current?.abort()
+      cursorRequestRef.current = null
+    }
+  }, [activeSession, activeSessionId, isCompacting, isLoadingMessages, isRouteSessionPending, syncSessionMessages, streamingStatus])
 
   useEffect(() => {
     return () => {

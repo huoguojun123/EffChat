@@ -33,6 +33,15 @@ export interface MessageWindowResponse {
   has_newer: boolean
 }
 
+export interface SessionMessageCursor {
+  latest_message_id: number
+  session_updated_at: string
+}
+
+export function getSessionMessageCursor(sessionId: number, signal?: AbortSignal) {
+  return api.get<SessionMessageCursor>(`/sessions/${sessionId}/message-cursor`, { timeoutMs: 5000, signal })
+}
+
 export function listConversationTurns(sessionId: number, limit = 500, beforeTurnId = 0) {
   const params = new URLSearchParams({ limit: String(limit) })
   if (beforeTurnId > 0) params.set("before_turn_id", String(beforeTurnId))

@@ -83,7 +83,7 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(path: string, options?: { timeoutMs?: number }) => request<T>(path, options),
+  get: <T>(path: string, options?: { timeoutMs?: number; signal?: AbortSignal }) => request<T>(path, options),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) =>

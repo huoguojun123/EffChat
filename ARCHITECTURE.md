@@ -100,6 +100,7 @@ PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化�
 6. 后端即使前端 SSE 断开，也尽量继续跑完当前 run 并落库。
 7. terminal 决策形成后，RunHub 会冻结迟到输出和取消；瞬时数据库或连接故障使用独立的有界单次上下文重试同一原子提交，只有数据库返回 canonical terminal 后才向所有订阅者发布一次终态。进程在恢复期间退出时，启动 reconciliation 将遗留的 durable running run 转成可重试的 `server_restarted` 终态。
 8. 前端在重连、刷新或 run 完成后从 DB 同步真实消息，保留仍未落库的本地 pending 消息。
+9. 可见的 active session 额外通过轻量 `GET /sessions/:id/message-cursor` 检查 `sessions.updated_at` 与最新 durable message ID；cursor 变化后才复用 `message-window?latest=true` 合并消息，因此手机、桌面和多标签页可以在没有自身 SSE run 的情况下收敛。hidden 页面暂停检查，回到前台/联网立即检查；本地 streaming、compaction 和分页 generation 仍优先，不把 RunHub 变成跨设备消息总线。
 
 模型渠道的 provider、模型家族与 wire protocol 分开解析。`openai_compatible` 继续走 Chat Completions 兼容协议；`openai_responses` 通过官方 Eino Responses 组件接入 `/v1/responses`。主对话保留 `schema.AgenticMessage` 到 Eino `NewTypedChatModelAgent`，由稳定版 Eino 的 typed ReAct graph 下发本地 Tool schema、执行 Tool 并回送 function result；仅在 Agent 事件出口转换为 EffChat 既有 SSE、RunHub、usage 和 PostgreSQL 消息契约。标题、probe、压缩、记忆维护和网页提炼等不执行本地 Tool 的 utility 调用仍可使用经典消息 adapter，不复制 ReAct、SSE parser 或第二套运行时。Responses 请求固定 `store=false`，不使用 `previous_response_id`、Conversations API、hosted tools 或 MCP runtime。
 
@@ -131,7 +132,7 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 空请求创建会话只使用管理员配置的全局默认模型，不按目录排序猜测模型。`GET /sessions/readiness` 复用与真实创建相同的默认模型、用户权限和渠道可运行校验：配置缺失或安全的模型状态返回 `200 + ready=false` 与稳定 code，repository 故障仍是可追踪 5xx。前端在 readiness 未知或 blocked 时不发送空创建请求；侧栏与空会话入口共享一个 busy/error owner，重复点击不会产生并发创建。系统尚无 runnable public 模型时允许空默认作为 bootstrap 状态；一旦存在可运行的公共模型，Admin 清空 `default_model_id` 会在写事务前被拒绝并保留旧值。
 
-前端消息正文只维护一个当前窗口 generation。切换会话、账户 reset、latest/full reload、around 跳转和显式窗口替换都会先递增 generation、失效旧分页并释放 loading；older/newer 同一时刻只有一个方向拥有分页请求，响应还必须匹配 session、generation、方向 owner 和原 cursor 才能合并。RunHub/SSE terminal 对账捕获同一 generation，并与首次加载、刷新共用 latest message-window 可见投影，不能再用包含失效压缩摘要的 legacy paged messages 投影覆盖活动 UI；已加载的旧页继续由窗口边界保留。历史窗口不会被迟到 durable sync 改写；full reload 替换 durable 行，只保留尚待服务端对应记录接管的本地 optimistic 消息。滚动锚点同样绑定 generation，窗口替换后旧 observer 或 timeout 不能继续调整 scrollTop。
+前端消息正文只维护一个当前窗口 generation。切换会话、账户 reset、latest/full reload、around 跳转和显式窗口替换都会先递增 generation、失效旧分页并释放 loading；older/newer 同一时刻只有一个方向拥有分页请求，响应还必须匹配 session、generation、方向 owner 和原 cursor 才能合并。RunHub/SSE terminal 对账与可见客户端 cursor 对账捕获同一 generation，并与首次加载、刷新共用 latest message-window 可见投影，不能再用包含失效压缩摘要的 legacy paged messages 投影覆盖活动 UI；已加载的旧页继续由窗口边界保留。历史窗口不会被迟到 durable sync 改写；full reload 替换 durable 行，只保留尚待服务端对应记录接管的本地 optimistic 消息。滚动锚点同样绑定 generation，窗口替换后旧 observer 或 timeout 不能继续调整 scrollTop。
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功。`PATCH /session-folders/:id` 的 `name` 与 `pinned` 是同一个 owner-scoped 原子 mutation：空 payload 在写入前拒绝，实际携带的字段由一条 `UPDATE ... RETURNING` 同时提交并返回 canonical folder；名称唯一约束或数据库失败不能留下只改名称或只改置顶的半状态。
 

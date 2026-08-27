@@ -204,11 +204,25 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Qwen ============
+		"qwen3.8-max": {
+			ID: "qwen3.8-max", DisplayName: "Qwen3.8 Max", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 131072,
+			},
+		},
+		"qwen3.8-flash": {
+			ID: "qwen3.8-flash", DisplayName: "Qwen3.8 Flash", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 131072,
+			},
+		},
 		"qwen3.7-max": {
 			ID: "qwen3.7-max", DisplayName: "Qwen3.7 Max", Provider: "qwen", Enabled: true,
 			Capabilities: ModelCapabilities{
 				ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
-				ContextWindow: 1000000, MaxOutput: 65536,
+				ContextWindow: 1000000, MaxOutput: 131072,
 			},
 		},
 		"qwen3.7-plus": {
@@ -218,8 +232,22 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000, MaxOutput: 65536,
 			},
 		},
+		"qwen3.7-flash": {
+			ID: "qwen3.7-flash", DisplayName: "Qwen3.7 Flash", Provider: "qwen", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1000000, MaxOutput: 65536,
+			},
+		},
 
 		// ============ GLM ============
+		"glm-5.3-flash": {
+			ID: "glm-5.3-flash", DisplayName: "GLM-5.3-Flash", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 131072,
+			},
+		},
 		"glm-5.3": {
 			ID: "glm-5.3", DisplayName: "GLM-5.3", Provider: "zhipu", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -239,7 +267,7 @@ func builtinModels() map[string]*ModelInfo {
 		"MiniMax-M3": {
 			ID: "MiniMax-M3", DisplayName: "MiniMax M3", Provider: "minimax", Enabled: true,
 			Capabilities: ModelCapabilities{
-				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
 				ContextWindow: 1000000, MaxOutput: 524288,
 			},
 		},
@@ -247,7 +275,14 @@ func builtinModels() map[string]*ModelInfo {
 			ID: "MiniMax-M2.7", DisplayName: "MiniMax M2.7", Provider: "minimax", Enabled: true,
 			Capabilities: ModelCapabilities{
 				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
-				ContextWindow: 1000000, MaxOutput: 204800,
+				ContextWindow: 204800, MaxOutput: 131072,
+			},
+		},
+		"MiniMax-M2.7-highspeed": {
+			ID: "MiniMax-M2.7-highspeed", DisplayName: "MiniMax M2.7 HighSpeed", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 204800, MaxOutput: 131072,
 			},
 		},
 
@@ -291,6 +326,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ DeepSeek ============
+		"deepseek-v4-flash-vision-exp": {
+			ID: "deepseek-v4-flash-vision-exp", DisplayName: "DeepSeek V4 Flash Vision Experimental", Provider: "deepseek", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 384000,
+			},
+		},
 		"deepseek-v4-flash": {
 			ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Provider: "deepseek", Enabled: true,
 			Capabilities: ModelCapabilities{

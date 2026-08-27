@@ -175,8 +175,8 @@ func TestApplyOpenAICompatibleThinkingManualNone(t *testing.T) {
 }
 
 func TestApplyOpenAICompatibleThinkingQwen(t *testing.T) {
-	cfg := &openai.ChatModelConfig{Model: "qwen3.7-plus"}
-	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: "qwen3.7-plus", Reasoning: true, ThinkingEffort: "high"}, cfg)
+	cfg := &openai.ChatModelConfig{Model: "qwen3.8-max"}
+	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: "qwen3.8-max", Reasoning: true, ThinkingEffort: "high"}, cfg)
 	if got := cfg.ExtraFields["enable_thinking"]; got != true {
 		t.Fatalf("enable_thinking = %#v, want true", got)
 	}
@@ -190,8 +190,8 @@ func TestApplyOpenAICompatibleThinkingQwen(t *testing.T) {
 
 func TestApplyOpenAICompatibleThinkingQwenUtilityLifecycle(t *testing.T) {
 	t.Run("hybrid disables thinking", func(t *testing.T) {
-		cfg := &openai.ChatModelConfig{Model: "qwen3.7-plus"}
-		applyOpenAICompatibleThinking(&ChatRequest{Provider: "qwen", ModelID: "qwen3.7-plus", Reasoning: true, SuppressThinking: true}, cfg)
+		cfg := &openai.ChatModelConfig{Model: "qwen3.8-flash"}
+		applyOpenAICompatibleThinking(&ChatRequest{Provider: "qwen", ModelID: "qwen3.8-flash", Reasoning: true, SuppressThinking: true}, cfg)
 		if got := cfg.ExtraFields["enable_thinking"]; got != false {
 			t.Fatalf("enable_thinking = %#v, want false", got)
 		}

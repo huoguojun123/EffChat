@@ -364,9 +364,9 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		}
 	case ThinkingFormatDashScopeQwen:
 		return []model.ThinkingEffortOption{
-			{Value: string(ThinkingEffortLow), Label: "短", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7；下发 enable_thinking + thinking_budget=1024。"},
-			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7；下发 enable_thinking + thinking_budget=4096。"},
-			{Value: string(ThinkingEffortHigh), Label: "长", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7；下发 enable_thinking + thinking_budget=8192。"},
+			{Value: string(ThinkingEffortLow), Label: "短", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7/3.8；下发 enable_thinking + thinking_budget=1024。"},
+			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7/3.8；下发 enable_thinking + thinking_budget=4096。"},
+			{Value: string(ThinkingEffortHigh), Label: "长", Description: "适用 QwQ、Qwen3/3.5/3.6/3.7/3.8；下发 enable_thinking + thinking_budget=8192。"},
 		}
 	case ThinkingFormatGeminiThinking:
 		switch ResolveGeminiThinkingContract(modelID) {
@@ -565,7 +565,7 @@ func QwenThinkingCanDisable(modelID string) bool {
 // whose OpenAI-compatible API explicitly accepts preserve_thinking.
 func QwenPreservesThinkingHistory(modelID string) bool {
 	id := normalizeModelID(modelID)
-	return strings.Contains(id, "qwen3.6") || strings.Contains(id, "qwen3.7")
+	return strings.Contains(id, "qwen3.6") || strings.Contains(id, "qwen3.7") || strings.Contains(id, "qwen3.8")
 }
 
 func isOpenAIReasoningModel(provider, id string) bool {

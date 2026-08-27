@@ -203,7 +203,7 @@ func TestKnownThinkingModelDetection(t *testing.T) {
 }
 
 func TestQwenThinkingLifecycleCapabilities(t *testing.T) {
-	for _, id := range []string{"qwen3.7-plus", "qwen3.6-plus"} {
+	for _, id := range []string{"qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3.6-plus"} {
 		if !QwenThinkingCanDisable(id) || !QwenPreservesThinkingHistory(id) {
 			t.Fatalf("%s should support toggle and preserve_thinking", id)
 		}
@@ -303,7 +303,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 		{
 			name:     "qwen",
 			format:   ThinkingFormatDashScopeQwen,
-			contains: []string{"QwQ", "Qwen3/3.5/3.6/3.7", "enable_thinking", "thinking_budget"},
+			contains: []string{"QwQ", "Qwen3/3.5/3.6/3.7/3.8", "enable_thinking", "thinking_budget"},
 		},
 		{
 			name:     "gemini 2.5",

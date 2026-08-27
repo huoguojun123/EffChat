@@ -6,7 +6,7 @@ COMPOSE_FILE="$ROOT/docker-compose.registry.yml"
 
 test -f "$COMPOSE_FILE"
 ! grep -Eq '^\s+build:' "$COMPOSE_FILE"
-test "$(grep -Fc 'image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.1-beta.7}' "$COMPOSE_FILE")" -eq 1
+test "$(grep -Fc 'image: ${DOCKERHUB_NAMESPACE:-gjhuo}/effchat:${EFFCHAT_VERSION:-v0.4.1-beta.8}' "$COMPOSE_FILE")" -eq 1
 grep -Fq 'profiles: [bundled-db]' "$COMPOSE_FILE"
 grep -Fq 'required: false' "$COMPOSE_FILE"
 grep -Fq '${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data' "$COMPOSE_FILE"

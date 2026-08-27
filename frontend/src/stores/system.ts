@@ -3,7 +3,7 @@ import { systemApi, type ChatFonts } from "@/api/system"
 import type { FontAsset } from "@/types"
 
 const DEFAULT_SYSTEM_NAME = "EffChat"
-const DEFAULT_SYSTEM_VERSION = "0.4.1-beta.7"
+const DEFAULT_SYSTEM_VERSION = "0.4.1-beta.8"
 const CHAT_FONT_STYLE_ID = "effchat-chat-font-face"
 // Font-family order alone cannot route glyphs because most CJK fonts also
 // contain ASCII. Disjoint ranges make the visible Chinese and Latin slots own

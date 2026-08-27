@@ -7,6 +7,22 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.8] - 2026-08-27
+
+### Added
+
+- Added conservative builtin candidates for DeepSeek V4 Flash Vision Experimental, GLM-5.3-Flash, Qwen 3.8 Max/Flash, Qwen 3.7 Flash, and MiniMax M2.7 HighSpeed.
+
+### Fixed
+
+- Corrected MiniMax M3 image capability, MiniMax M2.7 context/output limits, and Qwen 3.7 Max output metadata against current official documentation.
+- Extended the existing Qwen Chat Completions preserved-thinking boundary to Qwen 3.8 without adding a new adapter or mixing Responses API fields into that protocol.
+
+### Verification
+
+- Added registry, runtime-profile, thinking-family, and request-fixture coverage for the refreshed model contracts; full backend, frontend, dependency, install, and registry Compose gates passed where locally available.
+- No database seed, migration, API, provider/channel, deployment-topology, Korea, or persisted-user-data changes.
+
 ## [0.4.1-beta.7] - 2026-08-24
 
 ### Fixed

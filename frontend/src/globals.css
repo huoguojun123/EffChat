@@ -874,9 +874,9 @@ html.app-route-leaving #root {
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes streaming-reveal-in {
-  from { opacity: 0.68; filter: blur(0.35px); }
-  to { opacity: 1; filter: blur(0); }
+@keyframes streaming-block-in {
+  from { opacity: 0.38; transform: translate3d(0, 3px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
 @keyframes loading-indicator-glide {
@@ -1061,15 +1061,15 @@ html.app-route-leaving #root {
   transition-delay: 0s;
 }
 
-.streaming-reveal {
-  animation: streaming-reveal-in var(--motion-duration-surface) var(--motion-ease-standard);
+.streaming-markdown > .markdown-body > :last-child {
+  animation: streaming-block-in var(--motion-duration-surface) var(--motion-ease-standard) both;
 }
 
-/* 流式吐字时给底部一层渐隐遮罩，让恒速揭示的新行从虚化处浮现（LobeHub 式淡入）。
-   揭示结束后这层被撤掉，显示完整无遮罩内容。 */
-.streaming-fade {
-  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 2.2em), rgba(0, 0, 0, 0.72) calc(100% - 0.75em), rgba(0, 0, 0, 0.3) 100%);
-  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 2.2em), rgba(0, 0, 0, 0.72) calc(100% - 0.75em), rgba(0, 0, 0, 0.3) 100%);
+/* The current answer owns enough vertical room to place its user turn in the
+   upper reading band. Content consumes this room naturally; long answers then
+   continue with normal near-bottom following instead of a permanent spacer. */
+.current-assistant-slot {
+  min-height: max(12rem, calc(62dvh - var(--chat-composer-inset, 0px)));
 }
 @media (prefers-reduced-motion: reduce) {
   .auth-surface,
@@ -1086,12 +1086,8 @@ html.app-route-leaving #root {
   .conversation-turn-preview {
     transition: none;
   }
-  .streaming-reveal {
+  .streaming-markdown > .markdown-body > :last-child {
     animation: none;
-  }
-  .streaming-fade {
-    -webkit-mask-image: none;
-    mask-image: none;
   }
 }
 

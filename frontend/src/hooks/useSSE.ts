@@ -5,7 +5,7 @@ import { listMessageWindow } from "@/api/messages"
 import { getActiveRun, getRunStatus } from "@/api/runs"
 import { compactSessionUrl, cancelRun, preflightSessionMessage } from "@/api/sessions"
 import { handleAuthExpired } from "@/api/client"
-import { cloneToolCall, editableTailUserMessageId } from "@/lib/chatMessages"
+import { cloneToolCall, editableTailUserMessageId, messageRunId } from "@/lib/chatMessages"
 import { createLocalMessageId } from "@/lib/localMessageId"
 import { isUnrecoverableRunStatusError, waitForDelay, waitForRunAppearance, waitForRunSettlement } from "@/lib/runReconciliation"
 import { consumeCompactionSSE, createStreamHTTPError, formatErrorDiagnostic, formatErrorPayload, isCompactionRequired, parseUsage, readSSEEvents, readStreamHTTPError, trimTrailingCodePoints } from "@/lib/sseProtocol"
@@ -200,7 +200,14 @@ export function useSSE() {
           if (!ownsReconciliationTask(task) || run.run_id !== runId) return
           if (run.status !== "running") {
             const synced = await syncSessionMessages(sessionId, runId)
-            if (!synced || !ownsReconciliationTask(task)) return
+            if (!ownsReconciliationTask(task)) return
+            if (!synced || (run.terminal_message_id && !hasDurableAssistantForRun(runId, run.terminal_message_id))) {
+              updateStreaming({ status: "recovering", requestId: runId, error: "回答已完成，正在同步结果…" })
+              delayMs = delayMs === 0
+                ? recoveryInitialDelayMs
+                : Math.min(delayMs * 2, recoveryMaxDelayMs)
+              continue
+            }
             if (!run.terminal_message_id) {
               updateMessagesByRequest(runId, {
                 local_state: "failed_local",
@@ -421,7 +428,14 @@ export function useSSE() {
           terminalIncomplete = parsed.incomplete === true
           const ownsView = canMutate()
           if (ownsView) flushPendingDeltas()
-          if (ownsView && hasStreamOutput(accContent, accThinking, accToolCalls)) {
+          // Keep the live slot mounted until the durable message is visible.
+          // Creating an intermediate local assistant here made one answer pass
+          // through streaming -> local finalizing -> DB identities and caused
+          // a subtle remount/fade at the exact moment generation completed.
+          // Older/partial gateways may omit message_id; retain the existing
+          // local fallback only for that compatibility path so output is never
+          // discarded while there is no durable identity to reconcile against.
+          if (ownsView && !terminalMessageId && hasStreamOutput(accContent, accThinking, accToolCalls)) {
             const msgData: MessageData = {
               role: "assistant",
               content: accContent,
@@ -545,11 +559,12 @@ export function useSSE() {
       if (result.sawMessageComplete || result.sawTerminalError) {
         if (isCurrentClientStream(stream)) {
           const synced = await syncSessionMessages(sessionId, requestId)
-          if (
-            synced
-            && result.terminalMessageId
-            && !useChatStore.getState().messages.some((message) => message.id === result.terminalMessageId)
-          ) {
+          const durableVisible = synced && hasDurableAssistantForRun(requestId, result.terminalMessageId)
+          if (result.sawMessageComplete && result.terminalMessageId && !durableVisible) {
+            needsReconciliation = true
+            updateStreaming({ status: "recovering", error: "回答已完成，正在同步结果…", requestId })
+            void scheduleRunReconciliation(sessionId, requestId)
+          } else if (synced && result.terminalMessageId && !durableVisible) {
             hiddenTerminalError = result.terminalError
               || (result.terminalIncomplete ? "本次重试未完成，已保留原回答" : "本次重试未能更新回答，已保留原回答")
           }
@@ -994,11 +1009,13 @@ export function useSSE() {
         return next
       })
 
-      if (result.sawMessageComplete && isCurrentClientStream(stream)) {
-        updateMessagesByRequest(requestId, { local_state: "persisted", is_local: false, local_request_id: undefined, local_error: undefined })
-      }
       if ((result.sawMessageComplete || result.sawTerminalError) && isCurrentClientStream(stream)) {
-        await syncSessionMessages(sessionId, requestId)
+        const synced = await syncSessionMessages(sessionId, requestId)
+        if (result.sawMessageComplete && result.terminalMessageId && (!synced || !hasDurableAssistantForRun(requestId, result.terminalMessageId))) {
+          needsReconciliation = true
+          updateStreaming({ status: "recovering", requestId, error: "回答已完成，正在同步结果…" })
+          void scheduleRunReconciliation(sessionId, requestId)
+        }
       } else if (isCurrentClientStream(stream)) {
         needsReconciliation = true
         updateStreaming({ status: "recovering", requestId, error: "连接暂时中断，正在确认回答" })
@@ -1016,7 +1033,7 @@ export function useSSE() {
         activeStream = null
       }
     }
-  }, [consumeSSE, isCurrentSession, resetStreaming, scheduleRunReconciliation, syncSessionMessages, updateMessagesByRequest, updateStreaming])
+  }, [consumeSSE, isCurrentSession, resetStreaming, scheduleRunReconciliation, syncSessionMessages, updateStreaming])
 
   useEffect(() => {
     resumeActiveRunRef.current = resumeActiveRun
@@ -1155,4 +1172,12 @@ function findToolCall(toolCalls: ToolCall[], id: string, seen = new Set<ToolCall
 
 function hasStreamOutput(content: string, thinking: string, toolCalls: ToolCall[]) {
   return content.trim().length > 0 || thinking.trim().length > 0 || toolCalls.length > 0
+}
+
+function hasDurableAssistantForRun(requestId: string, terminalMessageId?: number) {
+  return useChatStore.getState().messages.some((message) => (
+    !message.is_local
+    && message.role === "assistant"
+    && (terminalMessageId ? message.id === terminalMessageId : messageRunId(message) === requestId)
+  ))
 }

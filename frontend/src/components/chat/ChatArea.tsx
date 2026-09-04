@@ -69,14 +69,9 @@ export function ChatArea({
     if (!root || !dock) return
 
     const updateInset = () => {
-      const scroller = root.querySelector<HTMLElement>("[data-chat-scroll-container]")
-      const keepBottomAnchored = scroller
-        ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
-        : false
       const inset = `${Math.ceil(dock.getBoundingClientRect().height)}px`
       root.style.setProperty("--chat-composer-inset", inset)
       document.documentElement.style.setProperty("--chat-composer-viewport-inset", inset)
-      if (scroller && keepBottomAnchored) scroller.scrollTop = scroller.scrollHeight
     }
     updateInset()
 

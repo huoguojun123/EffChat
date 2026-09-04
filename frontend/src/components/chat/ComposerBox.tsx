@@ -1,11 +1,13 @@
 import type { ChangeEvent, ClipboardEvent, KeyboardEvent, RefObject } from "react"
-import { AlertTriangle, LoaderCircle, Paperclip, Send, Square } from "lucide-react"
+import { AlertTriangle, LoaderCircle, Paperclip, Send, Square, X } from "lucide-react"
 import type { FileInfo } from "@/api/files"
 import type { Message, Model, StreamLifecycleState } from "@/types"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { ContextStatusButton } from "./ChatInputParts"
+import type { UploadTask } from "./useAttachmentUploadQueue"
+import { summarizeUploadTasks } from "./uploadTaskPresentation"
 
 interface ComposerBoxProps {
   input: string
@@ -14,6 +16,7 @@ interface ComposerBoxProps {
   attachments: FileInfo[]
   stagedCount: number
   uploadError: string | null
+  uploadTasks: UploadTask[]
   imageUnsupported?: boolean
   streamingStatus: StreamLifecycleState
   notice: string | null
@@ -23,12 +26,14 @@ interface ComposerBoxProps {
   currentModel?: Model
   isStreaming: boolean
   isAbortable: boolean
+  preparingSend: boolean
   canSend: boolean
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   onPaste: (event: ClipboardEvent<HTMLTextAreaElement>) => void
   onCompositionStart: () => void
   onCompositionEnd: () => void
   onOpenStaging: () => void
+  onCancelUploads: () => void
   onAbort: () => void
   onSubmit: () => void
 }
@@ -40,6 +45,7 @@ export function ComposerBox({
   attachments,
   stagedCount,
   uploadError,
+  uploadTasks,
   imageUnsupported,
   streamingStatus,
   notice,
@@ -49,16 +55,28 @@ export function ComposerBox({
   currentModel,
   isStreaming,
   isAbortable,
+  preparingSend,
   canSend,
   onKeyDown,
   onPaste,
   onCompositionStart,
   onCompositionEnd,
   onOpenStaging,
+  onCancelUploads,
   onAbort,
   onSubmit,
 }: ComposerBoxProps) {
-  const showStatus = attachments.length > 0 || uploadError || imageUnsupported || attachmentNotice || streamingStatus === "recovering" || streamingStatus === "failed_local" || notice
+  const uploadSummary = summarizeUploadTasks(uploadTasks)
+  const showStatus = Boolean(preparingSend || streamingStatus === "sending" || uploadSummary || attachments.length > 0 || uploadError || imageUnsupported || attachmentNotice || streamingStatus === "failed_local" || notice)
+  const submitLabel = preparingSend
+    ? "正在准备消息…"
+    : streamingStatus === "sending"
+      ? "取消发送"
+      : isAbortable
+        ? "停止生成"
+        : isStreaming
+          ? "正在同步结果…"
+          : "发送消息"
 
   function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
     setInput(event.target.value)
@@ -74,6 +92,21 @@ export function ComposerBox({
       >
         {showStatus && (
           <div role="status" aria-live="polite" className="mb-1 space-y-1.5 pt-1.5 animate-msg-in">
+            {preparingSend && <div className="text-xs text-muted-foreground">正在准备消息…</div>}
+            {streamingStatus === "sending" && <div className="text-xs text-muted-foreground">正在发送…</div>}
+            {uploadSummary && (
+              <div className="flex min-h-8 min-w-0 items-center gap-2 rounded-md bg-muted/45 px-2 text-xs text-muted-foreground">
+                <LoaderCircle className={`h-3.5 w-3.5 shrink-0 ${uploadSummary.active ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden="true" />
+                <button type="button" onClick={onOpenStaging} className="min-w-0 flex-1 truncate text-left transition-colors motion-control hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+                  {uploadSummary.label}
+                </button>
+                {uploadSummary.active ? (
+                  <button type="button" onClick={onCancelUploads} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md transition-colors motion-control hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7" aria-label="取消正在上传的文件">
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                ) : null}
+              </div>
+            )}
             {stagedCount > 0 && <button type="button" onClick={onOpenStaging} className="flex min-h-8 items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground transition-colors motion-control hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><Paperclip className="h-3.5 w-3.5" aria-hidden="true" />本次已选 {attachments.length} 个附件，暂存 {stagedCount} 个</button>}
             {imageUnsupported && (
               <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
@@ -87,9 +120,6 @@ export function ComposerBox({
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>{attachmentNotice}</span>
               </div>
-            )}
-            {streamingStatus === "recovering" && (
-              <div className="text-xs text-muted-foreground">连接暂时中断，正在确认回答。</div>
             )}
             {streamingStatus === "failed_local" && (
               <div className="text-xs text-rose-600 dark:text-rose-400">
@@ -143,12 +173,12 @@ export function ComposerBox({
                   isAbortable && "text-destructive-foreground hover:bg-destructive/10 hover:text-destructive-foreground",
                   isStreaming && !isAbortable && "cursor-wait"
                 )}
-                disabled={isStreaming ? !isAbortable : !canSend}
+                disabled={preparingSend || (isStreaming ? !isAbortable : !canSend)}
                 onClick={isAbortable ? onAbort : onSubmit}
                 data-testid={isAbortable ? "stop-button" : "send-button"}
-                aria-label={isAbortable ? "停止生成" : isStreaming ? "正在确认结果" : "发送消息"}
+                aria-label={submitLabel}
               >
-                {isStreaming && !isAbortable ? (
+                {(preparingSend || (isStreaming && !isAbortable)) ? (
                   <LoaderCircle className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 ) : (
                   <span className="relative block h-4 w-4" aria-hidden="true">
@@ -168,7 +198,7 @@ export function ComposerBox({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{isAbortable ? "停止生成" : isStreaming ? "正在确认结果" : "发送消息"}</TooltipContent>
+            <TooltipContent>{submitLabel}</TooltipContent>
           </Tooltip>
         </div>
       </div>

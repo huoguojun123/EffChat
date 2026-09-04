@@ -383,6 +383,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           attachments={attachments}
           stagedCount={stagedAttachments.length}
           uploadError={uploadError}
+          uploadTasks={uploadTasks}
           imageUnsupported={imageUnsupported}
           streamingStatus={streamingStatus}
           notice={modelUnavailable ? "当前会话没有可用模型，请先在顶部选择模型或联系管理员。" : notice}
@@ -392,6 +393,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           currentModel={currentModel}
           isStreaming={isStreaming}
           isAbortable={isAbortable}
+          preparingSend={preparingSend}
           canSend={canSend}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
@@ -400,6 +402,11 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           onOpenStaging={() => {
             setStagingOpen(true)
             void refreshStagedAttachments()
+          }}
+          onCancelUploads={() => {
+            for (const task of uploadTasks) {
+              if (task.status === "queued" || task.status === "uploading" || task.status === "processing") cancelUpload(task.id)
+            }
           }}
           onAbort={abort}
           onSubmit={handleSubmit}

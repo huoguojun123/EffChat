@@ -10,6 +10,7 @@ describe("streamingStatus helpers", () => {
 
   it("keeps finalizing out of the live streaming indicator", () => {
     expect(isStreamingDisplayActive("finalizing")).toBe(false)
+    expect(isStreamingDisplayActive("sending")).toBe(false)
     expect(isStreamingDisplayActive("streaming")).toBe(true)
     expect(isStreamingDisplayActive("recovering")).toBe(true)
   })

@@ -101,7 +101,7 @@ export function ComposerBox({
                   {uploadSummary.label}
                 </button>
                 {uploadSummary.active ? (
-                  <button type="button" onClick={onCancelUploads} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md transition-colors motion-control hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7" aria-label="取消正在上传的文件">
+                  <button type="button" onClick={onCancelUploads} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md transition-colors motion-control hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 min-[769px]:h-7 min-[769px]:w-7" aria-label="取消正在上传的文件">
                     <X className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>
                 ) : null}

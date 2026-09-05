@@ -69,6 +69,8 @@ backend (Gin)
 - `src/api`：REST API 封装和文件 blob 鉴权下载。
 - `src/lib/sseProtocol.ts` / `runReconciliation.ts`：纯 SSE 帧解析、错误归一化和有界运行对账；`useSSE` 继续负责 React 生命周期、发送、停止、重试与 store 协调。
 
+移动 Chat 顶栏和 composer 工具按钮保留 32px 可见外观，用透明伪元素提供至少 44px 的实际命中区；相邻按钮预留间距避免命中区交叠。验收使用浏览器 hit testing，而非只测可见 border box。上传取消入口直到 768px 均保留移动尺寸，769px 才采用桌面尺寸。
+
 外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面密度只依据可用 CSS viewport，不识别 OS、浏览器或 DPR：标准桌面保留 `0.25rem` spacing，宽度不超过 1600px 或高度不超过 900px 的非移动桌面使用 `0.2375rem` 紧凑 spacing，并同步侧栏、管理导航、设置框、欢迎引文、composer CSS、运行时自动增高下限和 `--chat-content-max-width`（标准 1180px、紧凑 1120px、移动端全宽）。产品 chrome 的常规辅助文字至少为 12px；用户可调的聊天正文字号保持独立。移动端不继承桌面紧凑 spacing，继续使用抽屉式侧栏、约 44 CSS px 的高频触摸命中盒和无横向溢出。
 
 消息角色不只依赖色相区分：用户输入保持右侧、有宽度上限的轻量语义表面，助手回答保持左侧透明文档流，工具、推理和运行元信息继续作为次级层级。Composer 使用高不透明 raised surface、单一边界和受控焦点环；聊天顶部操作控件和 Composer 工具条统一复用“文件”按钮的 quiet raised surface（语义 border/background、轻量 shadow 和受控 blur），不叠加逐按钮玻璃片。用户历史消息与当前输入入口使用不同表面语义。该视觉契约不改变聊天正文 15px 基线、用户字号设置、消息折叠、编辑重试、附件或发送/恢复生命周期。

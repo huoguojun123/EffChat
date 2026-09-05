@@ -1102,6 +1102,25 @@ html.app-route-leaving #root {
   font-weight: 400;
 }
 
+/* Preserve compact visible controls while extending actual mobile hit areas.
+   Sibling gaps below reserve the extension so neighboring targets never overlap. */
+@media (max-width: 768px) {
+  .chat-topbar-surface { gap: 14px; }
+  .chat-topbar-surface > .pointer-events-none { gap: 14px; }
+  .composer-toolbar { gap: 14px; padding: 7px; }
+  .chat-topbar-surface button,
+  .composer-toolbar > button {
+    position: relative;
+  }
+  .chat-topbar-surface button::before,
+  .composer-toolbar > button::before {
+    content: "";
+    position: absolute;
+    /* Absolute offsets start at the padding box, inside the 1px border. */
+    inset: -7px;
+  }
+}
+
 /* The translucent topbar should merge into the reading surface instead of
    leaving a hard rule across the first message. Keep the fade decorative so
    it cannot steal clicks from the controls beneath it. */

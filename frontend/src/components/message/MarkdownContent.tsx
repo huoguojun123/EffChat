@@ -109,7 +109,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   }), [allowArtifactPreviews, handlePreviewPendingChange, ownerKey, streaming, variant])
 
   return (
-    <div className={`${variant === "document" ? "document-markdown" : ""} relative min-w-0 max-w-full`} data-markdown-preparing={preparing || undefined}>
+    <div className={`${variant === "document" ? "document-markdown" : ""} ${streaming ? "streaming-markdown" : ""} relative min-w-0 max-w-full`} data-markdown-preparing={preparing || undefined}>
       {preparing ? (
         <LoadingIndicator label="正在准备图表" className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24" />
       ) : null}

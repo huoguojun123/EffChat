@@ -668,6 +668,13 @@ describe("useSSE", () => {
         terminal_message_id: 42,
       },
     }))
+    mocks.listMessageWindow.mockResolvedValue({
+      messages: [{ id: 42, session_id: 1, schema_version: "v2", role: "assistant", has_tool_calls: false, has_reasoning: false, created_at: "2026-09-05T00:00:00Z", message_data: { role: "assistant", content: "done" } }],
+      first_turn_id: 0,
+      last_turn_id: 0,
+      has_older: false,
+      has_newer: false,
+    })
 
     const { sendMessage } = useSSE()
     await expect(sendMessage(1, "question", undefined, { onAccepted })).resolves.toBeUndefined()
@@ -1463,6 +1470,75 @@ describe("useSSE", () => {
     expect((mocks.store.streaming as { status: string }).status).toBe("idle")
   })
 
+  it("keeps the live reply until the identified durable assistant is visible", async () => {
+    const runId = "10000000-1000-4000-8000-100000000001" as `${string}-${string}-${string}-${string}-${string}`
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(runId)
+    mocks.listMessageWindow.mockResolvedValue({
+      messages: [{
+        id: 43,
+        session_id: 1,
+        schema_version: "v2",
+        role: "assistant",
+        has_tool_calls: false,
+        has_reasoning: false,
+        created_at: "2026-09-05T00:00:00Z",
+        message_data: { role: "assistant", content: "durable reply", metadata: { run_id: runId } },
+      }],
+      first_turn_id: 0,
+      last_turn_id: 0,
+      has_older: false,
+      has_newer: false,
+    })
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response([
+      'event: content_delta\ndata: {"delta":"durable reply"}\n\n',
+      'event: message_complete\ndata: {"message_id":43,"finish_reason":"stop"}\n\n',
+    ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
+
+    const { sendMessage } = useSSE()
+    await sendMessage(1, "question")
+
+    expect(mocks.store.commitStreamingMessage).not.toHaveBeenCalled()
+    expect(mocks.store.syncMessages).toHaveBeenCalled()
+    expect((mocks.store.streaming as { status: string }).status).toBe("idle")
+  })
+
+  it("keeps reconciling when a completed reply is not visible in the first durable window", async () => {
+    const runId = "10000000-1000-4000-8000-100000000002" as `${string}-${string}-${string}-${string}-${string}`
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(runId)
+    mocks.listMessageWindow
+      .mockResolvedValueOnce({ messages: [], first_turn_id: 0, last_turn_id: 0, has_older: false, has_newer: false })
+      .mockResolvedValue({
+        messages: [{
+          id: 44,
+          session_id: 1,
+          schema_version: "v2",
+          role: "assistant",
+          has_tool_calls: false,
+          has_reasoning: false,
+          created_at: "2026-09-05T00:00:00Z",
+          message_data: { role: "assistant", content: "durable reply", metadata: { run_id: runId } },
+        }],
+        first_turn_id: 0,
+        last_turn_id: 0,
+        has_older: false,
+        has_newer: false,
+      })
+    mocks.getRunStatus.mockResolvedValue({
+      run: { run_id: runId, session_id: 1, kind: "chat", status: "completed", terminal_message_id: 44 },
+    })
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response([
+      'event: content_delta\ndata: {"delta":"durable reply"}\n\n',
+      'event: message_complete\ndata: {"message_id":44,"finish_reason":"stop"}\n\n',
+    ].join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
+
+    const { sendMessage } = useSSE()
+    await expect(sendMessage(1, "question")).resolves.toBeUndefined()
+
+    await vi.waitFor(() => expect((mocks.store.streaming as { status: string }).status).toBe("idle"))
+    expect(mocks.store.commitStreamingMessage).not.toHaveBeenCalled()
+    expect(mocks.listMessageWindow).toHaveBeenCalledTimes(2)
+  })
+
   it("keeps an accepted run in recovery while durable status is still running", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -1506,6 +1582,13 @@ describe("useSSE", () => {
       .mockImplementationOnce(async (_sessionId: number, runId: string) => ({
         run: { run_id: runId, session_id: 1, kind: "chat", status: "completed", terminal_message_id: 77 },
       }))
+    mocks.listMessageWindow.mockResolvedValue({
+      messages: [{ id: 77, session_id: 1, schema_version: "v2", role: "assistant", has_tool_calls: false, has_reasoning: false, created_at: "2026-09-05T00:00:00Z", message_data: { role: "assistant", content: "done" } }],
+      first_turn_id: 0,
+      last_turn_id: 0,
+      has_older: false,
+      has_newer: false,
+    })
 
     const { sendMessage } = useSSE()
     await sendMessage(1, "question")

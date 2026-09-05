@@ -22,7 +22,19 @@ import { loadChatDrafts, saveChatDrafts } from "./chatDrafts"
 import { SessionMemoryDialog } from "./SessionMemoryDialog"
 import { StagedAttachmentsDrawer } from "./StagedAttachmentsDrawer"
 import { SessionSkillMutationCoordinator, sessionSkills } from "./sessionSkillMutation"
+import type { AttachmentMeta } from "@/types"
 
+
+interface CapturedSubmission {
+  id: number
+  sessionId: number
+  sessionGeneration: number
+  content: string
+  attachments: AttachmentMeta[]
+  attachmentIds: number[]
+  attachmentEpoch: number
+  thinkingEffort?: string
+}
 
 export interface ChatInputHandle {
   uploadFiles: (files: File[]) => Promise<void>
@@ -43,7 +55,12 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   const [memoryUnseen, setMemoryUnseen] = useState(false)
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const handleSubmitRef = useRef<() => void>(() => {})
+  const retrySubmissionRef = useRef<(submission: CapturedSubmission) => void>(() => {})
+  const draftRevisionRef = useRef<Record<number, number>>({})
+  const submissionIdRef = useRef(0)
+  const attemptTokenRef = useRef(0)
+  const activeAttemptRef = useRef<number | null>(null)
+  const failedSubmissionRef = useRef<CapturedSubmission | null>(null)
   const skillMutationRef = useRef<SessionSkillMutationCoordinator | null>(null)
   const streamingStatus = useChatStore((s) => s.streaming.status)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
@@ -65,6 +82,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   const setInput = useCallback((value: string) => {
     const sessionId = useChatStore.getState().activeSessionId
     if (!sessionId) return
+    draftRevisionRef.current[sessionId] = (draftRevisionRef.current[sessionId] || 0) + 1
     setDraftsBySession((current) => {
       if (value === "") {
         if (current[sessionId] === undefined) return current
@@ -77,9 +95,13 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     })
   }, [])
 
-  const clearSubmittedDraft = useCallback((sessionId: number, submitted: string) => {
+  const clearSubmittedDraft = useCallback((sessionId: number, revision: number) => {
     setDraftsBySession((current) => {
-      if ((current[sessionId] ?? "") !== submitted) return current
+      // A revision, rather than the text value, identifies the submitted
+      // draft. Re-entering the same text while a request is in flight must
+      // not be mistaken for the old draft and cleared by a late callback.
+      if (draftRevisionRef.current[sessionId] !== revision) return current
+      if (current[sessionId] === undefined) return current
       const next = { ...current }
       delete next[sessionId]
       return next
@@ -104,6 +126,81 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
       ? "已选 PDF 仍在 OCR 解析中。"
       : "已选文件解析失败，请在暂存附件中重试或删除。"
     : null
+
+  function sendCapturedSubmission(submission: CapturedSubmission) {
+    const state = useChatStore.getState()
+    if (
+      state.activeSessionId !== submission.sessionId
+      || state.activeSessionGeneration !== submission.sessionGeneration
+    ) {
+      setNotice("会话已切换，请重新输入")
+      setNoticeAction(null)
+      return
+    }
+    if (activeAttemptRef.current !== null || isStreamingInteractionBusy(state.streaming.status)) {
+      // Keep a deterministic retry target if another lifecycle transition won
+      // the race between the click handler and this submission helper.
+      failedSubmissionRef.current = submission
+      setNotice("当前仍有消息处理中，请稍候")
+      setNoticeAction({
+        label: "重试",
+        onClick: () => {
+          const failed = failedSubmissionRef.current
+          if (failed?.id === submission.id) retrySubmissionRef.current(failed)
+        },
+      })
+      return
+    }
+
+    const attemptToken = ++attemptTokenRef.current
+    activeAttemptRef.current = attemptToken
+    let accepted = false
+    setPreparingSessionId(submission.sessionId)
+    setNotice(null)
+    setNoticeAction(null)
+
+    const ownsAttempt = () => {
+      const current = useChatStore.getState()
+      return activeAttemptRef.current === attemptToken
+        && current.activeSessionId === submission.sessionId
+        && current.activeSessionGeneration === submission.sessionGeneration
+    }
+
+    void sendMessage(submission.sessionId, submission.content, submission.attachments, {
+      ...(submission.thinkingEffort ? { thinkingEffort: submission.thinkingEffort } : {}),
+      onAccepted: () => {
+        if (!ownsAttempt()) return
+        accepted = true
+        activeAttemptRef.current = null
+        setPreparingSessionId((current) => (current === submission.sessionId ? null : current))
+        failedSubmissionRef.current = null
+        setNotice(null)
+        setNoticeAction(null)
+        markSentForCurrentEpoch(submission.sessionId, submission.attachmentEpoch, submission.attachmentIds)
+      },
+    }).catch((err) => {
+      if (accepted || !ownsAttempt()) return
+      const message = err instanceof Error && err.message ? err.message : "发送失败"
+      failedSubmissionRef.current = submission
+      setNotice(message.includes("压缩失败") ? "压缩失败，请联系管理员" : message)
+      setNoticeAction({
+        label: "重试",
+        onClick: () => {
+          const failed = failedSubmissionRef.current
+          if (!failed || failed.id !== submission.id) return
+          retrySubmissionRef.current(failed)
+        },
+      })
+    }).finally(() => {
+      if (activeAttemptRef.current !== attemptToken) return
+      activeAttemptRef.current = null
+      if (!accepted) {
+        setPreparingSessionId((current) => (current === submission.sessionId ? null : current))
+      }
+    })
+  }
+
+  retrySubmissionRef.current = sendCapturedSubmission
 
   useEffect(() => {
     saveChatDrafts(draftsBySession)
@@ -244,7 +341,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
     if (compacting) return
 
     // 附件只传元数据(file_id 等)。文本正文已在后端持久化，Agent 需要时通过 file_read 按需读取。
-    const attachmentMeta = attachments.map((f) => ({
+    const attachmentMeta: AttachmentMeta[] = attachments.map((f) => ({
       file_id: f.id,
       filename: f.filename,
       file_type: f.content_type,
@@ -254,37 +351,25 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
 
     const submittedSessionId = activeSessionId
     const submittedAttachmentEpoch = currentAttachmentEpoch()
-    const submittedInput = input
     const submittedAttachmentIds = attachments.map((item) => item.id)
-    let accepted = false
-    setPreparingSessionId(submittedSessionId)
-    setNotice(null)
-    setNoticeAction(null)
-    void sendMessage(submittedSessionId, content, attachmentMeta, {
+    const submittedDraftRevision = draftRevisionRef.current[submittedSessionId] || 0
+    const submission: CapturedSubmission = {
+      id: ++submissionIdRef.current,
+      sessionId: submittedSessionId,
+      sessionGeneration: useChatStore.getState().activeSessionGeneration,
+      content,
+      attachments: attachmentMeta,
+      attachmentIds: submittedAttachmentIds,
+      attachmentEpoch: submittedAttachmentEpoch,
       ...(thinkingActive ? { thinkingEffort } : {}),
-      onAccepted: () => {
-        accepted = true
-        setPreparingSessionId((current) => (current === submittedSessionId ? null : current))
-        if (useChatStore.getState().activeSessionId === submittedSessionId) {
-          setNotice(null)
-          setNoticeAction(null)
-        }
-        clearSubmittedDraft(submittedSessionId, submittedInput)
-        markSentForCurrentEpoch(submittedSessionId, submittedAttachmentEpoch, submittedAttachmentIds)
-      },
-    }).catch((err) => {
-      if (accepted || useChatStore.getState().activeSessionId !== submittedSessionId) return
-      const message = err instanceof Error && err.message ? err.message : "发送失败"
-      setNotice(message.includes("压缩失败") ? "压缩失败，请联系管理员" : message)
-      setNoticeAction({ label: "重试", onClick: () => handleSubmitRef.current() })
-    }).finally(() => {
-      if (!accepted) {
-        setPreparingSessionId((current) => (current === submittedSessionId ? null : current))
-      }
-    })
-  }
+    }
 
-  handleSubmitRef.current = handleSubmit
+    // Move the exact submitted draft out of the editor immediately. A later
+    // keystroke gets a newer revision and remains untouched by this request.
+    clearSubmittedDraft(submittedSessionId, submittedDraftRevision)
+    failedSubmissionRef.current = null
+    sendCapturedSubmission(submission)
+  }
 
   async function handleCompact(sessionId: number) {
     if (compacting) return
@@ -383,6 +468,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           attachments={attachments}
           stagedCount={stagedAttachments.length}
           uploadError={uploadError}
+          uploadTasks={uploadTasks}
           imageUnsupported={imageUnsupported}
           streamingStatus={streamingStatus}
           notice={modelUnavailable ? "当前会话没有可用模型，请先在顶部选择模型或联系管理员。" : notice}
@@ -392,6 +478,7 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           currentModel={currentModel}
           isStreaming={isStreaming}
           isAbortable={isAbortable}
+          preparingSend={preparingSend}
           canSend={canSend}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
@@ -400,6 +487,11 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
           onOpenStaging={() => {
             setStagingOpen(true)
             void refreshStagedAttachments()
+          }}
+          onCancelUploads={() => {
+            for (const task of uploadTasks) {
+              if (task.status === "queued" || task.status === "uploading" || task.status === "processing") cancelUpload(task.id)
+            }
           }}
           onAbort={abort}
           onSubmit={handleSubmit}

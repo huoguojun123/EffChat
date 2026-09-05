@@ -70,6 +70,10 @@ export function MessageList() {
   const windowSwitchTokenRef = useRef(0)
   const windowSwitchReleaseTimerRef = useRef(0)
   const [showBack, setShowBack] = useState(false)
+  const [showReconnected, setShowReconnected] = useState(false)
+  const recoveryVisibleRef = useRef(false)
+  const recoveryDelayTimerRef = useRef(0)
+  const reconnectedTimerRef = useRef(0)
   const [activeTurnId, setActiveTurnId] = useState<number | null>(null)
   const [windowSwitching, setWindowSwitching] = useState(false)
   const visibleMessages = useMemo(
@@ -85,6 +89,11 @@ export function MessageList() {
   const lastVisible = [...visibleMessages].reverse().find((message) => !message.is_local)
   const lastVisibleId = hasNewerMessages ? undefined : lastVisible?.id
   const lastAssistantId = !hasNewerMessages && lastVisible?.role === "assistant" ? lastVisible.id : undefined
+  const currentAssistantSlotId = !hasNewerMessages && visibleMessages.at(-1)?.role === "assistant"
+    ? visibleMessages.at(-1)?.id
+    : undefined
+  const firstTurnPresentation = visibleMessages.filter((message) => message.role === "user").length === 1
+    && (isStreamingDisplayActive(streamingStatus) || currentAssistantSlotId !== undefined)
   // 最后一条压缩摘要：仅它可撤销（撤销更早的会破坏后续检查点边界）。
   const lastSummaryId = useMemo(() => {
     for (let i = visibleMessages.length - 1; i >= 0; i--) {
@@ -277,6 +286,21 @@ export function MessageList() {
     clearReasoningState("stream:")
   }, [activeSessionId, clearReasoningState])
 
+  useEffect(() => {
+    window.clearTimeout(recoveryDelayTimerRef.current)
+    if (streamingStatus === "recovering") {
+      recoveryDelayTimerRef.current = window.setTimeout(() => {
+        recoveryVisibleRef.current = true
+      }, 800)
+      return
+    }
+    if (!recoveryVisibleRef.current) return
+    recoveryVisibleRef.current = false
+    setShowReconnected(true)
+    window.clearTimeout(reconnectedTimerRef.current)
+    reconnectedTimerRef.current = window.setTimeout(() => setShowReconnected(false), 1200)
+  }, [streamingStatus])
+
   // 新增消息时，仅当用户原本贴在底部才自动跟随。
   useEffect(() => {
     if (messages.length <= previousMessageCountRef.current) {
@@ -296,10 +320,18 @@ export function MessageList() {
   useEffect(() => {
     const target = listRef.current
     if (!target || typeof ResizeObserver === "undefined") return
-    const observer = new ResizeObserver(() => keepInitialBottomLocked())
+    const observer = new ResizeObserver(() => {
+      keepInitialBottomLocked()
+      // MessageList is the sole scroll owner. This catches late layout from
+      // Markdown, previews, fonts and composer inset without teaching those
+      // components how to move the conversation viewport.
+      if (isStreaming && wasNearBottomRef.current && !userPausedAutoFollowRef.current) {
+        scrollToBottom(false)
+      }
+    })
     observer.observe(target)
     return () => observer.disconnect()
-  }, [keepInitialBottomLocked])
+  }, [isStreaming, keepInitialBottomLocked, scrollToBottom])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -330,6 +362,8 @@ export function MessageList() {
     cancelAnimationFrame(rafRef.current)
     cancelAnimationFrame(trimRafRef.current)
     window.clearTimeout(bottomLockTimerRef.current)
+    window.clearTimeout(recoveryDelayTimerRef.current)
+    window.clearTimeout(reconnectedTimerRef.current)
     clearPendingAnchor()
     window.clearTimeout(windowSwitchReleaseTimerRef.current)
   }, [clearPendingAnchor])
@@ -461,7 +495,7 @@ export function MessageList() {
       >
         <div
           ref={listRef}
-          className={`mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)] px-4 pt-16 transition-opacity duration-[160ms] ease-out motion-reduce:transition-none ${windowSwitching ? "opacity-0" : "opacity-100"}`}
+          className={`mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)] px-4 transition-[opacity,padding] duration-[160ms] ease-out motion-reduce:transition-none ${firstTurnPresentation ? "pt-[20dvh]" : "pt-16"} ${windowSwitching ? "opacity-0" : "opacity-100"}`}
           style={{ paddingBottom: "calc(var(--chat-composer-inset, 1rem) + var(--chat-scroll-gap, 0.875rem))" }}
           data-testid="message-list"
         >
@@ -472,7 +506,7 @@ export function MessageList() {
                 if (element) turnAnchorsRef.current.set(msg.id, element)
                 else turnAnchorsRef.current.delete(msg.id)
               } : undefined}
-              className="min-w-0 max-w-full"
+              className={`min-w-0 max-w-full ${msg.id === currentAssistantSlotId ? "current-assistant-slot" : ""}`}
               data-testid="message-item"
               data-message-id={msg.id}
               data-role={msg.message_data.role}
@@ -498,7 +532,7 @@ export function MessageList() {
             </div>
           ))}
           {isStreaming && !streamMessageExists && (
-            <div className="animate-msg-in">
+            <div className="current-assistant-slot">
               <StreamingMessage />
             </div>
           )}
@@ -517,6 +551,18 @@ export function MessageList() {
             >
               <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             </button>
+          </div>
+        )}
+        {showReconnected && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="pointer-events-none sticky z-10 flex justify-center"
+            style={{ bottom: "calc(var(--chat-composer-inset, 0px) + 0.75rem)" }}
+          >
+            <span className="rounded-full border border-border/60 bg-background/88 px-2.5 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-md animate-msg-in">
+              已接续
+            </span>
           </div>
         )}
       </div>

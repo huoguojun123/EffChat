@@ -69,6 +69,8 @@ backend (Gin)
 - `src/api`：REST API 封装和文件 blob 鉴权下载。
 - `src/lib/sseProtocol.ts` / `runReconciliation.ts`：纯 SSE 帧解析、错误归一化和有界运行对账；`useSSE` 继续负责 React 生命周期、发送、停止、重试与 store 协调。
 
+移动 Chat 顶栏和 composer 工具按钮保留 32px 可见外观，用透明伪元素提供至少 44px 的实际命中区；相邻按钮预留间距避免命中区交叠。验收使用浏览器 hit testing，而非只测可见 border box。上传取消入口直到 768px 均保留移动尺寸，769px 才采用桌面尺寸。
+
 外观设置的主题预览只引用 `globals.css` 的语义 token，不在 TypeScript 中复制 hex 色板；浅色/深色主题和强调色仍通过既有浏览器存储键保存。根级外观 View Transition 在活动 Radix dialog 内被跳过，以保持设置弹窗的交互树稳定；普通页面切换继续使用受控过渡。桌面密度只依据可用 CSS viewport，不识别 OS、浏览器或 DPR：标准桌面保留 `0.25rem` spacing，宽度不超过 1600px 或高度不超过 900px 的非移动桌面使用 `0.2375rem` 紧凑 spacing，并同步侧栏、管理导航、设置框、欢迎引文、composer CSS、运行时自动增高下限和 `--chat-content-max-width`（标准 1180px、紧凑 1120px、移动端全宽）。产品 chrome 的常规辅助文字至少为 12px；用户可调的聊天正文字号保持独立。移动端不继承桌面紧凑 spacing，继续使用抽屉式侧栏、约 44 CSS px 的高频触摸命中盒和无横向溢出。
 
 消息角色不只依赖色相区分：用户输入保持右侧、有宽度上限的轻量语义表面，助手回答保持左侧透明文档流，工具、推理和运行元信息继续作为次级层级。Composer 使用高不透明 raised surface、单一边界和受控焦点环；聊天顶部操作控件和 Composer 工具条统一复用“文件”按钮的 quiet raised surface（语义 border/background、轻量 shadow 和受控 blur），不叠加逐按钮玻璃片。用户历史消息与当前输入入口使用不同表面语义。该视觉契约不改变聊天正文 15px 基线、用户字号设置、消息折叠、编辑重试、附件或发送/恢复生命周期。
@@ -136,9 +138,13 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 前端消息正文只维护一个当前窗口 generation。切换会话、账户 reset、latest/full reload、around 跳转和显式窗口替换都会先递增 generation、失效旧分页并释放 loading；older/newer 同一时刻只有一个方向拥有分页请求，响应还必须匹配 session、generation、方向 owner 和原 cursor 才能合并。RunHub/SSE terminal 对账与可见客户端 cursor 对账捕获同一 generation，并与首次加载、刷新共用 latest message-window 可见投影，不能再用包含失效压缩摘要的 legacy paged messages 投影覆盖活动 UI；已加载的旧页继续由窗口边界保留。历史窗口不会被迟到 durable sync 改写；full reload 替换 durable 行，只保留尚待服务端对应记录接管的本地 optimistic 消息。滚动锚点同样绑定 generation，窗口替换后旧 observer 或 timeout 不能继续调整 scrollTop。
 
-本地失败 assistant 与 `incomplete` / `unsaved` partial output 属于不同展示事实：普通 error-only 副本在 retry 被服务端接受后才移除，准入拒绝时保留原回答；partial output 不被静默删除。latest-window 对账按 request/run 归属把尚未被 durable 结果接管的本地 assistant 留在所属 user turn，不能统一追加到消息列表末尾。`message_complete` 创建的 finalizing assistant 已占用当前流式展示槽，不能再并列渲染空 StreamingMessage。模型内部 `model_retry` 只提供短暂的 attempt/总次数和客户端剩余时间提示，正文、thinking、工具或终态到达后立即清除；服务端事件仍是权威状态。
+本地失败 assistant 与 `incomplete` / `unsaved` partial output 属于不同展示事实：普通 error-only 副本在 retry 被服务端接受后才移除，准入拒绝时保留原回答；partial output 不被静默删除。latest-window 对账按 request/run 归属把尚未被 durable 结果接管的本地 assistant 留在所属 user turn，不能统一追加到消息列表末尾。带 `message_id` 的 `message_complete` 不再先创建中间 finalizing assistant：同一流式槽保持可见并进入 syncing，直到 latest-window 已包含对应 durable assistant 才交接；同步暂时失败则保留现有正文并继续 run reconciliation。只有旧兼容事件没有 durable message ID，或服务端明确报告持久化失败时，才创建本地保护副本，避免丢失已生成内容。模型内部 `model_retry` 只提供短暂的 attempt/总次数和客户端剩余时间提示，正文、thinking、工具或终态到达后立即清除；服务端事件仍是权威状态。
 
-聊天自动跟随只在用户仍位于底部附近且未主动暂停时执行。首次新增消息可平滑进入视口，token 增量与布局校正继续按帧即时跟随；列表底部使用独立 `--chat-scroll-gap` 在 composer inset 之外保留阅读间距。新增 assistant segment 只在首次挂载时轻量淡入，不因每个 delta 重播动画，用户主动滚动后不会被抢回底部。
+聊天呈现把 `preparing`、请求尚未确认的 `sending`、accepted 后等待首个输出、generating、recovering 和 syncing 映射为明确文案与动作；accepted 前仍由 composer 保留草稿和附件，不提前制造 assistant 槽。恢复不足 800ms 时无感接续，持续恢复才显示状态，成功后短暂确认“已接续”；reduced-motion 关闭位移和平滑滚动但不隐藏状态。
+
+消息列表是聊天自动滚动的唯一 owner：composer、Markdown、工具和异步预览只通过 inset 或实际布局变化提供事实，不直接写聊天 scrollTop。自动跟随只在用户仍位于底部附近且未主动暂停时执行；当前 assistant 槽保留可被正文自然消耗的最小高度，首轮 user turn 位于阅读区上部，长回答再按帧跟随并继续保留 `--chat-scroll-gap`。用户 wheel、touch 或 pointer 操作立即暂停，回到近底或点击“回到最新”才恢复。用户主动折叠长输入和显式选择历史轮次仍属于直接导航动作，不受自动跟随 owner 限制。
+
+流式正文直接渲染已经到达的 Markdown，不用全文逐字切片或长期底部 mask 伪造速度。只有 `.streaming-markdown` 中当前最后一个顶层块在首次成为新视觉事实时执行轻量 opacity/translate；已稳定块、恢复快照前缀和 durable 交接不重播。thinking 与 tool tree 继续按稳定 segment/tool ID 更新，不更换 Markdown parser、不引入虚拟列表或动画依赖。
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功。`PATCH /session-folders/:id` 的 `name` 与 `pinned` 是同一个 owner-scoped 原子 mutation：空 payload 在写入前拒绝，实际携带的字段由一条 `UPDATE ... RETURNING` 同时提交并返回 canonical folder；名称唯一约束或数据库失败不能留下只改名称或只改置顶的半状态。
 
@@ -175,7 +181,7 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
   下载和 Agent 读取继续消费同一份无原始 HTML 注入的 Markdown sidecar。
 - 文件 list/download/preview/OCR refresh 的公共读取契约区分本地参数 400、用户域内缺失 404、解析未完成 409 与 repository/受管存储/sidecar 读取的带 request ID 5xx；缺失与无权访问保持不可区分。`ApiError` 保留后端 `code/retryable/request_id`，文件预览按稳定 code 展示缺失或暂无正文，并只在公共协议允许重试时提供重试入口，不再解析中英文错误字符串。列表扫描统一检查 `rows.Err()`，中途数据库故障不能伪装成部分成功结果。图片下载返回原始图片名和 MIME；已解析的 Office/PDF/文本附件下载受管 extracted sidecar，响应使用 `<原名>.txt` 与 `text/plain`，UI 明确标为“下载提取文本”并以响应 `Content-Disposition` 为准，不把 sidecar 伪装成仍被保留的原件。鉴权下载复用公共网络/timeout/401/404 错误边界；下载入口拥有取消和请求代次，旧请求不能覆盖当前反馈。鉴权图片的 object URL 还携带当前 `fileId + generation` owner：切换、清空或卸载会中止旧请求并只释放该请求创建的 URL，任何新文件的 committed render 都只能显示自己的 loading/success/error，不能短暂复用上一文件的 URL 或错误。
 - 文件上传准入与持久化复用同一公共错误协议：缺少 multipart/file/session 参数为稳定 400，文件与解析输出超限为 413，声明 MIME 不一致为 400，白名单或解析器不支持为 415，损坏/无可读正文为 422，会话文件数达到上限为 409；会话不存在或无权访问统一为 404，但 session/repository、受管存储、OCR queue 和 metadata 故障必须返回带 request ID 的 retryable 5xx。extractor owner 用 sentinel 区分用户内容、资源上限与依赖故障，Python sidecar 的响应正文、内部路径和上游原因不会传播到 Go 公共错误或 request log；metadata 创建失败会补偿删除本轮刚写入的原件、OCR buffer 或 extracted sidecar。
-- 浏览器附件上传使用原生 XHR 暴露真实传输字节进度，并为每个文件维护 queued/uploading/processing/failed/cancelled 状态。单项取消通过 AbortSignal 传播到 request context；上传 repository 的 duplicate/count/create 查询均响应取消，已持久化但客户端未接受的 staged 文件立即进入既有 `cleanup_claimed` 生命周期，避免“UI 已取消、附件仍可用”。失败或取消任务在当前会话 epoch 内保留用户原始 `File` 以便重试，切换会话或卸载会取消请求并释放内存引用。
+- 浏览器附件上传使用原生 XHR 暴露真实传输字节进度，并为每个文件维护 queued/uploading/processing/failed/cancelled 状态。composer 复用同一队列显示单行文件名/数量、阶段、合计进度和取消入口，完整列表、失败重试与文件管理仍归暂存附件抽屉所有，不复制第二套 task 状态。单项取消通过 AbortSignal 传播到 request context；上传 repository 的 duplicate/count/create 查询均响应取消，已持久化但客户端未接受的 staged 文件立即进入既有 `cleanup_claimed` 生命周期，避免“UI 已取消、附件仍可用”。失败或取消任务在当前会话 epoch 内保留用户原始 `File` 以便重试，切换会话或卸载会取消请求并释放内存引用。
 - 暂存附件列表由窄的 `{sessionId, sessionEpoch, listGeneration, attachmentRevision, errorGeneration}` owner 管理。初始加载和手动刷新只有在仍是最新请求、会话生命周期未变化且期间没有上传完成、删除、发送认领或 OCR mutation 时才能替换快照和裁剪 selection；迟到的列表、OCR、删除、发送回调和错误 timer 不得写入 A→B→A 后的新会话生命周期。
 - 前端上传预校验的 limits 接口与真实上传入口读取同一个 fail-closed policy；策略在冷启动不可用时二者都返回 `file_policy_unavailable`、带 request ID 的 retryable 503，不能由只读入口退化为无关联信息的裸错误。last-known-good、degraded 标记和实际上传最终裁决保持不变。
 - 人工 OCR retry 在 mutation 前分别校验附件 policy、Go/Python runtime 依赖和 MinerU 渠道配置；管理员未启用返回稳定 409，控制面或 runtime 暂不可读返回带 request ID 的 retryable 503。文件不存在或无权访问统一为 404，repository mutation 故障为可追踪 5xx。`RestartOCR` 提交新的 pending generation 后才复核受管原件：过期或确实缺失会用 `FailOCR` 补偿闭合为 failed 并返回 409，越界路径、非缺失型文件系统错误或补偿失败返回稳定可追踪 5xx；只有复核成功才唤醒 recovery runner。

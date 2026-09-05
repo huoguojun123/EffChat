@@ -67,6 +67,14 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain("min-w-0 max-w-full")
   })
 
+  it("marks only live markdown for last-block animation", () => {
+    const live = renderToStaticMarkup(<MarkdownContent content={"First\n\nSecond"} streaming />)
+    const settled = renderToStaticMarkup(<MarkdownContent content={"First\n\nSecond"} />)
+
+    expect(live).toContain("streaming-markdown")
+    expect(settled).not.toContain("streaming-markdown")
+  })
+
   it("renders reasoning as compact markdown without artifact previews", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent

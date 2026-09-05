@@ -6,7 +6,6 @@ import { AppLogo } from "@/components/AppLogo"
 import { MarkdownContent } from "./MarkdownContent"
 import { ToolCallTree } from "./ToolCallTree"
 import { ReasoningPanel } from "./ReasoningPanel"
-import { useTypewriter } from "@/hooks/useTypewriter"
 import { groupAssistantSegments } from "./assistantSegments"
 import { formatRetryDelay } from "@/lib/streamingRetry"
 
@@ -14,6 +13,7 @@ export function StreamingMessage() {
   const { content, thinking, toolCalls, segments, status, replayGap, retryTrace } = useChatStore((s) => s.streaming)
   const [retryRemainingMs, setRetryRemainingMs] = useState(0)
   const retryDelayMs = retryTrace?.delayMs ?? 0
+  const showRecovering = useDelayedFlag(status === "recovering", 800)
   const hasRetryTrace = retryTrace !== null && retryTrace !== undefined
   const retryTraceKey = retryTrace
     ? `${retryTrace.attempt}:${retryTrace.maxAttempts}:${retryTrace.delayMs}:${retryTrace.category}`
@@ -38,7 +38,7 @@ export function StreamingMessage() {
     return () => window.clearInterval(timer)
   }, [hasRetryTrace, retryDelayMs, retryTraceKey])
 
-  // 文本仍在到达时 active=true（恒速吐字）；syncing/收尾时直接对齐，避免拖尾。
+  // 仅实时增量标记当前 Markdown 块；syncing/恢复快照直接稳定显示，避免重播入场动效。
   const revealing = status === "sending" || status === "streaming"
   const rows = groupAssistantSegments(segments)
 
@@ -53,11 +53,19 @@ export function StreamingMessage() {
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span>{new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
               <span className="text-muted-foreground/60">·</span>
-              <span className="text-muted-foreground">{replayGap ? "正在补全回答" : status === "recovering" ? "正在恢复连接" : "正在回复"}</span>
+              <span className="text-muted-foreground">
+                {status === "syncing"
+                  ? "正在同步结果…"
+                  : showRecovering
+                    ? replayGap ? "正在补全回答…" : "正在接续回答…"
+                    : !content && !thinking && toolCalls.length === 0
+                      ? "已接收，等待回复…"
+                      : "正在回复…"}
+              </span>
             </div>
             {rows.length > 0 ? (
               rows.map((row, index) => (
-                <div key={index} className="space-y-3 animate-msg-in">
+                <div key={index} className="space-y-3">
                   {row.reasoning ? (
                     <StreamingReasoningSummary
                       reasoningKey={`stream:${index}`}
@@ -98,8 +106,9 @@ export function StreamingMessage() {
   )
 }
 
-// StreamingText 用打字机恒速揭示文本，并在底部加一层渐隐遮罩，让新行从虚化处浮现，
-// 形成 LobeHub 式的平滑淡入。揭示完成（revealing=false）时撤掉遮罩，显示完整内容。
+// ReactMarkdown keeps completed top-level nodes stable while content appends.
+// CSS animates only the current last node when it first becomes a new visual
+// block; existing text is never replayed through a synthetic typewriter.
 const StreamingText = memo(function StreamingText({
   content,
   ownerKey,
@@ -109,15 +118,21 @@ const StreamingText = memo(function StreamingText({
   ownerKey: string
   revealing: boolean
 }) {
-  const shown = useTypewriter(content.trimStart(), revealing)
   return (
     <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
-      <div className={revealing ? "streaming-reveal streaming-fade" : "streaming-reveal"}>
-        <MarkdownContent content={shown} streaming ownerKey={ownerKey} />
-      </div>
+      <MarkdownContent content={content.trimStart()} streaming={revealing} ownerKey={ownerKey} />
     </div>
   )
 })
+
+function useDelayedFlag(active: boolean, delayMs: number) {
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(active), active ? delayMs : 0)
+    return () => window.clearTimeout(timer)
+  }, [active, delayMs])
+  return active && visible
+}
 
 const StreamingReasoningSummary = memo(function StreamingReasoningSummary({
   reasoningKey,

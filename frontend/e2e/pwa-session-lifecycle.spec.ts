@@ -146,9 +146,12 @@ test("390px foreground return rechecks the active run without losing the current
 
 test("mobile chrome keeps high-frequency controls reachable through the 768px breakpoint", async ({ context, page }) => {
   await installChatRoutes(context)
-  for (const width of [390, 700]) {
+  for (const width of [320, 390, 700, 768]) {
     await page.setViewportSize({ width, height: 844 })
     await page.goto("/chat/1")
+    await expect(page.getByText("session-one-message")).toBeVisible()
+    await page.evaluate(() => document.fonts.ready)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     for (const button of [
       page.getByRole("button", { name: "打开侧边栏" }),
       page.getByRole("button", { name: "文件", exact: true }),
@@ -156,8 +159,15 @@ test("mobile chrome keeps high-frequency controls reachable through the 768px br
     ]) {
       const box = await button.boundingBox()
       expect(box).not.toBeNull()
-      expect(Math.round(box?.width || 0)).toBeGreaterThanOrEqual(44)
-      expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44)
+      // The painted button stays compact; test the real extended hit area,
+      // including its corners, rather than mistaking layout bounds for hit bounds.
+      await expect.poll(() => button.evaluate((element) => {
+        const box = element.getBoundingClientRect()
+        return [-21, 21].every((dx) => [-21, 21].every((dy) => {
+          const hit = document.elementFromPoint(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy)
+          return hit === element || (hit !== null && element.contains(hit))
+        }))
+      }), { message: await button.getAttribute("aria-label") || "mobile hit target" }).toBe(true)
     }
   }
 })

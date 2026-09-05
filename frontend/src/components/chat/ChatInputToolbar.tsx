@@ -77,7 +77,7 @@ export function ChatInputToolbar({
   const searchEnabled = searchMode !== "off"
 
   return (
-    <div data-testid="composer-toolbar" className={cn("flex items-center gap-0.5 p-0.5", className)}>
+    <div data-testid="composer-toolbar" className={cn("composer-toolbar flex items-center gap-0.5 p-0.5", className)}>
       <input
         ref={fileInputRef}
         type="file"

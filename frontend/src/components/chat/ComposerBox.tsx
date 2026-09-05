@@ -67,7 +67,16 @@ export function ComposerBox({
   onSubmit,
 }: ComposerBoxProps) {
   const uploadSummary = summarizeUploadTasks(uploadTasks)
-  const showStatus = Boolean(preparingSend || streamingStatus === "sending" || uploadSummary || attachments.length > 0 || uploadError || imageUnsupported || attachmentNotice || streamingStatus === "failed_local" || notice)
+  // Preparing/sending is already expressed by the send button's loading and
+  // accessible label. Keeping that transient state out of normal flow avoids
+  // changing the composer height while the message request is racing to its
+  // first response. Uploads and actionable notices remain in normal flow.
+  const showStatus = Boolean(uploadSummary || attachments.length > 0 || uploadError || imageUnsupported || attachmentNotice || streamingStatus === "failed_local" || notice)
+  const transientStatus = preparingSend
+    ? "正在准备消息…"
+    : streamingStatus === "sending"
+      ? "正在发送…"
+      : null
   const submitLabel = preparingSend
     ? "正在准备消息…"
     : streamingStatus === "sending"
@@ -90,10 +99,9 @@ export function ComposerBox({
           "relative rounded-[18px] border border-border/80 bg-popover/96 px-3 py-1 shadow-[0_4px_14px_-10px_rgba(0,0,0,0.22)] transition-[background-color,border-color,box-shadow] motion-control focus-within:border-ring/55 focus-within:bg-popover focus-within:ring-3 focus-within:ring-ring/12"
         )}
       >
+        <span role="status" aria-live="polite" className="sr-only">{transientStatus}</span>
         {showStatus && (
           <div role="status" aria-live="polite" className="mb-1 space-y-1.5 pt-1.5 animate-msg-in">
-            {preparingSend && <div className="text-xs text-muted-foreground">正在准备消息…</div>}
-            {streamingStatus === "sending" && <div className="text-xs text-muted-foreground">正在发送…</div>}
             {uploadSummary && (
               <div className="flex min-h-8 min-w-0 items-center gap-2 rounded-md bg-muted/45 px-2 text-xs text-muted-foreground">
                 <LoaderCircle className={`h-3.5 w-3.5 shrink-0 ${uploadSummary.active ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden="true" />

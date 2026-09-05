@@ -80,7 +80,9 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   await page.getByTestId("chat-input").fill("Explain this")
   await page.getByTestId("send-button").click()
 
-  await expect(page.getByText("正在准备消息…")).toBeVisible()
+  // Preparing is announced by the stable send control rather than inserting
+  // a transient row into the composer layout.
+  await expect(page.getByTestId("send-button")).toHaveAttribute("aria-label", "正在准备消息…")
   await expect(page.getByText("正在回复…")).toHaveCount(0)
   await expect(page.getByText("Explain this")).toBeVisible()
   await expect(page.getByText("已接收，等待回复…")).toBeVisible()
@@ -103,6 +105,84 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   await expect(page.getByText("Second paragraph")).toBeVisible()
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toHaveCount(1)
   await expect(page.getByText("正在同步结果…")).toHaveCount(0)
+})
+
+test("clears only the submitted draft while preserving edits made during preparation", async ({ page }) => {
+  let releasePreflight!: () => void
+  const preflightReleased = new Promise<void>((resolve) => { releasePreflight = resolve })
+  let historyRequests = 0
+  await installBaseRoutes(page, () => {
+    historyRequests += 1
+    return historyRequests === 1 ? [] : [message(2, "assistant", "Accepted")]
+  })
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await preflightReleased
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+      body: 'event: message_complete\ndata: {"message_id":2,"finish_reason":"stop"}\n\n',
+    })
+  })
+
+  await page.goto("/chat/1")
+  const input = page.getByTestId("chat-input")
+  await input.fill("original draft")
+  const composer = page.getByTestId("composer-surface")
+  const beforeSubmitHeight = Math.round((await composer.boundingBox())?.height || 0)
+  await page.getByTestId("send-button").click()
+  await expect(input).toHaveValue("")
+  expect(Math.round((await composer.boundingBox())?.height || 0)).toBe(beforeSubmitHeight)
+
+  // A user edit, including an Enter key while the request is preparing, is a
+  // new draft and must survive the old request's accepted callback.
+  await input.fill("new draft")
+  await input.press("Enter")
+  await expect(input).toHaveValue("new draft")
+  releasePreflight()
+  await expect(page.getByText("Accepted")).toBeVisible()
+  await expect(input).toHaveValue("new draft")
+})
+
+test("retries the captured request without refilling or replacing a newer draft", async ({ page }) => {
+  const streamBodies: Array<{ content?: string }> = []
+  let historyRequests = 0
+  await installBaseRoutes(page, () => {
+    historyRequests += 1
+    return historyRequests === 1 ? [] : [message(2, "assistant", "Retried answer")]
+  })
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    streamBodies.push((route.request().postDataJSON() || {}) as { content?: string })
+    if (streamBodies.length === 1) {
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "bad request" }) })
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+      body: 'event: message_complete\ndata: {"message_id":2,"finish_reason":"stop"}\n\n',
+    })
+  })
+
+  await page.goto("/chat/1")
+  const input = page.getByTestId("chat-input")
+  await input.fill("original payload")
+  await page.getByTestId("send-button").click()
+  await expect(input).toHaveValue("")
+  await expect(page.getByRole("button", { name: "重试" })).toBeVisible()
+
+  await input.fill("keep this draft")
+  await page.getByRole("button", { name: "重试" }).click()
+  await expect.poll(() => streamBodies.length).toBe(2)
+  expect(streamBodies[0]?.content).toBe("original payload")
+  expect(streamBodies[1]?.content).toBe("original payload")
+  await expect(input).toHaveValue("keep this draft")
+  await expect(page.getByText("Retried answer")).toBeVisible()
 })
 
 test("replay gaps delay recovery feedback and settle without replaying the whole answer", async ({ page }) => {

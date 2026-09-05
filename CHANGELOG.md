@@ -7,6 +7,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.9] - 2026-09-05
+
+### Fixed
+
+- Stabilized composer ownership during fast sends so late accepted/error callbacks cannot erase newer user input or move a failed assistant turn into the composer.
+- Retried HTTP 400 and other pre-acceptance failures from an immutable request snapshot without reading or restoring the current draft.
+- Kept preparing/sending feedback out of normal layout flow, preventing the composer from jumping while the request is being admitted.
+
+### Verification
+
+- Added focused Playwright coverage for draft revision isolation, retry snapshot behavior, and composer height stability; frontend lint, tests, and production/PWA build remain required release gates.
+- No database, migration, API, provider, deployment-topology, Korea, or persisted-user-data changes.
+
 ## [0.4.1-beta.8] - 2026-08-27
 
 ### Added

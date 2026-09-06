@@ -184,6 +184,41 @@ test("retries the captured request without refilling or replacing a newer draft"
   await expect(page.getByText("Retried answer")).toBeVisible()
 })
 
+test("restores or discards a failed submission without losing a newer draft", async ({ page }) => {
+  await installBaseRoutes(page, () => [])
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "synthetic upstream rejection" }) })
+  })
+
+  await page.goto("/chat/1")
+  const input = page.getByTestId("chat-input")
+  await input.fill("failed payload")
+  await page.getByTestId("send-button").click()
+  await expect(page.getByRole("button", { name: "恢复编辑" })).toBeVisible()
+
+  await input.fill("new draft to protect")
+  let confirmationMessage = ""
+  page.once("dialog", async (dialog) => {
+    confirmationMessage = dialog.message()
+    await dialog.accept()
+  })
+  await page.getByRole("button", { name: "恢复编辑" }).click()
+  expect(confirmationMessage).toContain("已有新草稿")
+  await expect(input).toHaveValue("failed payload")
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("effchat:session-drafts"))).toContain('"submissions":{}')
+
+  await input.fill("failed again")
+  await page.getByTestId("send-button").click()
+  await expect(page.getByRole("button", { name: "放弃" })).toBeVisible()
+  page.once("dialog", async (dialog) => dialog.accept())
+  await page.getByRole("button", { name: "放弃" }).click()
+  await expect(page.getByText("已放弃失败消息")).toBeVisible()
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("effchat:session-drafts"))).toBeNull()
+})
+
 test("turns an orphaned sending snapshot into a retryable failure after reload", async ({ page }) => {
   await installBaseRoutes(page, () => [])
   await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {

@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest"
-import { decodeChatDrafts, decodeChatDraftState } from "@/components/chat/chatDrafts"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { decodeChatDrafts, decodeChatDraftState, removeChatDraftSession } from "@/components/chat/chatDrafts"
 
 describe("chat draft persistence", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
   it("restores valid per-session drafts after a page reload", () => {
     expect(decodeChatDrafts('{"17":"还没发送的内容","65":"另一个会话"}')).toEqual({
       17: "还没发送的内容",
@@ -55,5 +57,25 @@ describe("chat draft persistence", () => {
         },
       },
     }))).toEqual({ drafts: {}, submissions: {} })
+  })
+
+  it("removes drafts and pending submissions for a deleted session", () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal("sessionStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      key: (index: number) => Array.from(values.keys())[index] ?? null,
+      get length() { return values.size },
+    })
+    sessionStorage.setItem("effchat:session-drafts", JSON.stringify({
+      version: 2,
+      drafts: { 17: "keep", 18: "delete" },
+      submissions: {
+        18: { id: 4, sessionId: 18, clientRunId: "run-18", content: "submitted", attachments: [], attachmentIds: [], status: "failed" },
+      },
+    }))
+    expect(removeChatDraftSession(18)).toBe(true)
+    expect(decodeChatDraftState(sessionStorage.getItem("effchat:session-drafts"))).toEqual({ drafts: { 17: "keep" }, submissions: {} })
   })
 })

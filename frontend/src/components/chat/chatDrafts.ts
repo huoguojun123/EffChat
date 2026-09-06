@@ -49,6 +49,18 @@ export function saveChatDrafts(drafts: Record<number, string>) {
   saveChatDraftState({ drafts, submissions: {} })
 }
 
+/** Remove all composer state that belongs to a deleted session. */
+export function removeChatDraftSession(sessionId: number): boolean {
+  if (!Number.isSafeInteger(sessionId) || sessionId <= 0) return false
+  const current = loadChatDraftState()
+  if (current.drafts[sessionId] === undefined && current.submissions[sessionId] === undefined) return true
+  const drafts = { ...current.drafts }
+  const submissions = { ...current.submissions }
+  delete drafts[sessionId]
+  delete submissions[sessionId]
+  return saveChatDraftState({ drafts, submissions })
+}
+
 export function decodeChatDrafts(raw: string | null): Record<number, string> {
   return decodeChatDraftState(raw).drafts
 }

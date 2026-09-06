@@ -1,33 +1,110 @@
+import type { AttachmentMeta } from "@/types"
+
 const storageKey = "effchat:session-drafts"
 
+export interface StoredSubmission {
+  id: number
+  sessionId: number
+  clientRunId: string
+  content: string
+  attachments: AttachmentMeta[]
+  attachmentIds: number[]
+  thinkingEffort?: string
+  status: "sending" | "failed"
+}
+
+export interface ChatDraftState {
+  drafts: Record<number, string>
+  submissions: Record<number, StoredSubmission>
+}
+
+export const emptyChatDraftState = (): ChatDraftState => ({ drafts: {}, submissions: {} })
+
+export function loadChatDraftState(): ChatDraftState {
+  if (typeof sessionStorage === "undefined") return emptyChatDraftState()
+  return decodeChatDraftState(sessionStorage.getItem(storageKey))
+}
+
+export function saveChatDraftState(state: ChatDraftState): boolean {
+  if (typeof sessionStorage === "undefined") return false
+  try {
+    if (Object.keys(state.drafts).length === 0 && Object.keys(state.submissions).length === 0) {
+      sessionStorage.removeItem(storageKey)
+    } else {
+      sessionStorage.setItem(storageKey, JSON.stringify({ version: 2, ...state }))
+    }
+    return true
+  } catch {
+    // Storage may be disabled or full. The composer remains usable in memory;
+    // callers must not treat a failed browser write as a successful handoff.
+    return false
+  }
+}
+
 export function loadChatDrafts(): Record<number, string> {
-  if (typeof sessionStorage === "undefined") return {}
-  return decodeChatDrafts(sessionStorage.getItem(storageKey))
+  return loadChatDraftState().drafts
 }
 
 export function saveChatDrafts(drafts: Record<number, string>) {
-  if (typeof sessionStorage === "undefined") return
-  if (Object.keys(drafts).length === 0) {
-    sessionStorage.removeItem(storageKey)
-    return
-  }
-  sessionStorage.setItem(storageKey, JSON.stringify(drafts))
+  saveChatDraftState({ drafts, submissions: {} })
 }
 
 export function decodeChatDrafts(raw: string | null): Record<number, string> {
-  if (!raw) return {}
+  return decodeChatDraftState(raw).drafts
+}
+
+export function decodeChatDraftState(raw: string | null): ChatDraftState {
+  if (!raw) return emptyChatDraftState()
   try {
     const value = JSON.parse(raw) as Record<string, unknown>
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+    if (!value || typeof value !== "object" || Array.isArray(value)) return emptyChatDraftState()
+
+    // Read the beta.9 flat shape without rewriting it until the next state change.
+    const source = value.version === 2 && value.drafts && typeof value.drafts === "object"
+      ? value.drafts as Record<string, unknown>
+      : value
     const drafts: Record<number, string> = {}
-    for (const [key, draft] of Object.entries(value)) {
+    for (const [key, draft] of Object.entries(source)) {
       const sessionId = Number(key)
       if (Number.isSafeInteger(sessionId) && sessionId > 0 && typeof draft === "string" && draft !== "") {
         drafts[sessionId] = draft
       }
     }
-    return drafts
+
+    const submissions: Record<number, StoredSubmission> = {}
+    if (value.version === 2 && value.submissions && typeof value.submissions === "object") {
+      for (const [key, rawSubmission] of Object.entries(value.submissions as Record<string, unknown>)) {
+        const sessionId = Number(key)
+        const parsed = decodeStoredSubmission(rawSubmission)
+        if (parsed && Number.isSafeInteger(sessionId) && sessionId > 0 && parsed.sessionId === sessionId) {
+          submissions[sessionId] = parsed
+        }
+      }
+    }
+    return { drafts, submissions }
   } catch {
-    return {}
+    return emptyChatDraftState()
+  }
+}
+
+function decodeStoredSubmission(value: unknown): StoredSubmission | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const id = Number(record.id)
+  const sessionId = Number(record.sessionId)
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(sessionId) || sessionId <= 0) return null
+  if (typeof record.clientRunId !== "string" || !record.clientRunId.trim()) return null
+  if (typeof record.content !== "string" || !record.content.trim()) return null
+  if (!Array.isArray(record.attachments) || !Array.isArray(record.attachmentIds)) return null
+  if (record.status !== "sending" && record.status !== "failed") return null
+  return {
+    id,
+    sessionId,
+    clientRunId: record.clientRunId,
+    content: record.content,
+    attachments: record.attachments as AttachmentMeta[],
+    attachmentIds: record.attachmentIds.filter((item): item is number => Number.isSafeInteger(item) && item > 0),
+    ...(typeof record.thinkingEffort === "string" && record.thinkingEffort ? { thinkingEffort: record.thinkingEffort } : {}),
+    status: record.status,
   }
 }

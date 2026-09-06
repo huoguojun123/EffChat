@@ -18,7 +18,7 @@ import { useThinkingEffortSelection } from "./useThinkingEffortSelection"
 import { ChatInputToolbar } from "./ChatInputToolbar"
 import { ComposerBox } from "./ComposerBox"
 import { getClipboardFiles } from "./chatInputUpload"
-import { loadChatDraftState, saveChatDraftState, type StoredSubmission } from "./chatDrafts"
+import { chatDraftSessionRemovedEvent, loadChatDraftState, saveChatDraftState, type StoredSubmission } from "./chatDrafts"
 import { SessionMemoryDialog } from "./SessionMemoryDialog"
 import { StagedAttachmentsDrawer } from "./StagedAttachmentsDrawer"
 import { SessionSkillMutationCoordinator, sessionSkills } from "./sessionSkillMutation"
@@ -303,6 +303,25 @@ export const ChatInput = forwardRef<ChatInputHandle>(function ChatInput(_props, 
   useEffect(() => {
     saveChatDraftState(draftState)
   }, [draftState])
+
+  useEffect(() => {
+    function handleSessionDraftRemoval(event: Event) {
+      const sessionId = (event as CustomEvent<{ sessionId?: unknown }>).detail?.sessionId
+      if (typeof sessionId !== "number" || !Number.isSafeInteger(sessionId) || sessionId <= 0) return
+      const current = draftStateRef.current
+      if (current.drafts[sessionId] === undefined && current.submissions[sessionId] === undefined) return
+      const drafts = { ...current.drafts }
+      const submissions = { ...current.submissions }
+      delete drafts[sessionId]
+      delete submissions[sessionId]
+      const next = { drafts, submissions }
+      draftStateRef.current = next
+      setDraftState(next)
+      if (failedSubmissionRef.current?.sessionId === sessionId) failedSubmissionRef.current = null
+    }
+    window.addEventListener(chatDraftSessionRemovedEvent, handleSessionDraftRemoval)
+    return () => window.removeEventListener(chatDraftSessionRemovedEvent, handleSessionDraftRemoval)
+  }, [])
 
   const resizeComposerTextarea = useCallback(() => {
     if (!textareaRef.current) return

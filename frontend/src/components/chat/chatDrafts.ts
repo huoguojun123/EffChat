@@ -1,6 +1,7 @@
 import type { AttachmentMeta } from "@/types"
 
 const storageKey = "effchat:session-drafts"
+export const chatDraftSessionRemovedEvent = "effchat:session-draft-removed"
 
 export interface StoredSubmission {
   id: number
@@ -58,7 +59,11 @@ export function removeChatDraftSession(sessionId: number): boolean {
   const submissions = { ...current.submissions }
   delete drafts[sessionId]
   delete submissions[sessionId]
-  return saveChatDraftState({ drafts, submissions })
+  const saved = saveChatDraftState({ drafts, submissions })
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(chatDraftSessionRemovedEvent, { detail: { sessionId } }))
+  }
+  return saved
 }
 
 export function decodeChatDrafts(raw: string | null): Record<number, string> {

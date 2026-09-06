@@ -414,8 +414,21 @@ func TestApplyGeminiThinkingUsesGenerationContract(t *testing.T) {
 		}
 	})
 
+	t.Run("3.8 level", func(t *testing.T) {
+		cfg := &gemini.Config{Model: "gemini-3.8-flash"}
+		applyGeminiThinking(&ChatRequest{
+			Provider:       "google",
+			ModelID:        "gemini-3.8-flash",
+			Reasoning:      true,
+			ThinkingEffort: string(modelbank.ThinkingEffortLow),
+		}, cfg)
+		if cfg.ThinkingConfig == nil || !cfg.ThinkingConfig.IncludeThoughts || cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow || cfg.ThinkingConfig.ThinkingBudget != nil {
+			t.Fatalf("thinking config = %#v, want LOW level only", cfg.ThinkingConfig)
+		}
+	})
+
 	t.Run("unknown version is not guessed", func(t *testing.T) {
-		cfg := &gemini.Config{Model: "gemini-3.8-unverified"}
+		cfg := &gemini.Config{Model: "gemini-4.0-unverified"}
 		applyGeminiThinking(&ChatRequest{Provider: "google", ModelID: cfg.Model, Reasoning: true}, cfg)
 		if cfg.ThinkingConfig != nil {
 			t.Fatalf("unknown Gemini thinking config = %#v", cfg.ThinkingConfig)

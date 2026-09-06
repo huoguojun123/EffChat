@@ -693,7 +693,7 @@ func ResolveGeminiThinkingContract(modelID string) GeminiThinkingContract {
 	if strings.Contains(id, "gemini-2.5") {
 		return GeminiThinkingBudget
 	}
-	for _, version := range []string{"gemini-3-", "gemini-3.1", "gemini-3.5", "gemini-3.6", "gemini-3.7"} {
+	for _, version := range []string{"gemini-3-", "gemini-3.1", "gemini-3.5", "gemini-3.6", "gemini-3.7", "gemini-3.8"} {
 		if strings.Contains(id, version) {
 			return GeminiThinkingLevel
 		}

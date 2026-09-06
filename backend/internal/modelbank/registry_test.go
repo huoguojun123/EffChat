@@ -85,6 +85,7 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "claude-opus-4-8", provider: "anthropic", context: 1000000, output: 128000, vision: true},
 		{id: "claude-sonnet-4-7", provider: "anthropic", context: 1000000, output: 128000, vision: true},
 		{id: "gemini-3.7-flash", provider: "google", context: 1048576, output: 65536, vision: true},
+		{id: "gemini-3.8-flash", provider: "google", context: 1048576, output: 65536, vision: true},
 		{id: "gemini-3.6-flash", provider: "google", context: 1048576, output: 65536, vision: true},
 		{id: "qwen3.8-max", provider: "qwen", context: 1000000, output: 131072, vision: true},
 		{id: "qwen3.8-flash", provider: "qwen", context: 1000000, output: 131072, vision: true},

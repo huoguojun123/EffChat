@@ -75,6 +75,40 @@ describe("MarkdownContent rendering", () => {
     expect(settled).not.toContain("streaming-markdown")
   })
 
+  it("reveals newly arrived prose sentence by sentence", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content="第一句先到这里。第二句紧接着到达！最后一句平稳收尾？"
+        streaming
+        reveal
+        ownerKey="sentence-reveal-test"
+      />
+    )
+
+    expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(3)
+    expect(html).toContain("--stream-reveal-delay:0ms")
+    expect(html).toContain("--stream-reveal-delay:72ms")
+    expect(html).toContain("--stream-reveal-delay:144ms")
+  })
+
+  it("keeps code and formula output outside sentence reveal spans", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content={'正文一句。\n\n`inline()`\n\n```ts\nconst ready = true\n```\n\n公式 $E=mc^2$'}
+        streaming
+        reveal
+        ownerKey="sentence-reveal-boundaries"
+      />
+    )
+
+    expect(html).toContain('data-reveal-unit="sentence"')
+    expect(html).toContain("mock-code-block")
+    expect(html).toContain("katex")
+    expect(html.match(/data-reveal-unit="sentence"/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(html).not.toMatch(/<code[^>]*data-reveal-unit="sentence"/)
+    expect(html).not.toMatch(/class="katex"[^>]*data-reveal-unit="sentence"/)
+  })
+
   it("renders reasoning as compact markdown without artifact previews", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent

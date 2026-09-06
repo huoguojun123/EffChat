@@ -186,9 +186,17 @@ interface RevealOptions {
   runtime: RevealRuntime
 }
 
+const STREAM_SENTENCE_STAGGER_MS = 72
+const STREAM_SENTENCE_STAGGER_CAP_MS = 216
+
+const sentenceSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
+  ? new Intl.Segmenter("zh", { granularity: "sentence" })
+  : null
+
 // Annotate only the newly visible suffix after Markdown has parsed the source.
 // This keeps Markdown punctuation, entities and generated preview nodes out of
-// the animation boundary calculation.
+// the animation boundary calculation. New prose is grouped by sentence rather
+// than by token/character so bursty SSE chunks still arrive as a calm sequence.
 function rehypeReveal(options: RevealOptions) {
   return (tree: RevealNode) => {
     let visibleIndex = 0
@@ -209,12 +217,25 @@ function rehypeReveal(options: RevealOptions) {
           if (!suffix.trim()) return
           const children: RevealNode[] = []
           if (split > 0) children.push({ type: "text", value: chars.slice(0, split).join("") })
-          children.push({
-            type: "element",
-            tagName: "span",
-            properties: { className: ["stream-reveal-text"] },
-            children: [{ type: "text", value: chars.slice(split).join("") }],
-          })
+          let sentenceIndex = 0
+          for (const sentence of splitRevealSentences(suffix)) {
+            if (!sentence.trim()) {
+              children.push({ type: "text", value: sentence })
+              continue
+            }
+            const delay = Math.min(sentenceIndex * STREAM_SENTENCE_STAGGER_MS, STREAM_SENTENCE_STAGGER_CAP_MS)
+            children.push({
+              type: "element",
+              tagName: "span",
+              properties: {
+                className: ["stream-reveal-text"],
+                "data-reveal-unit": "sentence",
+                style: `--stream-reveal-delay:${delay}ms`,
+              },
+              children: [{ type: "text", value: sentence }],
+            })
+            sentenceIndex++
+          }
           Object.assign(node, { type: "root", children })
         }
         return
@@ -232,6 +253,18 @@ function rehypeReveal(options: RevealOptions) {
     walk(tree)
     options.runtime.visibleLength = visibleIndex
   }
+}
+
+function splitRevealSentences(value: string) {
+  if (!value.trim()) return [value]
+  if (sentenceSegmenter) {
+    return Array.from(sentenceSegmenter.segment(value), ({ segment }) => segment)
+  }
+
+  // Older engines still get safe punctuation boundaries. A period only ends
+  // a sentence before whitespace/end, so decimals and dotted identifiers stay
+  // together instead of producing noisy micro-fades.
+  return value.match(/[^。！？!?\n]+(?:[。！？!?]+|\.(?=\s|$)|\n+|$)/gu) ?? [value]
 }
 
 function normalizeTexMathDelimiters(markdown: string) {

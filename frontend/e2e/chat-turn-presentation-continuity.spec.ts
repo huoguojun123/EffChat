@@ -24,12 +24,12 @@ function message(id: number, role: "user" | "assistant", content: string) {
   }
 }
 
-async function installBaseRoutes(page: Page, messageWindow: () => ReturnType<typeof message>[]) {
+async function installBaseRoutes(page: Page, messageWindow: () => ReturnType<typeof message>[], role: "user" | "admin" = "user") {
   await page.addInitScript(() => localStorage.setItem("token", "test-token"))
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request()
     const path = new URL(request.url()).pathname
-    if (path === "/api/v1/users/me") return route.fulfill({ json: { id: 1, username: "member", role: "user", is_active: true } })
+    if (path === "/api/v1/users/me") return route.fulfill({ json: { id: 1, username: role === "admin" ? "admin" : "member", role, is_active: true } })
     if (path === "/api/v1/system/info") return route.fulfill({ json: { system_name: "EffChat" } })
     if (path === "/api/v1/models") return route.fulfill({ json: { models: [{ id: "demo-model", provider: "demo", display_name: "Demo", enabled: true, sort_order: 1 }], total: 1 } })
     if (path === "/api/v1/sessions") return route.fulfill({ json: { sessions: [session], has_more: false, next_offset: 0 } })
@@ -239,6 +239,120 @@ test("turns an orphaned sending snapshot into a retryable failure after reload",
   await expect(input).toHaveValue("")
   await expect(page.getByRole("button", { name: "重试" })).toBeVisible()
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem("effchat:session-drafts"))).toContain('"status":"failed"')
+})
+
+test("remounting through the admin route keeps the composer send path usable", async ({ page }) => {
+  let streamCalls = 0
+  let historyRequests = 0
+  await installBaseRoutes(page, () => {
+    historyRequests += 1
+    return historyRequests === 1 ? [] : [message(2, "assistant", "Admin route answer")]
+  }, "admin")
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    streamCalls += 1
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+      body: 'event: message_complete\ndata: {"message_id":2,"finish_reason":"stop"}\n\n',
+    })
+  })
+
+  await page.goto("/admin/models")
+  await expect(page).toHaveURL(/\/admin\/models$/)
+  await page.goto("/chat/1")
+  await page.getByTestId("chat-input").fill("after admin remount")
+  await page.getByTestId("send-button").click()
+
+  await expect(page.getByText("Admin route answer")).toBeVisible()
+  expect(streamCalls).toBe(1)
+  await expect(page.getByTestId("chat-input")).toHaveValue("")
+})
+
+test("unknown delivery reconciles the existing run without sending a second request", async ({ page }) => {
+  let streamCalls = 0
+  let historyRequests = 0
+  let runId = ""
+  await installBaseRoutes(page, () => {
+    historyRequests += 1
+    return historyRequests === 1
+      ? []
+      : [
+          { ...message(1, "user", "uncertain delivery"), message_data: { role: "user", content: "uncertain delivery" } },
+          { ...message(2, "assistant", "reconciled answer"), message_data: { role: "assistant", content: "reconciled answer", metadata: { run_id: runId } } },
+        ]
+  })
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    streamCalls += 1
+    runId = (route.request().postDataJSON() as { client_run_id?: string } | null)?.client_run_id || "unknown-run"
+    await route.abort("failed")
+  })
+  await page.route("**/api/v1/sessions/1/runs/*", async (route) => {
+    const path = new URL(route.request().url()).pathname
+    const statusRunId = path.match(/\/runs\/([^/]+)$/)?.[1]
+    if (!statusRunId || statusRunId === "active") return route.fallback()
+    runId = statusRunId
+    await route.fulfill({ json: { run: { run_id: statusRunId, session_id: 1, kind: "chat", status: "completed", terminal_message_id: 2 } } })
+  })
+
+  await page.goto("/chat/1")
+  await page.getByTestId("chat-input").fill("uncertain delivery")
+  await page.getByTestId("send-button").click()
+
+  await expect(page.getByText("reconciled answer")).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId("chat-input")).toHaveValue("")
+  expect(streamCalls).toBe(1)
+  await expect(page.locator('[data-testid="message-item"][data-role="user"]')).toHaveCount(1)
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toHaveCount(1)
+})
+
+test("Enter and the send button stay blocked while an attachment is uploading", async ({ page }) => {
+  let uploadStarted!: () => void
+  const uploadBegun = new Promise<void>((resolve) => { uploadStarted = resolve })
+  let releaseUpload!: () => void
+  const uploadReleased = new Promise<void>((resolve) => { releaseUpload = resolve })
+  let preflightCalls = 0
+  let streamCalls = 0
+  await installBaseRoutes(page, () => [])
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    preflightCalls += 1
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    streamCalls += 1
+    await route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body: "" })
+  })
+  await page.route("**/api/v1/files", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback()
+    uploadStarted()
+    await uploadReleased
+    await route.fulfill({ status: 201, json: {
+      id: 7,
+      user_id: 1,
+      session_id: 1,
+      file_name: "pending.txt",
+      file_type: "text/plain",
+      file_size: 4,
+      status: "active",
+      extract_status: "ready",
+    } })
+  })
+
+  await page.goto("/chat/1")
+  await page.getByTestId("chat-input").fill("message with pending upload")
+  await page.getByTestId("file-input").setInputFiles({ name: "pending.txt", mimeType: "text/plain", buffer: Buffer.from("test") })
+  await uploadBegun
+  await expect(page.getByTestId("send-button")).toBeDisabled()
+  await page.getByTestId("chat-input").press("Enter")
+  expect(preflightCalls).toBe(0)
+  expect(streamCalls).toBe(0)
+  releaseUpload()
+  await expect(page.getByTestId("send-button")).toBeEnabled()
 })
 
 test("replay gaps delay recovery feedback and settle without replaying the whole answer", async ({ page }) => {

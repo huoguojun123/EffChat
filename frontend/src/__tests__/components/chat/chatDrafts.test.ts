@@ -78,4 +78,17 @@ describe("chat draft persistence", () => {
     expect(removeChatDraftSession(18)).toBe(true)
     expect(decodeChatDraftState(sessionStorage.getItem("effchat:session-drafts"))).toEqual({ drafts: { 17: "keep" }, submissions: {} })
   })
+
+  it("keeps the composer usable when session storage is unreadable or unwritable", async () => {
+    const { loadChatDraftState, saveChatDraftState } = await import("@/components/chat/chatDrafts")
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => { throw new DOMException("blocked", "SecurityError") },
+      setItem: () => { throw new DOMException("blocked", "SecurityError") },
+      removeItem: () => { throw new DOMException("blocked", "SecurityError") },
+    })
+
+    expect(loadChatDraftState()).toEqual({ drafts: {}, submissions: {} })
+    expect(saveChatDraftState({ drafts: { 17: "draft" }, submissions: {} })).toBe(false)
+    expect(saveChatDraftState({ drafts: {}, submissions: {} })).toBe(false)
+  })
 })

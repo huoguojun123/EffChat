@@ -22,13 +22,19 @@ export interface ChatDraftState {
 export const emptyChatDraftState = (): ChatDraftState => ({ drafts: {}, submissions: {} })
 
 export function loadChatDraftState(): ChatDraftState {
-  if (typeof sessionStorage === "undefined") return emptyChatDraftState()
-  return decodeChatDraftState(sessionStorage.getItem(storageKey))
+  try {
+    if (typeof sessionStorage === "undefined") return emptyChatDraftState()
+    return decodeChatDraftState(sessionStorage.getItem(storageKey))
+  } catch {
+    // Browser privacy settings can reject even a read. The editor must still
+    // start with an in-memory state instead of failing the whole chat route.
+    return emptyChatDraftState()
+  }
 }
 
 export function saveChatDraftState(state: ChatDraftState): boolean {
-  if (typeof sessionStorage === "undefined") return false
   try {
+    if (typeof sessionStorage === "undefined") return false
     if (Object.keys(state.drafts).length === 0 && Object.keys(state.submissions).length === 0) {
       sessionStorage.removeItem(storageKey)
     } else {

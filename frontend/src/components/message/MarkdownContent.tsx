@@ -264,7 +264,24 @@ function splitRevealSentences(value: string) {
   // Older engines still get safe punctuation boundaries. A period only ends
   // a sentence before whitespace/end, so decimals and dotted identifiers stay
   // together instead of producing noisy micro-fades.
-  return value.match(/[^。！？!?\n]+(?:[。！？!?]+|\.(?=\s|$)|\n+|$)/gu) ?? [value]
+  const chars = Array.from(value)
+  const segments: string[] = []
+  let start = 0
+  for (let index = 0; index < chars.length; index++) {
+    const char = chars[index]
+    const next = chars[index + 1] || ""
+    const terminal = "。！？!?".includes(char)
+      || char === "\n"
+      || (char === "." && (!next || /\s/u.test(next)))
+    if (!terminal) continue
+    let end = index + 1
+    while (end < chars.length && "”’》）)]}".includes(chars[end])) end++
+    segments.push(chars.slice(start, end).join(""))
+    start = end
+    index = end - 1
+  }
+  if (start < chars.length) segments.push(chars.slice(start).join(""))
+  return segments.length > 0 ? segments : [value]
 }
 
 function normalizeTexMathDelimiters(markdown: string) {

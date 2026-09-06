@@ -13,6 +13,7 @@ import { LoadingIndicator } from "@/components/ui/loading-indicator"
 interface Props {
   content: string
   streaming?: boolean
+  reveal?: boolean
   ownerKey?: string
   allowArtifactPreviews?: boolean
   variant?: "chat" | "document" | "reasoning"
@@ -21,6 +22,7 @@ interface Props {
 export const MarkdownContent = memo(function MarkdownContent({
   content,
   streaming = false,
+  reveal = false,
   ownerKey = "markdown",
   allowArtifactPreviews = true,
   variant = "chat",
@@ -28,6 +30,21 @@ export const MarkdownContent = memo(function MarkdownContent({
   const blockIndexRef = useRef(0)
   blockIndexRef.current = 0
   const normalizedContent = useMemo(() => normalizeMarkdownContent(content), [content])
+  const revealRuntime = useMemo(() => getRevealRuntime(ownerKey), [ownerKey])
+  const previousRevealSource = revealRuntime.source
+  const revealActive = reveal && variant !== "document"
+  const canContinueReveal = revealActive && revealRuntime.initialized
+    && normalizedContent.startsWith(previousRevealSource)
+  // The first snapshot for the current owner gets one bounded reveal. Once a
+  // live owner has measured visible text, the durable handoff starts at that
+  // length and only a genuinely new suffix can animate.
+  const revealStart = revealActive
+    ? canContinueReveal ? revealRuntime.visibleLength : 0
+    : -1
+  if (revealActive) {
+    revealRuntime.source = normalizedContent
+    revealRuntime.initialized = true
+  }
   const preparationIdentity = `${ownerKey}:${normalizedContent}`
   const [pendingState, setPendingState] = useState<{ identity: string; keys: Set<string> }>(() => ({
     identity: preparationIdentity,
@@ -40,6 +57,10 @@ export const MarkdownContent = memo(function MarkdownContent({
   const coordinatesPreviews = allowArtifactPreviews && !streaming && markdownHasDefaultInlinePreview(normalizedContent)
   const collecting = coordinatesPreviews && collectedIdentity !== preparationIdentity
   const preparing = collecting || pendingKeys.size > 0
+  // A slow inline preview must not hide the already-readable chat prose. The
+  // document reader keeps its existing coordinated concealment, while chat
+  // leaves the Markdown body interactive and only shows the local indicator.
+  const concealWhilePreparing = preparing && variant === "document"
   const markdownStyle = variant === "reasoning" ? {
     "--md-font-size": "12px",
     "--md-line-height": "1.45",
@@ -114,19 +135,104 @@ export const MarkdownContent = memo(function MarkdownContent({
         <LoadingIndicator label="正在准备图表" className="pointer-events-none absolute inset-x-0 top-0 z-10 h-24" />
       ) : null}
       <div
-        className={`markdown-body transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${variant === "reasoning" ? "text-muted-foreground" : ""} ${preparing ? "opacity-0" : "opacity-100"}`}
+        className={`markdown-body transition-opacity duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${variant === "reasoning" ? "text-muted-foreground" : ""} ${concealWhilePreparing ? "opacity-0" : "opacity-100"}`}
         style={markdownStyle}
         aria-busy={preparing}
-        aria-hidden={preparing || undefined}
-        inert={preparing || undefined}
+        aria-hidden={concealWhilePreparing || undefined}
+        inert={concealWhilePreparing || undefined}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+        rehypePlugins={revealStart >= 0 ? [rehypeKatex, [rehypeReveal, { start: revealStart, runtime: revealRuntime }]] : [rehypeKatex]}
+        components={components}
+      >
           {normalizedContent}
         </ReactMarkdown>
       </div>
     </div>
   )
 })
+
+interface RevealRuntime {
+  source: string
+  visibleLength: number
+  initialized: boolean
+}
+
+const revealRuntimeRegistry = new Map<string, RevealRuntime>()
+
+function getRevealRuntime(ownerKey: string): RevealRuntime {
+  const existing = revealRuntimeRegistry.get(ownerKey)
+  if (existing) return existing
+  const runtime = { source: "", visibleLength: 0, initialized: false }
+  revealRuntimeRegistry.set(ownerKey, runtime)
+  if (revealRuntimeRegistry.size > 64) {
+    const oldest = revealRuntimeRegistry.keys().next().value
+    if (oldest) revealRuntimeRegistry.delete(oldest)
+  }
+  return runtime
+}
+
+interface RevealNode {
+  type: string
+  value?: string
+  tagName?: string
+  properties?: Record<string, unknown>
+  children?: RevealNode[]
+}
+
+interface RevealOptions {
+  start: number
+  runtime: RevealRuntime
+}
+
+// Annotate only the newly visible suffix after Markdown has parsed the source.
+// This keeps Markdown punctuation, entities and generated preview nodes out of
+// the animation boundary calculation.
+function rehypeReveal(options: RevealOptions) {
+  return (tree: RevealNode) => {
+    let visibleIndex = 0
+    const walk = (node: RevealNode, excluded = false) => {
+      const classes = node.properties?.className
+      const isKatex = Array.isArray(classes) && classes.includes("katex")
+      const nextExcluded = excluded || node.tagName === "pre" || node.tagName === "code" || node.tagName === "svg" || node.tagName === "math" || isKatex
+      if (node.type === "text" && !excluded) {
+        const chars = Array.from(node.value || "")
+        const start = visibleIndex
+        visibleIndex += chars.length
+        if (options.start < visibleIndex && chars.length > 0) {
+          const split = Math.max(0, options.start - start)
+          const suffix = chars.slice(split).join("")
+          // Markdown can expose paragraph separators as standalone text
+          // nodes. Keep those nodes intact instead of animating invisible
+          // whitespace spans.
+          if (!suffix.trim()) return
+          const children: RevealNode[] = []
+          if (split > 0) children.push({ type: "text", value: chars.slice(0, split).join("") })
+          children.push({
+            type: "element",
+            tagName: "span",
+            properties: { className: ["stream-reveal-text"] },
+            children: [{ type: "text", value: chars.slice(split).join("") }],
+          })
+          Object.assign(node, { type: "root", children })
+        }
+        return
+      }
+      if (node.children && !nextExcluded) {
+        const children: RevealNode[] = []
+        for (const child of node.children) {
+          walk(child, nextExcluded)
+          if (child.type === "root" && child.children) children.push(...child.children)
+          else children.push(child)
+        }
+        node.children = children
+      }
+    }
+    walk(tree)
+    options.runtime.visibleLength = visibleIndex
+  }
+}
 
 function normalizeTexMathDelimiters(markdown: string) {
   return markdown

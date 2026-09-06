@@ -10,7 +10,7 @@ import { groupAssistantSegments } from "./assistantSegments"
 import { formatRetryDelay } from "@/lib/streamingRetry"
 
 export function StreamingMessage() {
-  const { content, thinking, toolCalls, segments, status, replayGap, retryTrace } = useChatStore((s) => s.streaming)
+  const { content, thinking, toolCalls, segments, status, requestId, replayGap, retryTrace } = useChatStore((s) => s.streaming)
   const [retryRemainingMs, setRetryRemainingMs] = useState(0)
   const retryDelayMs = retryTrace?.delayMs ?? 0
   const showRecovering = useDelayedFlag(status === "recovering", 800)
@@ -38,8 +38,10 @@ export function StreamingMessage() {
     return () => window.clearInterval(timer)
   }, [hasRetryTrace, retryDelayMs, retryTraceKey])
 
-  // 仅实时增量标记当前 Markdown 块；syncing/恢复快照直接稳定显示，避免重播入场动效。
-  const revealing = status === "sending" || status === "streaming"
+  // The run ID is the visual ownership key. It survives recovery and the
+  // live-to-durable handoff, so already-visible output is never replayed.
+  const revealOwner = `run:${requestId || "stream"}`
+  const revealing = Boolean(requestId)
   const rows = groupAssistantSegments(segments)
 
   return (
@@ -68,22 +70,22 @@ export function StreamingMessage() {
                 <div key={index} className="space-y-3">
                   {row.reasoning ? (
                     <StreamingReasoningSummary
-                      reasoningKey={`stream:${index}`}
+                      reasoningKey={`${revealOwner}:${index}:reasoning`}
                       segments={row.reasoning.segments}
+                      reveal={revealing}
                     />
                   ) : null}
                   {row.content?.trim() ? (
                     <StreamingText
                       content={row.content}
-                      ownerKey={`stream:${index}`}
-                      // 只有最后一个 segment 在吐字；之前的 segment 已定稿，直接全量显示。
-                      revealing={revealing && index === rows.length - 1}
+                      ownerKey={`${revealOwner}:${index}:content`}
+                      reveal={revealing}
                     />
                   ) : null}
                 </div>
               ))
             ) : content ? (
-              <StreamingText content={content} ownerKey="stream:fallback" revealing={revealing} />
+              <StreamingText content={content} ownerKey={`${revealOwner}:fallback:content`} reveal={revealing} />
             ) : null}
 
             {retryTrace ? (
@@ -106,21 +108,20 @@ export function StreamingMessage() {
   )
 }
 
-// ReactMarkdown keeps completed top-level nodes stable while content appends.
-// CSS animates only the current last node when it first becomes a new visual
-// block; existing text is never replayed through a synthetic typewriter.
+// MarkdownContent annotates only newly arrived visible text; it does not
+// throttle network deltas or emulate a typewriter.
 const StreamingText = memo(function StreamingText({
   content,
   ownerKey,
-  revealing,
+  reveal,
 }: {
   content: string
   ownerKey: string
-  revealing: boolean
+  reveal: boolean
 }) {
   return (
     <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
-      <MarkdownContent content={content.trimStart()} streaming={revealing} ownerKey={ownerKey} />
+      <MarkdownContent content={content.trimStart()} streaming={reveal} reveal={reveal} ownerKey={ownerKey} />
     </div>
   )
 })
@@ -137,9 +138,11 @@ function useDelayedFlag(active: boolean, delayMs: number) {
 const StreamingReasoningSummary = memo(function StreamingReasoningSummary({
   reasoningKey,
   segments,
+  reveal,
 }: {
   reasoningKey: string
   segments: AssistantSegment[]
+  reveal: boolean
 }) {
   const thinking = segments.map((segment) => segment.thinking?.trim()).filter(Boolean).join("\n\n")
   const toolCalls = segments.flatMap((segment) => segment.tool_calls || [])
@@ -151,7 +154,8 @@ const StreamingReasoningSummary = memo(function StreamingReasoningSummary({
             {segment.thinking?.trim() ? (
               <MarkdownContent
                 content={segment.thinking.trim()}
-                streaming
+                streaming={reveal}
+                reveal={reveal}
                 ownerKey={`${reasoningKey}:${index}:thinking`}
                 allowArtifactPreviews={false}
                 variant="reasoning"

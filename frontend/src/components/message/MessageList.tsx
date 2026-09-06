@@ -527,7 +527,14 @@ export function MessageList() {
                   stopsZeroOutputRun={msg.id === editableUserMessageId && (streamingStatus === "streaming" || streamingStatus === "recovering")}
                 />
               ) : (
-                <AssistantMessage message={msg} isLastAssistant={msg.id === lastAssistantId && !isStreaming} />
+                <AssistantMessage
+                  message={msg}
+                  isLastAssistant={msg.id === lastAssistantId && !isStreaming}
+                  // Only the current answer owns reveal state. Historical
+                  // messages remain inert, while a live local/durable pair
+                  // shares the same run owner inside MarkdownContent.
+                  reveal={msg.id === currentAssistantSlotId || msg.id === lastAssistantId}
+                />
               )}
             </div>
           ))}

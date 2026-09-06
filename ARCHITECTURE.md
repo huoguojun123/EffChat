@@ -95,7 +95,7 @@ PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化�
 
 ## 发送消息链路
 
-1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；只保存每个会话的草稿文本，不持久化像素高度。
+1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；编辑草稿与一次提交快照分开保存在当前标签页的 sessionStorage，不持久化像素高度。提交快照记录 session、client run、原文和受管附件元数据；受理后按同一身份清理，明确失败或刷新后无活动 owner 的 `sending` 快照转为可重试状态，不自动覆盖新草稿。
 2. `useSSE.sendMessage` 调用 `POST /api/v1/sessions/:id/messages/stream`。
 3. 后端在进入 Agent 前校验会话模型、渠道、用户组限额和并发 run。
 4. `EinoAgent.StreamChat` 从 DB 实时解析渠道、模型能力、工具治理和外部服务配置。
@@ -144,7 +144,7 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 消息列表是聊天自动滚动的唯一 owner：composer、Markdown、工具和异步预览只通过 inset 或实际布局变化提供事实，不直接写聊天 scrollTop。自动跟随只在用户仍位于底部附近且未主动暂停时执行；当前 assistant 槽保留可被正文自然消耗的最小高度，首轮 user turn 位于阅读区上部，长回答再按帧跟随并继续保留 `--chat-scroll-gap`。用户 wheel、touch 或 pointer 操作立即暂停，回到近底或点击“回到最新”才恢复。用户主动折叠长输入和显式选择历史轮次仍属于直接导航动作，不受自动跟随 owner 限制。
 
-流式正文直接渲染已经到达的 Markdown，不用全文逐字切片或长期底部 mask 伪造速度。只有 `.streaming-markdown` 中当前最后一个顶层块在首次成为新视觉事实时执行轻量 opacity/translate；已稳定块、恢复快照前缀和 durable 交接不重播。thinking 与 tool tree 继续按稳定 segment/tool ID 更新，不更换 Markdown parser、不引入虚拟列表或动画依赖。
+流式正文直接渲染已经到达的 Markdown，不用全文逐字切片或长期底部 mask 伪造速度。当前最新回答以 `run:<requestId>:<segment>:<kind>` 作为有限呈现 owner；实时 delta、恢复快照、syncing 和 durable 消息沿用同一 owner，只有尚未显示的可见文本后缀加轻量 opacity 渐显，已稳定前缀和历史消息不重播。代码、公式、SVG、KaTeX 与预览节点不拆字；慢预览只影响局部预览面，chat 正文保持可读。thinking 与 tool tree 继续按稳定 segment/tool ID 更新，不更换 Markdown parser、不引入虚拟列表或动画依赖；`prefers-reduced-motion` 下直接显示。
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功。`PATCH /session-folders/:id` 的 `name` 与 `pinned` 是同一个 owner-scoped 原子 mutation：空 payload 在写入前拒绝，实际携带的字段由一条 `UPDATE ... RETURNING` 同时提交并返回 canonical folder；名称唯一约束或数据库失败不能留下只改名称或只改置顶的半状态。
 

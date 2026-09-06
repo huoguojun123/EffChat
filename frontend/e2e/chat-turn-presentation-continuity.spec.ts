@@ -98,8 +98,7 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   expect(turnPosition).toBeLessThan(0.4)
 
   const liveMarkdown = page.locator(".streaming-markdown .markdown-body")
-  await expect(liveMarkdown.locator(":scope > *")).toHaveCount(2)
-  await expect(liveMarkdown.locator(":scope > :last-child")).toHaveCSS("animation-name", "streaming-block-in")
+  await liveMarkdown.locator(".stream-reveal-text").first().waitFor({ state: "attached" })
   await expect(page.locator(".streaming-fade")).toHaveCount(0)
 
   await expect(page.getByText("Second paragraph")).toBeVisible()
@@ -185,6 +184,28 @@ test("retries the captured request without refilling or replacing a newer draft"
   await expect(page.getByText("Retried answer")).toBeVisible()
 })
 
+test("turns an orphaned sending snapshot into a retryable failure after reload", async ({ page }) => {
+  await installBaseRoutes(page, () => [])
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.route("**/api/v1/sessions/1/messages/stream", async (route) => {
+    await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "synthetic upstream rejection" }) })
+  })
+
+  await page.goto("/chat/1")
+  const input = page.getByTestId("chat-input")
+  await input.fill("orphaned sending snapshot")
+  await page.getByTestId("send-button").click()
+  await expect(page.getByRole("button", { name: "重试" })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("effchat:session-drafts"))).toContain('"status":"failed"')
+
+  await page.reload()
+  await expect(input).toHaveValue("")
+  await expect(page.getByRole("button", { name: "重试" })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("effchat:session-drafts"))).toContain('"status":"failed"')
+})
+
 test("replay gaps delay recovery feedback and settle without replaying the whole answer", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.emulateMedia({ reducedMotion: "reduce" })
@@ -229,10 +250,10 @@ test("replay gaps delay recovery feedback and settle without replaying the whole
 
   await page.goto("/chat/1")
   await expect(page.getByText("Recovered prefix")).toBeVisible()
-  await expect(page.locator(".markdown-body > :last-child").filter({ hasText: "Recovered prefix" })).toHaveCSS("animation-name", "none")
+  await expect(page.locator(".streaming-markdown .stream-reveal-text").first()).toHaveCSS("animation-name", "none")
   await expect(page.getByText("正在补全回答…")).toHaveCount(0)
   await expect(page.getByText("正在补全回答…")).toBeVisible({ timeout: 1_000 })
-  await expect(page.getByText("Recovered prefix continued")).toBeVisible()
+  await expect(page.getByText("Recovered prefix continued").first()).toBeVisible()
   await expect(page.getByText("已接续")).toBeVisible()
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toHaveCount(1)
 })

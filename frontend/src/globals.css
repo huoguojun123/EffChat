@@ -1071,7 +1071,7 @@ html.app-route-leaving #root {
   --stream-reveal-delay: 0ms;
   /* A sentence stays readable while the next one joins it. The overlap is
      intentional: the stream should feel continuous, not like stacked cards. */
-  animation: streaming-text-in 520ms var(--motion-ease-standard) both;
+  animation: streaming-text-in 1500ms var(--motion-ease-standard) both;
   animation-delay: var(--stream-reveal-delay);
 }
 

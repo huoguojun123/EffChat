@@ -4,6 +4,7 @@ import { useChatStore } from "@/stores/chat"
 import { Loader2 } from "lucide-react"
 import { AppLogo } from "@/components/AppLogo"
 import { MarkdownContent } from "./MarkdownContent"
+import { useStreamPresentation } from "@/hooks/useStreamPresentation"
 import { ToolCallTree } from "./ToolCallTree"
 import { ReasoningPanel } from "./ReasoningPanel"
 import { groupAssistantSegments } from "./assistantSegments"
@@ -108,8 +109,8 @@ export function StreamingMessage() {
   )
 }
 
-// MarkdownContent annotates only newly arrived visible text; it does not
-// throttle network deltas or emulate a typewriter.
+// useStreamPresentation keeps network reception eager while limiting what has
+// entered layout. MarkdownContent only animates the newly released tail.
 const StreamingText = memo(function StreamingText({
   content,
   ownerKey,
@@ -119,9 +120,10 @@ const StreamingText = memo(function StreamingText({
   ownerKey: string
   reveal: boolean
 }) {
+  const displayedContent = useStreamPresentation(content.trimStart(), ownerKey, reveal)
   return (
     <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
-      <MarkdownContent content={content.trimStart()} streaming={reveal} reveal={reveal} ownerKey={ownerKey} />
+      <MarkdownContent content={displayedContent} streaming={reveal} reveal={reveal} ownerKey={ownerKey} />
     </div>
   )
 })

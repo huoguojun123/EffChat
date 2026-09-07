@@ -144,7 +144,7 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 消息列表是聊天自动滚动的唯一 owner：composer、Markdown、工具和异步预览只通过 inset 或实际布局变化提供事实，不直接写聊天 scrollTop。自动跟随只在用户仍位于底部附近且未主动暂停时执行；当前 assistant 槽保留可被正文自然消耗的最小高度，首轮 user turn 位于阅读区上部，长回答再按帧跟随并继续保留 `--chat-scroll-gap`。用户 wheel、touch 或 pointer 操作立即暂停，回到近底或点击“回到最新”才恢复。用户主动折叠长输入和显式选择历史轮次仍属于直接导航动作，不受自动跟随 owner 限制。
 
-流式正文直接渲染已经到达的 Markdown，不用全文逐字切片或长期底部 mask 伪造速度。当前最新回答以 `run:<requestId>:<segment>:<kind>` 作为有限呈现 owner；实时 delta、恢复快照、syncing 和 durable 消息沿用同一 owner，只有尚未显示的可见文本后缀按句子拆成短暂 opacity 渐显单元，已稳定前缀和历史消息不重播。句子之间只使用有上限的 CSS 交错延迟，不排队网络事件、不使用逐字符 timer。代码、公式、SVG、KaTeX 与预览节点不拆字；慢预览只影响局部预览面，chat 正文保持可读。thinking 与 tool tree 继续按稳定 segment/tool ID 更新，不更换 Markdown parser、不引入虚拟列表或动画依赖；`prefers-reduced-motion` 下直接显示。
+流式正文直接渲染已经到达的 Markdown，不用全文逐字切片或长期底部 mask 伪造速度。当前最新回答以 `run:<requestId>:<segment>:<kind>` 作为有限呈现 owner；实时 delta、恢复快照、syncing 和 durable 消息沿用同一 owner，只有尚未显示的可见文本后缀按句子拆成短暂 opacity 渐显单元，已稳定前缀和历史消息不重播。句子之间使用约 520ms 的 CSS 渐显、180ms 的起始错峰和 720ms 的总延迟上限，让后一单元在前一单元完成前自然加入；这只是呈现节奏，不排队网络事件、不逐字符计时。跨 Markdown 文本节点仍共享同一批次序号，段落、列表和同步 burst 不会全部同时启动。代码、公式、SVG、KaTeX 与预览节点不拆字；慢预览只影响局部预览面，chat 正文保持可读。thinking 与 tool tree 继续按稳定 segment/tool ID 更新，不更换 Markdown parser、不引入虚拟列表或动画依赖；`prefers-reduced-motion` 下直接显示。
 
 会话文件夹 list/create/update/delete 使用独立的资源边界：ID 与名称校验为稳定 400，不存在、无权访问或 mutation rows-affected 竞态统一为 `session_folder_not_found` 404，repository 查询、扫描和写入故障为带 request ID 的 retryable 5xx。列表必须在返回前检查 `rows.Err()`，不能把中途数据库故障伪装成部分成功。`PATCH /session-folders/:id` 的 `name` 与 `pinned` 是同一个 owner-scoped 原子 mutation：空 payload 在写入前拒绝，实际携带的字段由一条 `UPDATE ... RETURNING` 同时提交并返回 canonical folder；名称唯一约束或数据库失败不能留下只改名称或只改置顶的半状态。
 

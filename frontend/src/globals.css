@@ -875,8 +875,14 @@ html.app-route-leaving #root {
 }
 
 @keyframes streaming-text-in {
-  from { opacity: 0.35; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+    transform: translate3d(0, 2px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
 }
 
 @keyframes loading-indicator-glide {
@@ -1063,7 +1069,9 @@ html.app-route-leaving #root {
 
 .stream-reveal-text {
   --stream-reveal-delay: 0ms;
-  animation: streaming-text-in var(--motion-duration-surface) var(--motion-ease-standard) both;
+  /* A sentence stays readable while the next one joins it. The overlap is
+     intentional: the stream should feel continuous, not like stacked cards. */
+  animation: streaming-text-in 520ms var(--motion-ease-standard) both;
   animation-delay: var(--stream-reveal-delay);
 }
 

@@ -186,8 +186,8 @@ interface RevealOptions {
   runtime: RevealRuntime
 }
 
-const STREAM_SENTENCE_STAGGER_MS = 72
-const STREAM_SENTENCE_STAGGER_CAP_MS = 216
+const STREAM_SENTENCE_STAGGER_MS = 180
+const STREAM_SENTENCE_STAGGER_CAP_MS = 720
 
 const sentenceSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
   ? new Intl.Segmenter("zh", { granularity: "sentence" })
@@ -200,6 +200,7 @@ const sentenceSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
 function rehypeReveal(options: RevealOptions) {
   return (tree: RevealNode) => {
     let visibleIndex = 0
+    let sentenceIndex = 0
     const walk = (node: RevealNode, excluded = false) => {
       const classes = node.properties?.className
       const isKatex = Array.isArray(classes) && classes.includes("katex")
@@ -217,7 +218,6 @@ function rehypeReveal(options: RevealOptions) {
           if (!suffix.trim()) return
           const children: RevealNode[] = []
           if (split > 0) children.push({ type: "text", value: chars.slice(0, split).join("") })
-          let sentenceIndex = 0
           for (const sentence of splitRevealSentences(suffix)) {
             if (!sentence.trim()) {
               children.push({ type: "text", value: sentence })

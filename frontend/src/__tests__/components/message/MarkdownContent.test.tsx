@@ -87,8 +87,23 @@ describe("MarkdownContent rendering", () => {
 
     expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(3)
     expect(html).toContain("--stream-reveal-delay:0ms")
-    expect(html).toContain("--stream-reveal-delay:72ms")
-    expect(html).toContain("--stream-reveal-delay:144ms")
+    expect(html).toContain("--stream-reveal-delay:180ms")
+    expect(html).toContain("--stream-reveal-delay:360ms")
+  })
+
+  it("keeps sentence stagger continuous across markdown text nodes", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content={"第一段先到这里。\n\n第二段随后出现。"}
+        streaming
+        reveal
+        ownerKey="sentence-reveal-cross-node"
+      />
+    )
+
+    expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(2)
+    expect(html).toContain("--stream-reveal-delay:0ms")
+    expect(html).toContain("--stream-reveal-delay:180ms")
   })
 
   it("keeps code and formula output outside sentence reveal spans", () => {

@@ -187,16 +187,15 @@ interface RevealOptions {
 }
 
 const STREAM_SENTENCE_STAGGER_MS = 180
-const STREAM_SENTENCE_STAGGER_CAP_MS = 720
 
 const sentenceSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
   ? new Intl.Segmenter("zh", { granularity: "sentence" })
   : null
 
-// Annotate only the newly visible suffix after Markdown has parsed the source.
-// This keeps Markdown punctuation, entities and generated preview nodes out of
-// the animation boundary calculation. New prose is grouped by sentence rather
-// than by token/character so bursty SSE chunks still arrive as a calm sequence.
+// Annotate only the newly released suffix after Markdown has parsed the source.
+// The presentation queue owns when content reaches this layer; the renderer
+// only preserves that owner-relative tail without resetting a later burst to a
+// shared delay cap.
 function rehypeReveal(options: RevealOptions) {
   return (tree: RevealNode) => {
     let visibleIndex = 0
@@ -223,7 +222,7 @@ function rehypeReveal(options: RevealOptions) {
               children.push({ type: "text", value: sentence })
               continue
             }
-            const delay = Math.min(sentenceIndex * STREAM_SENTENCE_STAGGER_MS, STREAM_SENTENCE_STAGGER_CAP_MS)
+            const delay = sentenceIndex * STREAM_SENTENCE_STAGGER_MS
             children.push({
               type: "element",
               tagName: "span",

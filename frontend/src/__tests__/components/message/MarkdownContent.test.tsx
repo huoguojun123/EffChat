@@ -106,6 +106,32 @@ describe("MarkdownContent rendering", () => {
     expect(html).toContain("--stream-reveal-delay:180ms")
   })
 
+  it("does not collapse a burst of new prose onto one reveal delay", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content="第一句。第二句。第三句。第四句。第五句。第六句。"
+        streaming
+        reveal
+        ownerKey="sentence-reveal-no-delay-cap"
+      />
+    )
+
+    expect(html).toContain("--stream-reveal-delay:900ms")
+    expect(html.match(/--stream-reveal-delay:720ms/g)).toHaveLength(1)
+  })
+
+  it("keeps settled owner text outside the next released tail", () => {
+    renderToStaticMarkup(
+      <MarkdownContent content="第一句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
+    )
+    const html = renderToStaticMarkup(
+      <MarkdownContent content="第一句。第二句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
+    )
+
+    expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(1)
+    expect(html).toContain("第二句。")
+  })
+
   it("keeps code and formula output outside sentence reveal spans", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent

@@ -24,28 +24,28 @@ export function nextStreamPresentationUnit(
   const lineEnd = chars.indexOf("\n")
   if (insideFence(target.slice(0, offset)) || startsFence(suffix)) {
     if (lineEnd < 0) return null
-    return createUnit(suffix, chars, lineEnd + 1, offset)
+    return createUnit(chars, lineEnd + 1, offset)
   }
 
   const limit = Math.min(chars.length, STREAM_MAX_PROSE_CHARS)
   let softBoundary = -1
   for (let index = 0; index < limit; index++) {
     const char = chars[index]
-    if ("。！？!?".includes(char)) return createUnit(suffix, chars, index + 1, offset)
-    if (char === "\n") return createUnit(suffix, chars, index + 1, offset)
+    if ("。！？!?".includes(char)) return createUnit(chars, index + 1, offset)
+    if (char === "\n") return createUnit(chars, index + 1, offset)
     if (/\s/u.test(char) && index + 1 >= STREAM_MIN_UNIT_CHARS) softBoundary = index + 1
   }
 
   if (chars.length <= STREAM_MAX_PROSE_CHARS && !allowPartial) return null
   const end = softBoundary > 0 ? softBoundary : limit
-  return createUnit(suffix, chars, end, offset)
+  return createUnit(chars, end, offset)
 }
 
 export function presentationDelayMs(visualCost: number) {
   return Math.max(STREAM_MIN_RELEASE_GAP_MS, Math.ceil((visualCost / STREAM_VISUAL_RATE) * 1000))
 }
 
-function createUnit(source: string, chars: string[], end: number, offset: number): StreamPresentationUnit {
+function createUnit(chars: string[], end: number, offset: number): StreamPresentationUnit {
   const text = chars.slice(0, end).join("")
   return {
     end: offset + text.length,

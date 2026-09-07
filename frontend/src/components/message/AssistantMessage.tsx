@@ -4,6 +4,7 @@ import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loa
 import { AppLogo } from "@/components/AppLogo"
 import { deleteAnswerAttempt, selectAnswerAttempt } from "@/api/messages"
 import { MarkdownContent } from "./MarkdownContent"
+import { shouldContinueStreamPresentation, useStreamPresentation } from "@/hooks/useStreamPresentation"
 import { useSSE } from "@/hooks/useSSE"
 import { useChatStore } from "@/stores/chat"
 import { ToolCallTree } from "./ToolCallTree"
@@ -126,6 +127,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
                   runId={messageRunId(message)}
                   segments={segments}
                   reveal={reveal}
+                  presenting={reveal && (isFinalizing || isStreaming)}
                 />
               </>
             )}
@@ -261,11 +263,13 @@ const AssistantSegments = memo(function AssistantSegments({
   runId,
   segments,
   reveal,
+  presenting,
 }: {
   messageId: number
   runId: string
   segments: AssistantSegment[]
   reveal: boolean
+  presenting: boolean
 }) {
   const rows = useMemo(() => groupAssistantSegments(segments), [segments])
   const ownerPrefix = runId ? `run:${runId}` : `message:${messageId}`
@@ -281,17 +285,36 @@ const AssistantSegments = memo(function AssistantSegments({
             />
           ) : null}
           {row.content?.trim() ? (
-            <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
-              <MarkdownContent
-                content={row.content.trim()}
-                reveal={reveal}
-                ownerKey={`${ownerPrefix}:${index}:content`}
-              />
-            </div>
+            <AssistantContent
+              content={row.content.trim()}
+              ownerKey={`${ownerPrefix}:${index}:content`}
+              presenting={presenting}
+              reveal={reveal}
+            />
           ) : null}
         </div>
       ))}
     </>
+  )
+})
+
+const AssistantContent = memo(function AssistantContent({
+  content,
+  ownerKey,
+  reveal,
+  presenting,
+}: {
+  content: string
+  ownerKey: string
+  reveal: boolean
+  presenting: boolean
+}) {
+  const shouldPresent = presenting || (reveal && shouldContinueStreamPresentation(ownerKey, content))
+  const displayedContent = useStreamPresentation(content, ownerKey, shouldPresent)
+  return (
+    <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
+      <MarkdownContent content={displayedContent} streaming={shouldPresent} reveal={reveal && shouldPresent} ownerKey={ownerKey} />
+    </div>
   )
 })
 

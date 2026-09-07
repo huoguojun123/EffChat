@@ -1,64 +1,101 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { nextStreamPresentationUnit, presentationDelayMs } from "@/lib/streamPresentation"
 import { prefersReducedMotion } from "@/lib/motionPreference"
 
 const PARTIAL_RELEASE_DELAY_MS = 180
+const MAX_PRESENTATION_OWNERS = 64
 
 interface Runtime {
-  ownerKey: string
   target: string
   displayedEnd: number
   nextBirthAt: number
   partialAfter: number
   frame: number
+  controller: symbol | null
 }
 
-function createRuntime(ownerKey: string): Runtime {
-  return { ownerKey, target: "", displayedEnd: 0, nextBirthAt: 0, partialAfter: 0, frame: 0 }
+const runtimes = new Map<string, Runtime>()
+
+function createRuntime(): Runtime {
+  return { target: "", displayedEnd: 0, nextBirthAt: 0, partialAfter: 0, frame: 0, controller: null }
 }
 
-// Network reception remains eager in useSSE. This hook owns only the visual
-// prefix, so hidden backlog cannot change layout or pull the viewport first.
+function getRuntime(ownerKey: string) {
+  const existing = runtimes.get(ownerKey)
+  if (existing) return existing
+  const runtime = createRuntime()
+  runtimes.set(ownerKey, runtime)
+  if (runtimes.size > MAX_PRESENTATION_OWNERS) {
+    const oldest = runtimes.entries().next().value as [string, Runtime] | undefined
+    if (oldest) {
+      cancelAnimationFrame(oldest[1].frame)
+      runtimes.delete(oldest[0])
+    }
+  }
+  return runtime
+}
+
+export function shouldContinueStreamPresentation(ownerKey: string, target: string) {
+  const runtime = runtimes.get(ownerKey)
+  if (!runtime) return false
+  return runtime.displayedEnd < runtime.target.length
+    || (runtime.target.length > 0 && target.length > runtime.target.length && target.startsWith(runtime.target))
+}
+
+// Network reception remains eager in useSSE. The owner runtime survives the
+// live-to-durable component handoff, so only the released prefix can affect
+// layout and the terminal message cannot flush a hidden burst all at once.
 export function useStreamPresentation(target: string, ownerKey: string, enabled: boolean) {
-  const runtimeRef = useRef<Runtime>(createRuntime(ownerKey))
-  const [displayedContent, setDisplayedContent] = useState(enabled ? "" : target)
+  const runtime = runtimes.get(ownerKey)
+  const [displayedContent, setDisplayedContent] = useState(() => (
+    enabled ? target.slice(0, Math.min(runtime?.displayedEnd ?? 0, target.length)) : target
+  ))
   const [revision, setRevision] = useState(0)
 
   useEffect(() => {
-    const runtime = runtimeRef.current
     const reducedMotion = prefersReducedMotion()
     if (!enabled || reducedMotion) {
-      cancelAnimationFrame(runtime.frame)
-      runtimeRef.current = { ...createRuntime(ownerKey), target, displayedEnd: target.length }
-      runtimeRef.current.frame = requestAnimationFrame(() => setDisplayedContent(target))
-      return
+      const current = runtimes.get(ownerKey)
+      if (!current) {
+        const frame = requestAnimationFrame(() => setDisplayedContent(target))
+        return () => cancelAnimationFrame(frame)
+      }
+      cancelAnimationFrame(current.frame)
+      current.target = target
+      current.displayedEnd = target.length
+      current.nextBirthAt = 0
+      current.partialAfter = 0
+      current.controller = null
+      current.frame = requestAnimationFrame(() => setDisplayedContent(target))
+      return () => cancelAnimationFrame(current.frame)
     }
 
-    if (runtime.ownerKey !== ownerKey) {
-      cancelAnimationFrame(runtime.frame)
-      runtimeRef.current = createRuntime(ownerKey)
-      runtimeRef.current.frame = requestAnimationFrame(() => setDisplayedContent(""))
-    } else if (!target.startsWith(runtime.target)) {
+    const current = getRuntime(ownerKey)
+    const controller = Symbol(ownerKey)
+    current.controller = controller
+
+    if (!target.startsWith(current.target)) {
       // Retry rollback is not append-only. Prefer correctness over replaying a
       // stale answer: show the authoritative replacement immediately, then
       // resume pacing for later append-only deltas.
-      cancelAnimationFrame(runtime.frame)
-      runtime.target = target
-      runtime.displayedEnd = target.length
-      runtime.nextBirthAt = 0
-      runtime.partialAfter = 0
-      runtime.frame = requestAnimationFrame(() => setDisplayedContent(target))
-      return
+      cancelAnimationFrame(current.frame)
+      current.target = target
+      current.displayedEnd = target.length
+      current.nextBirthAt = 0
+      current.partialAfter = 0
+      current.frame = requestAnimationFrame(() => setDisplayedContent(target))
+      return () => {
+        if (runtimes.get(ownerKey)?.controller === controller) cancelAnimationFrame(current.frame)
+      }
     }
 
-    const current = runtimeRef.current
     current.target = target
     if (current.displayedEnd >= target.length) return
 
     const tick = (now: number) => {
       if (document.visibilityState === "hidden") return
-      const active = runtimeRef.current
-      if (active.ownerKey !== ownerKey || active.displayedEnd >= active.target.length) return
+      const active = runtimes.get(ownerKey)
+      if (!active || active.controller !== controller || active.displayedEnd >= active.target.length) return
       const allowPartial = active.partialAfter > 0 && now >= active.partialAfter
       const unit = nextStreamPresentationUnit(active.target, active.displayedEnd, allowPartial)
       if (!unit) {
@@ -78,23 +115,29 @@ export function useStreamPresentation(target: string, ownerKey: string, enabled:
     }
 
     current.frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(current.frame)
+    return () => {
+      const active = runtimes.get(ownerKey)
+      if (active?.controller === controller) {
+        cancelAnimationFrame(active.frame)
+        active.frame = 0
+        active.controller = null
+      }
+    }
   }, [enabled, ownerKey, revision, target])
 
   useEffect(() => {
     const resume = () => {
-      const runtime = runtimeRef.current
-      if (document.visibilityState !== "visible" || !enabled || runtime.displayedEnd >= runtime.target.length) return
-      runtime.nextBirthAt = Math.min(runtime.nextBirthAt, performance.now())
-      // Restart the same timing owner after the tab becomes visible. A new
-      // revision only schedules work; it never changes the displayed prefix.
-      setRevision((current) => current + 1)
+      const current = runtimes.get(ownerKey)
+      if (!current) return
+      if (document.visibilityState !== "visible" || !enabled || current.displayedEnd >= current.target.length) return
+      current.nextBirthAt = Math.min(current.nextBirthAt, performance.now())
+      // A revision only re-enters the same owner scheduler; it does not create
+      // another copy of the displayed prefix or a competing timing loop.
+      setRevision((value) => value + 1)
     }
     document.addEventListener("visibilitychange", resume)
     return () => document.removeEventListener("visibilitychange", resume)
-  }, [enabled])
-
-  useEffect(() => () => cancelAnimationFrame(runtimeRef.current.frame), [])
+  }, [enabled, ownerKey])
 
   return displayedContent
 }

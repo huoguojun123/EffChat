@@ -11,7 +11,7 @@ const session = {
   updated_at: "2026-09-05T00:00:00Z",
 }
 
-function message(id: number, role: "user" | "assistant", content: string) {
+function message(id: number, role: "user" | "assistant", content: string, metadata: Record<string, unknown> = {}) {
   return {
     id,
     session_id: 1,
@@ -20,7 +20,7 @@ function message(id: number, role: "user" | "assistant", content: string) {
     has_tool_calls: false,
     has_reasoning: false,
     created_at: `2026-09-05T00:00:0${id}Z`,
-    message_data: { role, content },
+    message_data: { role, content, metadata },
   }
 }
 
@@ -48,16 +48,25 @@ async function installBaseRoutes(page: Page, messageWindow: () => ReturnType<typ
 }
 
 test("send feedback, block streaming, and durable handoff remain one visual turn", async ({ page }) => {
-  let historyRequests = 0
+  const durableContent = `First paragraph\n\n${"Second paragraph ".repeat(80)}`
+  let terminalReceived = false
+  await page.exposeFunction("markTurnCompleted", () => {
+    terminalReceived = true
+  })
   await installBaseRoutes(page, () => {
-    historyRequests += 1
-    return historyRequests === 1 ? [] : [message(2, "assistant", "First paragraph\n\nSecond paragraph")]
+    return terminalReceived
+      ? [
+        message(1, "user", "Explain this", { run_id: "continuity-run" }),
+        message(2, "assistant", durableContent, { run_id: "continuity-run" }),
+      ]
+      : []
   })
   await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 350))
     await route.fulfill({ json: { status: "ok", needs_compaction: false } })
   })
   await page.addInitScript(() => {
+    Object.defineProperty(crypto, "randomUUID", { configurable: true, value: () => "continuity-run" })
     const nativeFetch = window.fetch.bind(window)
     window.fetch = (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
@@ -65,12 +74,14 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
       const encoder = new TextEncoder()
       return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
         start(controller) {
-          window.setTimeout(() => controller.enqueue(encoder.encode('event: content_delta\ndata: {"delta":"First paragraph"}\n\n')), 800)
-          window.setTimeout(() => controller.enqueue(encoder.encode('event: content_delta\ndata: {"delta":"\\n\\nSecond paragraph"}\n\n')), 1_050)
+          controller.enqueue(encoder.encode('event: message_start\ndata: {"user_message_id":1}\n\n'))
+          window.setTimeout(() => controller.enqueue(encoder.encode('event: content_delta\ndata: {"delta":"First paragraph"}\n\n')), 250)
+          window.setTimeout(() => controller.enqueue(encoder.encode(`event: content_delta\ndata: {"delta":"\\n\\n${"Second paragraph ".repeat(80)}"}\n\n`)), 500)
           window.setTimeout(() => {
             controller.enqueue(encoder.encode('event: message_complete\ndata: {"message_id":2,"finish_reason":"stop"}\n\n'))
+            void (window as unknown as { markTurnCompleted?: () => void }).markTurnCompleted?.()
             controller.close()
-          }, 1_350)
+          }, 5_000)
         },
       }), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
     }
@@ -83,9 +94,10 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   // Preparing is announced by the stable send control rather than inserting
   // a transient row into the composer layout.
   await expect(page.getByTestId("send-button")).toHaveAttribute("aria-label", "正在准备消息…")
-  await expect(page.getByText("正在回复…")).toHaveCount(0)
   await expect(page.getByText("Explain this")).toBeVisible()
-  await expect(page.getByText("已接收，等待回复…")).toBeVisible()
+  // Wait inside the controlled stream timeline, not on a durable history
+  // lookup that could satisfy only after terminal reconciliation.
+  await page.waitForTimeout(650)
   await expect(page.getByText("First paragraph")).toBeVisible()
 
   const turnPosition = await page.evaluate(() => {
@@ -101,6 +113,13 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   await liveMarkdown.locator(".stream-reveal-text").first().waitFor({ state: "attached" })
   await expect(page.locator(".streaming-fade")).toHaveCount(0)
 
+  // The terminal event may reach the durable row while its visual queue still
+  // has a suffix. That suffix must stay paced instead of suddenly occupying
+  // the layout during the live-to-durable handoff.
+  await page.waitForTimeout(4_500)
+  const durable = page.locator('[data-testid="message-item"][data-role="assistant"] .markdown-body')
+  await expect(durable).toHaveCount(1)
+  await expect.poll(() => durable.evaluate((element) => element.textContent?.length || 0)).toBeLessThan(durableContent.length)
   await expect(page.getByText("Second paragraph")).toBeVisible()
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toHaveCount(1)
   await expect(page.getByText("正在同步结果…")).toHaveCount(0)

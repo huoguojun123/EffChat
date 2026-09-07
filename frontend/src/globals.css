@@ -875,13 +875,26 @@ html.app-route-leaving #root {
 }
 
 @keyframes streaming-text-in {
-  from {
+  0% {
     opacity: 0;
-    transform: translate3d(0, 2px, 0);
   }
-  to {
+  12% {
+    opacity: 0.05;
+  }
+  28% {
+    opacity: 0.2;
+  }
+  48% {
+    opacity: 0.48;
+  }
+  68% {
+    opacity: 0.74;
+  }
+  84% {
+    opacity: 0.91;
+  }
+  100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0);
   }
 }
 
@@ -1069,9 +1082,9 @@ html.app-route-leaving #root {
 
 .stream-reveal-text {
   --stream-reveal-delay: 0ms;
-  /* A sentence stays readable while the next one joins it. The overlap is
-     intentional: the stream should feel continuous, not like stacked cards. */
-  animation: streaming-text-in 1500ms var(--motion-ease-standard) both;
+  /* Body copy needs a perceptible, evenly paced fade. The queue controls
+     overlap; this curve intentionally does not reuse the fast control easing. */
+  animation: streaming-text-in 1500ms linear both;
   animation-delay: var(--stream-reveal-delay);
 }
 

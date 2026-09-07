@@ -60,6 +60,7 @@ export function MessageList() {
   const userPausedAutoFollowRef = useRef(false)
   const suppressOlderLoadUntilRef = useRef(0)
   const rafRef = useRef(0)
+  const followRafRef = useRef(0)
   const turnRafRef = useRef(0)
   const trimRafRef = useRef(0)
   const turnAnchorsRef = useRef(new Map<number, HTMLDivElement>())
@@ -130,6 +131,37 @@ export function MessageList() {
       container.scrollTo({ top: container.scrollHeight, behavior: smooth && !prefersReducedMotion() ? "smooth" : "auto" })
     })
   }, [])
+
+  const stopBottomFollow = useCallback(() => {
+    cancelAnimationFrame(followRafRef.current)
+    followRafRef.current = 0
+  }, [])
+
+  // Stream reception can outpace the visible prefix. Follow only the layout
+  // that has actually reached the screen, with one interruptible controller
+  // instead of raw-delta and ResizeObserver each issuing their own scroll.
+  const scheduleBottomFollow = useCallback(() => {
+    const container = scrollRef.current
+    if (!container || !isStreaming || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
+    if (followRafRef.current) return
+    const follow = () => {
+      const current = scrollRef.current
+      if (!current || !isStreaming || userPausedAutoFollowRef.current) {
+        followRafRef.current = 0
+        return
+      }
+      const target = Math.max(0, current.scrollHeight - current.clientHeight)
+      const distance = target - current.scrollTop
+      if (distance <= 0.5 || prefersReducedMotion()) {
+        current.scrollTop = target
+        followRafRef.current = 0
+        return
+      }
+      current.scrollTop += Math.min(28, Math.max(1, distance * 0.22))
+      followRafRef.current = requestAnimationFrame(follow)
+    }
+    followRafRef.current = requestAnimationFrame(follow)
+  }, [isStreaming])
 
   const clearInitialBottomLock = useCallback(() => {
     bottomLockSessionRef.current = null
@@ -311,12 +343,6 @@ export function MessageList() {
     if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(true)
   }, [messages.length, scrollToBottom])
 
-  // 流式增量时跟随底部；原生 overflow-anchor 负责非底部时的视口稳定。
-  useEffect(() => {
-    if (!isStreaming || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
-    scrollToBottom(false)
-  }, [isStreaming, streamingContentLength, streamingThinkingLength, streamingToolCount, scrollToBottom])
-
   useEffect(() => {
     const target = listRef.current
     if (!target || typeof ResizeObserver === "undefined") return
@@ -326,12 +352,17 @@ export function MessageList() {
       // Markdown, previews, fonts and composer inset without teaching those
       // components how to move the conversation viewport.
       if (isStreaming && wasNearBottomRef.current && !userPausedAutoFollowRef.current) {
-        scrollToBottom(false)
+        scheduleBottomFollow()
       }
     })
     observer.observe(target)
     return () => observer.disconnect()
-  }, [isStreaming, keepInitialBottomLocked, scrollToBottom])
+  }, [isStreaming, keepInitialBottomLocked, scheduleBottomFollow])
+
+  useEffect(() => {
+    if (isStreaming) return
+    stopBottomFollow()
+  }, [isStreaming, stopBottomFollow])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -344,6 +375,7 @@ export function MessageList() {
         userPausedAutoFollowRef.current = true
         wasNearBottomRef.current = false
         cancelAnimationFrame(rafRef.current)
+        stopBottomFollow()
       }
     }
     el.addEventListener("wheel", cancelLockFromUserInput, { passive: true })
@@ -356,17 +388,18 @@ export function MessageList() {
       el.removeEventListener("touchmove", cancelLockFromUserInput)
       el.removeEventListener("pointerdown", cancelLockFromUserInput)
     }
-  }, [clearInitialBottomLock, clearPendingAnchor, isStreaming])
+  }, [clearInitialBottomLock, clearPendingAnchor, isStreaming, stopBottomFollow])
 
   useEffect(() => () => {
     cancelAnimationFrame(rafRef.current)
+    stopBottomFollow()
     cancelAnimationFrame(trimRafRef.current)
     window.clearTimeout(bottomLockTimerRef.current)
     window.clearTimeout(recoveryDelayTimerRef.current)
     window.clearTimeout(reconnectedTimerRef.current)
     clearPendingAnchor()
     window.clearTimeout(windowSwitchReleaseTimerRef.current)
-  }, [clearPendingAnchor])
+  }, [clearPendingAnchor, stopBottomFollow])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -396,8 +429,9 @@ export function MessageList() {
     userPausedAutoFollowRef.current = false
     wasNearBottomRef.current = true
     setShowBack(false)
+    stopBottomFollow()
     scrollToBottom(true)
-  }, [scrollToBottom])
+  }, [scrollToBottom, stopBottomFollow])
 
   const updateActiveTurn = useCallback(() => {
     cancelAnimationFrame(turnRafRef.current)

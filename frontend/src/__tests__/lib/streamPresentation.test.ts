@@ -25,7 +25,7 @@ describe("stream presentation", () => {
   })
 
   it("uses a bounded visual pace with a minimum overlap-friendly gap", () => {
-    expect(presentationDelayMs(1)).toBe(120)
-    expect(presentationDelayMs(15)).toBe(500)
+    expect(presentationDelayMs(1)).toBe(60)
+    expect(presentationDelayMs(15)).toBe(250)
   })
 })

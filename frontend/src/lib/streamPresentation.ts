@@ -1,9 +1,9 @@
 // Keep each DOM commit small enough that every visible tail gets its own
 // animation lifetime. The budget is intentionally slower than transport.
-const STREAM_VISUAL_RATE = 30
+const STREAM_VISUAL_RATE = 60
 const STREAM_MIN_UNIT_CHARS = 6
 const STREAM_MAX_PROSE_CHARS = 12
-const STREAM_MIN_RELEASE_GAP_MS = 120
+const STREAM_MIN_RELEASE_GAP_MS = 60
 
 export interface StreamPresentationUnit {
   end: number

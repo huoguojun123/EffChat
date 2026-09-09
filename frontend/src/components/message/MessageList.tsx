@@ -169,6 +169,24 @@ export function MessageList() {
     window.clearTimeout(bottomLockTimerRef.current)
   }, [])
 
+  const placeNewUserTurnInReadingBand = useCallback(() => {
+    const container = scrollRef.current
+    const latest = visibleMessages.at(-1)
+    if (!container || !latest || !latest.is_local || latest.role !== "user") return false
+    const turn = container.querySelector<HTMLElement>(`[data-message-id="${latest.id}"]`)
+    if (!turn) return false
+
+    // A confirmed local user turn is the beginning of a new reading unit.
+    // Anchor it before paint instead of first targeting the composer edge and
+    // then relying on the assistant slot/follow controller to pull it back.
+    const top = turn.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+    const readingBand = Math.min(144, Math.max(40, container.clientHeight * 0.22))
+    container.scrollTop = Math.max(0, top - readingBand)
+    wasNearBottomRef.current = true
+    userPausedAutoFollowRef.current = false
+    return true
+  }, [visibleMessages])
+
   const clearPendingAnchor = useCallback(() => {
     window.clearTimeout(pendingAnchorTimerRef.current)
     pendingAnchorRef.current = null
@@ -333,15 +351,18 @@ export function MessageList() {
     reconnectedTimerRef.current = window.setTimeout(() => setShowReconnected(false), 1200)
   }, [streamingStatus])
 
-  // 新增消息时，仅当用户原本贴在底部才自动跟随。
-  useEffect(() => {
+  // A newly accepted local user message starts a turn, whereas durable rows
+  // still use ordinary bottom following. Keep this in the list's sole scroll
+  // owner so composer and streaming components cannot race the anchor.
+  useLayoutEffect(() => {
     if (messages.length <= previousMessageCountRef.current) {
       previousMessageCountRef.current = messages.length
       return
     }
     previousMessageCountRef.current = messages.length
-    if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(true)
-  }, [messages.length, scrollToBottom])
+    if (!wasNearBottomRef.current || userPausedAutoFollowRef.current) return
+    if (!placeNewUserTurnInReadingBand()) scrollToBottom(true)
+  }, [messages.length, placeNewUserTurnInReadingBand, scrollToBottom])
 
   useEffect(() => {
     const target = listRef.current

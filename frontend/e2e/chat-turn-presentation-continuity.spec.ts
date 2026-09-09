@@ -178,6 +178,46 @@ test("a burst keeps every recently released prose unit on its own fade timeline"
   expect(tails.every((tail) => /^\d+ms$/.test(tail.elapsed) && tail.opacity < 0.98)).toBe(true)
 })
 
+test("a newly accepted user turn enters the reading band instead of the composer edge", async ({ page }) => {
+  const earlierAnswer = Array.from({ length: 20 }, (_, index) => `Earlier answer line ${index + 1}.`).join("\n\n")
+  await installBaseRoutes(page, () => [
+    message(1, "user", "Earlier question"),
+    message(2, "assistant", earlierAnswer),
+  ])
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.addInitScript(() => {
+    Object.defineProperty(crypto, "randomUUID", { configurable: true, value: () => "reading-band-run" })
+    const nativeFetch = window.fetch.bind(window)
+    window.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (!url.includes("/api/v1/sessions/1/messages/stream")) return nativeFetch(input, init)
+      const encoder = new TextEncoder()
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: message_start\ndata: {"user_message_id":3}\n\n'))
+          window.setTimeout(() => controller.enqueue(encoder.encode('event: content_delta\ndata: {"delta":"Answer begins after the turn is placed."}\n\n')), 1_800)
+        },
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
+    }
+  })
+
+  await page.goto("/chat/1")
+  await page.getByTestId("chat-input").fill("A new question")
+  await page.getByTestId("send-button").click()
+  const newestUser = page.locator('[data-testid="message-item"][data-role="user"]').last()
+  await expect(newestUser).toContainText("A new question")
+
+  const position = await newestUser.evaluate((element) => {
+    const scroller = document.querySelector<HTMLElement>("[data-chat-scroll-container]")
+    if (!scroller) throw new Error("chat scroller unavailable")
+    return (element.getBoundingClientRect().top - scroller.getBoundingClientRect().top) / scroller.clientHeight
+  })
+  expect(position).toBeGreaterThan(0.08)
+  expect(position).toBeLessThan(0.36)
+})
+
 test("clears only the submitted draft while preserving edits made during preparation", async ({ page }) => {
   let releasePreflight!: () => void
   const preflightReleased = new Promise<void>((resolve) => { releasePreflight = resolve })

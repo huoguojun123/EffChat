@@ -14,6 +14,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Smoothed sentence-level assistant reveal pacing and accelerated the visual cadence without changing streamed content, persistence, retry, recovery, or scroll ownership.
 - Kept newly accepted user turns in the upper reading band of long conversations instead of briefly anchoring them against the composer.
 
+### Security
+
+- Updated gRPC-Go, jsonparser, fast-uri, Browserslist, baseline-browser-mapping, and Vitest to patched releases for the Dependabot advisories reported against the public repository.
+
 ### Verification
 
 - Added focused coverage for burst streaming, live-to-durable handoff, retry/recovery, and a second send in an existing long conversation; frontend lint, tests, production/PWA build, and focused Playwright checks passed.

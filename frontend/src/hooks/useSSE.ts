@@ -15,6 +15,7 @@ type StreamRequest = RequestInit & { url: string; authToken: string | null }
 type StreamSeed = { content: string; thinking: string; toolCalls: ToolCall[] }
 interface SendMessageOptions {
   thinkingEffort?: string
+  clientRunId?: string
   onAccepted?: () => void
 }
 
@@ -634,7 +635,7 @@ export function useSSE() {
   }, [syncSessionMessages])
 
   const sendMessage = useCallback(async (sessionId: number, content: string, attachments?: AttachmentMeta[], options?: SendMessageOptions) => {
-    const requestId = safeUUID()
+    const requestId = options?.clientRunId || safeUUID()
     const sessionGeneration = useChatStore.getState().activeSessionGeneration
     const isCurrentSessionView = () => {
       const state = useChatStore.getState()

@@ -4,11 +4,12 @@ import { AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loa
 import { AppLogo } from "@/components/AppLogo"
 import { deleteAnswerAttempt, selectAnswerAttempt } from "@/api/messages"
 import { MarkdownContent } from "./MarkdownContent"
+import { shouldContinueStreamPresentation, useStreamPresentation } from "@/hooks/useStreamPresentation"
 import { useSSE } from "@/hooks/useSSE"
 import { useChatStore } from "@/stores/chat"
 import { ToolCallTree } from "./ToolCallTree"
 import { ReasoningPanel } from "./ReasoningPanel"
-import { assistantErrorDetail, assistantErrorDiagnostic, isErrorAssistant } from "@/lib/chatMessages"
+import { assistantErrorDetail, assistantErrorDiagnostic, isErrorAssistant, messageRunId } from "@/lib/chatMessages"
 import { isStreamingInteractionBusy } from "@/lib/streamingStatus"
 import { getCachedTokens, getCacheHitRate, getReasoningTokens } from "@/lib/usage"
 import { formatTokens } from "@/lib/format"
@@ -18,9 +19,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 interface Props {
   message: Message
   isLastAssistant?: boolean
+  reveal?: boolean
 }
 
-export const AssistantMessage = memo(function AssistantMessage({ message, isLastAssistant = false }: Props) {
+export const AssistantMessage = memo(function AssistantMessage({ message, isLastAssistant = false, reveal = false }: Props) {
   const { content, thinking, tool_calls } = message.message_data
   const [copied, setCopied] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -120,7 +122,13 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isLast
                 {isUnsaved ? <MessageStateLine label="回复未保存到服务端；刷新前请复制或重试" tone="error" /> : null}
                 {isFailedLocal && !isUnsaved ? <MessageStateLine label={message.local_error || "本地显示失败，后端结果请以下次同步为准"} tone="error" /> : null}
                 {isFinalizing ? <MessageStateLine label="正在与服务端结果对齐" tone="muted" /> : null}
-                <AssistantSegments messageId={message.id} segments={segments} />
+                <AssistantSegments
+                  messageId={message.id}
+                  runId={messageRunId(message)}
+                  segments={segments}
+                  reveal={reveal}
+                  presenting={reveal && (isFinalizing || isStreaming)}
+                />
               </>
             )}
             {actionError ? <MessageStateLine label={actionError} tone="error" /> : null}
@@ -252,30 +260,61 @@ function ErrorNotice({ detail, diagnostic, onRetry, retrying }: { detail: string
 
 const AssistantSegments = memo(function AssistantSegments({
   messageId,
+  runId,
   segments,
+  reveal,
+  presenting,
 }: {
   messageId: number
+  runId: string
   segments: AssistantSegment[]
+  reveal: boolean
+  presenting: boolean
 }) {
   const rows = useMemo(() => groupAssistantSegments(segments), [segments])
+  const ownerPrefix = runId ? `run:${runId}` : `message:${messageId}`
   return (
     <>
       {rows.map((row, index) => (
         <div key={index} className="space-y-3">
           {row.reasoning ? (
             <ReasoningSummary
-              reasoningKey={`message:${messageId}:${index}:reasoning`}
+              reasoningKey={`${ownerPrefix}:${index}:reasoning`}
               segments={row.reasoning.segments}
+              reveal={reveal}
             />
           ) : null}
           {row.content?.trim() ? (
-            <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
-              <MarkdownContent content={row.content.trim()} ownerKey={`${messageId}:${index}`} />
-            </div>
+            <AssistantContent
+              content={row.content.trim()}
+              ownerKey={`${ownerPrefix}:${index}:content`}
+              presenting={presenting}
+              reveal={reveal}
+            />
           ) : null}
         </div>
       ))}
     </>
+  )
+})
+
+const AssistantContent = memo(function AssistantContent({
+  content,
+  ownerKey,
+  reveal,
+  presenting,
+}: {
+  content: string
+  ownerKey: string
+  reveal: boolean
+  presenting: boolean
+}) {
+  const shouldPresent = presenting || (reveal && shouldContinueStreamPresentation(ownerKey, content))
+  const displayedContent = useStreamPresentation(content, ownerKey, shouldPresent)
+  return (
+    <div className="min-w-0 px-1 text-[15px] leading-[1.5]">
+      <MarkdownContent content={displayedContent} streaming={shouldPresent} reveal={reveal && shouldPresent} ownerKey={ownerKey} />
+    </div>
   )
 })
 
@@ -292,9 +331,11 @@ function MessageDate({ message }: { message: Message }) {
 const ReasoningSummary = memo(function ReasoningSummary({
   reasoningKey,
   segments,
+  reveal,
 }: {
   reasoningKey: string
   segments: AssistantSegment[]
+  reveal: boolean
 }) {
   const thinking = segments.map((segment) => segment.thinking?.trim()).filter(Boolean).join("\n\n")
   const toolCalls = segments.flatMap((segment) => segment.tool_calls || [])
@@ -311,6 +352,7 @@ const ReasoningSummary = memo(function ReasoningSummary({
             {segment.thinking?.trim() ? (
               <MarkdownContent
                 content={segment.thinking.trim()}
+                reveal={reveal}
                 ownerKey={`${reasoningKey}:${index}:thinking`}
                 allowArtifactPreviews={false}
                 variant="reasoning"

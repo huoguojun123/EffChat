@@ -378,7 +378,8 @@ func TestResolveGeminiThinkingContract(t *testing.T) {
 		{modelID: "gemini-3.5-flash", want: GeminiThinkingLevel, omit: true},
 		{modelID: "gemini-3.6-flash", want: GeminiThinkingLevel, omit: true},
 		{modelID: "gemini-3.7-flash", want: GeminiThinkingLevel, omit: true},
-		{modelID: "gemini-3.8-unverified", want: GeminiThinkingUnknown},
+		{modelID: "gemini-3.8-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-4.0-unverified", want: GeminiThinkingUnknown},
 		{modelID: "custom-google-model", want: GeminiThinkingUnknown},
 	}
 	for _, tc := range cases {

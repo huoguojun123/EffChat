@@ -306,6 +306,16 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
     persistSelection(activeSessionId, { manual: true, ids: next.ids })
   }, [activeSessionId, attachments, flashUploadError, persistSelection, selection.ids])
 
+  const restoreAttachmentSelection = useCallback((ids: number[]) => {
+    if (!activeSessionId) return
+    const normalizedIDs = Array.from(new Set(ids.filter((id) => Number.isSafeInteger(id) && id > 0)))
+    const next = {
+      manual: normalizedIDs.length > 0,
+      ids: normalizedIDs,
+    }
+    persistSelection(activeSessionId, next)
+  }, [activeSessionId, persistSelection])
+
   const markSent = useCallback((sessionId: number, ids: number[]) => {
     if (ids.length === 0) return
     const sent = new Set(ids)
@@ -466,6 +476,7 @@ export function useAttachmentUploadQueue(activeSessionId?: number | null) {
     dismissUpload,
     removeAttachment,
     toggleAttachment,
+    restoreAttachmentSelection,
     markSentForCurrentEpoch,
     currentAttachmentEpoch,
     retryAttachmentOCR,

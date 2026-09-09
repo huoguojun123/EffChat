@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { removeChatDraftSession } from "@/components/chat/chatDrafts"
 import type { Session, SessionFolder, Message, MessageData, ToolCall, Model, StreamingSegment, StreamLifecycleState, LocalMessageState, ModelRetryTrace } from "@/types"
 import * as sessionsApi from "@/api/sessions"
 import type { SessionFolderScope } from "@/api/sessions"
@@ -400,6 +401,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   deleteSession: async (id: number) => {
     await sessionsApi.deleteSession(id)
+    // A deleted session must not leave a retryable composer payload in the
+    // current tab. The server deletion is authoritative; storage cleanup is
+    // best-effort and must not turn a successful deletion into a UI failure.
+    removeChatDraftSession(id)
     const deletingActive = get().activeSessionId === id
     if (deletingActive) {
       latestMessagesRequest += 1

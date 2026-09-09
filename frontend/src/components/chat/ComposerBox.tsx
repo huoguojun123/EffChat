@@ -20,7 +20,7 @@ interface ComposerBoxProps {
   imageUnsupported?: boolean
   streamingStatus: StreamLifecycleState
   notice: string | null
-  noticeAction?: { label: string; onClick: () => void } | null
+  noticeActions?: Array<{ label: string; onClick: () => void; variant?: "secondary" | "ghost" }>
   attachmentNotice: string | null
   messages: Message[]
   currentModel?: Model
@@ -49,7 +49,7 @@ export function ComposerBox({
   imageUnsupported,
   streamingStatus,
   notice,
-  noticeAction,
+  noticeActions = [],
   attachmentNotice,
   messages,
   currentModel,
@@ -137,17 +137,18 @@ export function ComposerBox({
             {notice && (
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span className="min-w-0 break-words">{notice}</span>
-                {noticeAction && (
+                {noticeActions.map((action) => (
                   <Button
+                    key={action.label}
                     type="button"
-                    variant="secondary"
+                    variant={action.variant || "secondary"}
                     size="sm"
                     className="h-8 rounded-[8px] px-2 text-xs"
-                    onClick={noticeAction.onClick}
+                    onClick={action.onClick}
                   >
-                    {noticeAction.label}
+                    {action.label}
                   </Button>
-                )}
+                ))}
               </div>
             )}
           </div>

@@ -7,6 +7,18 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.10] - 2026-09-09
+
+### Fixed
+
+- Smoothed sentence-level assistant reveal pacing and accelerated the visual cadence without changing streamed content, persistence, retry, recovery, or scroll ownership.
+- Kept newly accepted user turns in the upper reading band of long conversations instead of briefly anchoring them against the composer.
+
+### Verification
+
+- Added focused coverage for burst streaming, live-to-durable handoff, retry/recovery, and a second send in an existing long conversation; frontend lint, tests, production/PWA build, and focused Playwright checks passed.
+- No database, migration, API, provider, deployment-topology, Korea, or persisted-user-data changes.
+
 ## [0.4.1-beta.9] - 2026-09-05
 
 ### Fixed

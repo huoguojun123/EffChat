@@ -874,9 +874,28 @@ html.app-route-leaving #root {
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes streaming-block-in {
-  from { opacity: 0.38; transform: translate3d(0, 3px, 0); }
-  to { opacity: 1; transform: translate3d(0, 0, 0); }
+@keyframes streaming-text-in {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.05;
+  }
+  28% {
+    opacity: 0.2;
+  }
+  48% {
+    opacity: 0.48;
+  }
+  68% {
+    opacity: 0.74;
+  }
+  84% {
+    opacity: 0.91;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 @keyframes loading-indicator-glide {
@@ -1061,8 +1080,13 @@ html.app-route-leaving #root {
   transition-delay: 0s;
 }
 
-.streaming-markdown > .markdown-body > :last-child {
-  animation: streaming-block-in var(--motion-duration-surface) var(--motion-ease-standard) both;
+.stream-reveal-text {
+  --stream-reveal-elapsed: 0ms;
+  /* Body copy needs a perceptible, evenly paced fade. The queue controls
+     overlap; an owner-relative negative delay resumes a tail after Markdown
+     re-parses instead of restarting or dropping its in-flight fade. */
+  animation: streaming-text-in 1500ms linear both;
+  animation-delay: calc(-1 * var(--stream-reveal-elapsed));
 }
 
 /* The current answer owns enough vertical room to place its user turn in the
@@ -1086,7 +1110,7 @@ html.app-route-leaving #root {
   .conversation-turn-preview {
     transition: none;
   }
-  .streaming-markdown > .markdown-body > :last-child {
+  .stream-reveal-text {
     animation: none;
   }
 }

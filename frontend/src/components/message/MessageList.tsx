@@ -60,6 +60,7 @@ export function MessageList() {
   const userPausedAutoFollowRef = useRef(false)
   const suppressOlderLoadUntilRef = useRef(0)
   const rafRef = useRef(0)
+  const followRafRef = useRef(0)
   const turnRafRef = useRef(0)
   const trimRafRef = useRef(0)
   const turnAnchorsRef = useRef(new Map<number, HTMLDivElement>())
@@ -131,11 +132,60 @@ export function MessageList() {
     })
   }, [])
 
+  const stopBottomFollow = useCallback(() => {
+    cancelAnimationFrame(followRafRef.current)
+    followRafRef.current = 0
+  }, [])
+
+  // Stream reception can outpace the visible prefix. Follow only the layout
+  // that has actually reached the screen, with one interruptible controller
+  // instead of raw-delta and ResizeObserver each issuing their own scroll.
+  const scheduleBottomFollow = useCallback(() => {
+    const container = scrollRef.current
+    if (!container || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
+    if (followRafRef.current) return
+    const follow = () => {
+      const current = scrollRef.current
+      if (!current || userPausedAutoFollowRef.current) {
+        followRafRef.current = 0
+        return
+      }
+      const target = Math.max(0, current.scrollHeight - current.clientHeight)
+      const distance = target - current.scrollTop
+      if (distance <= 0.5 || prefersReducedMotion()) {
+        current.scrollTop = target
+        followRafRef.current = 0
+        return
+      }
+      current.scrollTop += Math.min(28, Math.max(1, distance * 0.22))
+      followRafRef.current = requestAnimationFrame(follow)
+    }
+    followRafRef.current = requestAnimationFrame(follow)
+  }, [])
+
   const clearInitialBottomLock = useCallback(() => {
     bottomLockSessionRef.current = null
     userCancelledBottomLockRef.current = false
     window.clearTimeout(bottomLockTimerRef.current)
   }, [])
+
+  const placeNewUserTurnInReadingBand = useCallback(() => {
+    const container = scrollRef.current
+    const latest = visibleMessages.at(-1)
+    if (!container || !latest || !latest.is_local || latest.role !== "user") return false
+    const turn = container.querySelector<HTMLElement>(`[data-message-id="${latest.id}"]`)
+    if (!turn) return false
+
+    // A confirmed local user turn is the beginning of a new reading unit.
+    // Anchor it before paint instead of first targeting the composer edge and
+    // then relying on the assistant slot/follow controller to pull it back.
+    const top = turn.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
+    const readingBand = Math.min(144, Math.max(40, container.clientHeight * 0.22))
+    container.scrollTop = Math.max(0, top - readingBand)
+    wasNearBottomRef.current = true
+    userPausedAutoFollowRef.current = false
+    return true
+  }, [visibleMessages])
 
   const clearPendingAnchor = useCallback(() => {
     window.clearTimeout(pendingAnchorTimerRef.current)
@@ -301,21 +351,18 @@ export function MessageList() {
     reconnectedTimerRef.current = window.setTimeout(() => setShowReconnected(false), 1200)
   }, [streamingStatus])
 
-  // 新增消息时，仅当用户原本贴在底部才自动跟随。
-  useEffect(() => {
+  // A newly accepted local user message starts a turn, whereas durable rows
+  // still use ordinary bottom following. Keep this in the list's sole scroll
+  // owner so composer and streaming components cannot race the anchor.
+  useLayoutEffect(() => {
     if (messages.length <= previousMessageCountRef.current) {
       previousMessageCountRef.current = messages.length
       return
     }
     previousMessageCountRef.current = messages.length
-    if (wasNearBottomRef.current && !userPausedAutoFollowRef.current) scrollToBottom(true)
-  }, [messages.length, scrollToBottom])
-
-  // 流式增量时跟随底部；原生 overflow-anchor 负责非底部时的视口稳定。
-  useEffect(() => {
-    if (!isStreaming || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
-    scrollToBottom(false)
-  }, [isStreaming, streamingContentLength, streamingThinkingLength, streamingToolCount, scrollToBottom])
+    if (!wasNearBottomRef.current || userPausedAutoFollowRef.current) return
+    if (!placeNewUserTurnInReadingBand()) scrollToBottom(true)
+  }, [messages.length, placeNewUserTurnInReadingBand, scrollToBottom])
 
   useEffect(() => {
     const target = listRef.current
@@ -326,12 +373,22 @@ export function MessageList() {
       // Markdown, previews, fonts and composer inset without teaching those
       // components how to move the conversation viewport.
       if (isStreaming && wasNearBottomRef.current && !userPausedAutoFollowRef.current) {
-        scrollToBottom(false)
+        scheduleBottomFollow()
       }
     })
     observer.observe(target)
     return () => observer.disconnect()
-  }, [isStreaming, keepInitialBottomLocked, scrollToBottom])
+  }, [isStreaming, keepInitialBottomLocked, scheduleBottomFollow])
+
+  useEffect(() => {
+    window.addEventListener("effchat:stream-presentation", scheduleBottomFollow)
+    return () => window.removeEventListener("effchat:stream-presentation", scheduleBottomFollow)
+  }, [scheduleBottomFollow])
+
+  useEffect(() => {
+    if (isStreaming) return
+    stopBottomFollow()
+  }, [isStreaming, stopBottomFollow])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -340,11 +397,13 @@ export function MessageList() {
       clearPendingAnchor()
       userCancelledBottomLockRef.current = true
       clearInitialBottomLock()
-      if (isStreaming) {
-        userPausedAutoFollowRef.current = true
-        wasNearBottomRef.current = false
-        cancelAnimationFrame(rafRef.current)
-      }
+      // A durable assistant can still be draining the presentation backlog
+      // after the network status returns to idle. User navigation must pause
+      // the same follow owner in both the live and post-handoff phases.
+      userPausedAutoFollowRef.current = true
+      wasNearBottomRef.current = false
+      cancelAnimationFrame(rafRef.current)
+      stopBottomFollow()
     }
     el.addEventListener("wheel", cancelLockFromUserInput, { passive: true })
     el.addEventListener("touchstart", cancelLockFromUserInput, { passive: true })
@@ -356,17 +415,18 @@ export function MessageList() {
       el.removeEventListener("touchmove", cancelLockFromUserInput)
       el.removeEventListener("pointerdown", cancelLockFromUserInput)
     }
-  }, [clearInitialBottomLock, clearPendingAnchor, isStreaming])
+  }, [clearInitialBottomLock, clearPendingAnchor, stopBottomFollow])
 
   useEffect(() => () => {
     cancelAnimationFrame(rafRef.current)
+    stopBottomFollow()
     cancelAnimationFrame(trimRafRef.current)
     window.clearTimeout(bottomLockTimerRef.current)
     window.clearTimeout(recoveryDelayTimerRef.current)
     window.clearTimeout(reconnectedTimerRef.current)
     clearPendingAnchor()
     window.clearTimeout(windowSwitchReleaseTimerRef.current)
-  }, [clearPendingAnchor])
+  }, [clearPendingAnchor, stopBottomFollow])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -396,8 +456,9 @@ export function MessageList() {
     userPausedAutoFollowRef.current = false
     wasNearBottomRef.current = true
     setShowBack(false)
+    stopBottomFollow()
     scrollToBottom(true)
-  }, [scrollToBottom])
+  }, [scrollToBottom, stopBottomFollow])
 
   const updateActiveTurn = useCallback(() => {
     cancelAnimationFrame(turnRafRef.current)
@@ -461,12 +522,12 @@ export function MessageList() {
       return
     }
     clearInitialBottomLock()
-    userPausedAutoFollowRef.current = isStreaming
+    userPausedAutoFollowRef.current = true
     suppressOlderLoadUntilRef.current = Date.now() + 900
     const top = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
     container.scrollTo({ top, behavior: prefersReducedMotion() ? "auto" : "smooth" })
     setActiveTurnId(turn.id)
-  }, [clearInitialBottomLock, clearPendingAnchor, isStreaming, loadMessageWindowAround])
+  }, [clearInitialBottomLock, clearPendingAnchor, loadMessageWindowAround])
 
   const requestedTurnRef = useRef(0)
   useEffect(() => {
@@ -527,7 +588,14 @@ export function MessageList() {
                   stopsZeroOutputRun={msg.id === editableUserMessageId && (streamingStatus === "streaming" || streamingStatus === "recovering")}
                 />
               ) : (
-                <AssistantMessage message={msg} isLastAssistant={msg.id === lastAssistantId && !isStreaming} />
+                <AssistantMessage
+                  message={msg}
+                  isLastAssistant={msg.id === lastAssistantId && !isStreaming}
+                  // Only the current answer owns reveal state. Historical
+                  // messages remain inert, while a live local/durable pair
+                  // shares the same run owner inside MarkdownContent.
+                  reveal={msg.id === currentAssistantSlotId || msg.id === lastAssistantId}
+                />
               )}
             </div>
           ))}

@@ -142,11 +142,11 @@ export function MessageList() {
   // instead of raw-delta and ResizeObserver each issuing their own scroll.
   const scheduleBottomFollow = useCallback(() => {
     const container = scrollRef.current
-    if (!container || !isStreaming || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
+    if (!container || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
     if (followRafRef.current) return
     const follow = () => {
       const current = scrollRef.current
-      if (!current || !isStreaming || userPausedAutoFollowRef.current) {
+      if (!current || userPausedAutoFollowRef.current) {
         followRafRef.current = 0
         return
       }
@@ -161,7 +161,7 @@ export function MessageList() {
       followRafRef.current = requestAnimationFrame(follow)
     }
     followRafRef.current = requestAnimationFrame(follow)
-  }, [isStreaming])
+  }, [])
 
   const clearInitialBottomLock = useCallback(() => {
     bottomLockSessionRef.current = null
@@ -360,6 +360,11 @@ export function MessageList() {
   }, [isStreaming, keepInitialBottomLocked, scheduleBottomFollow])
 
   useEffect(() => {
+    window.addEventListener("effchat:stream-presentation", scheduleBottomFollow)
+    return () => window.removeEventListener("effchat:stream-presentation", scheduleBottomFollow)
+  }, [scheduleBottomFollow])
+
+  useEffect(() => {
     if (isStreaming) return
     stopBottomFollow()
   }, [isStreaming, stopBottomFollow])
@@ -371,12 +376,13 @@ export function MessageList() {
       clearPendingAnchor()
       userCancelledBottomLockRef.current = true
       clearInitialBottomLock()
-      if (isStreaming) {
-        userPausedAutoFollowRef.current = true
-        wasNearBottomRef.current = false
-        cancelAnimationFrame(rafRef.current)
-        stopBottomFollow()
-      }
+      // A durable assistant can still be draining the presentation backlog
+      // after the network status returns to idle. User navigation must pause
+      // the same follow owner in both the live and post-handoff phases.
+      userPausedAutoFollowRef.current = true
+      wasNearBottomRef.current = false
+      cancelAnimationFrame(rafRef.current)
+      stopBottomFollow()
     }
     el.addEventListener("wheel", cancelLockFromUserInput, { passive: true })
     el.addEventListener("touchstart", cancelLockFromUserInput, { passive: true })
@@ -388,7 +394,7 @@ export function MessageList() {
       el.removeEventListener("touchmove", cancelLockFromUserInput)
       el.removeEventListener("pointerdown", cancelLockFromUserInput)
     }
-  }, [clearInitialBottomLock, clearPendingAnchor, isStreaming, stopBottomFollow])
+  }, [clearInitialBottomLock, clearPendingAnchor, stopBottomFollow])
 
   useEffect(() => () => {
     cancelAnimationFrame(rafRef.current)
@@ -495,12 +501,12 @@ export function MessageList() {
       return
     }
     clearInitialBottomLock()
-    userPausedAutoFollowRef.current = isStreaming
+    userPausedAutoFollowRef.current = true
     suppressOlderLoadUntilRef.current = Date.now() + 900
     const top = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 24
     container.scrollTo({ top, behavior: prefersReducedMotion() ? "auto" : "smooth" })
     setActiveTurnId(turn.id)
-  }, [clearInitialBottomLock, clearPendingAnchor, isStreaming, loadMessageWindowAround])
+  }, [clearInitialBottomLock, clearPendingAnchor, loadMessageWindowAround])
 
   const requestedTurnRef = useRef(0)
   useEffect(() => {

@@ -75,7 +75,7 @@ describe("MarkdownContent rendering", () => {
     expect(settled).not.toContain("streaming-markdown")
   })
 
-  it("reveals newly arrived prose sentence by sentence", () => {
+  it("marks one released prose tail with an owner-relative animation lifetime", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent
         content="第一句先到这里。第二句紧接着到达！最后一句平稳收尾？"
@@ -85,13 +85,12 @@ describe("MarkdownContent rendering", () => {
       />
     )
 
-    expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(3)
-    expect(html).toContain("--stream-reveal-delay:0ms")
-    expect(html).toContain("--stream-reveal-delay:180ms")
-    expect(html).toContain("--stream-reveal-delay:360ms")
+    expect(html.match(/data-reveal-unit="prose"/g)).toHaveLength(1)
+    expect(html).toContain('data-reveal-sequence="1"')
+    expect(html).toContain("--stream-reveal-elapsed:0ms")
   })
 
-  it("keeps sentence stagger continuous across markdown text nodes", () => {
+  it("keeps one released tail stable across markdown text nodes", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent
         content={"第一段先到这里。\n\n第二段随后出现。"}
@@ -101,12 +100,11 @@ describe("MarkdownContent rendering", () => {
       />
     )
 
-    expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(2)
-    expect(html).toContain("--stream-reveal-delay:0ms")
-    expect(html).toContain("--stream-reveal-delay:180ms")
+    expect(html.match(/data-reveal-unit="prose"/g)).toHaveLength(2)
+    expect(html.match(/data-reveal-sequence="1"/g)).toHaveLength(2)
   })
 
-  it("does not collapse a burst of new prose onto one reveal delay", () => {
+  it("does not invent staggered spans inside one queue release", () => {
     const html = renderToStaticMarkup(
       <MarkdownContent
         content="第一句。第二句。第三句。第四句。第五句。第六句。"
@@ -116,20 +114,36 @@ describe("MarkdownContent rendering", () => {
       />
     )
 
-    expect(html).toContain("--stream-reveal-delay:900ms")
-    expect(html.match(/--stream-reveal-delay:720ms/g)).toHaveLength(1)
+    expect(html.match(/data-reveal-unit="prose"/g)).toHaveLength(1)
+    expect(html).not.toContain("stream-reveal-delay")
   })
 
-  it("keeps settled owner text outside the next released tail", () => {
-    renderToStaticMarkup(
-      <MarkdownContent content="第一句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
-    )
-    const html = renderToStaticMarkup(
-      <MarkdownContent content="第一句。第二句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
-    )
+  it("rehydrates each in-flight tail until its own fade has settled", () => {
+    const clock = vi.spyOn(performance, "now")
+    try {
+      clock.mockReturnValue(1_000)
+      renderToStaticMarkup(
+        <MarkdownContent content="第一句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
+      )
+      clock.mockReturnValue(1_180)
+      const active = renderToStaticMarkup(
+        <MarkdownContent content="第一句。第二句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
+      )
 
-    expect(html.match(/data-reveal-unit="sentence"/g)).toHaveLength(1)
-    expect(html).toContain("第二句。")
+      expect(active.match(/data-reveal-unit="prose"/g)).toHaveLength(2)
+      expect(active).toContain('data-reveal-sequence="1"')
+      expect(active).toContain('data-reveal-sequence="2"')
+      expect(active).toContain("--stream-reveal-elapsed:180ms")
+
+      clock.mockReturnValue(2_700)
+      const settled = renderToStaticMarkup(
+        <MarkdownContent content="第一句。第二句。第三句。" streaming reveal ownerKey="sentence-reveal-settled-tail" />
+      )
+      expect(settled.match(/data-reveal-unit="prose"/g)).toHaveLength(1)
+      expect(settled).toContain('data-reveal-sequence="3"')
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it("keeps code and formula output outside sentence reveal spans", () => {
@@ -142,12 +156,12 @@ describe("MarkdownContent rendering", () => {
       />
     )
 
-    expect(html).toContain('data-reveal-unit="sentence"')
+    expect(html).toContain('data-reveal-unit="prose"')
     expect(html).toContain("mock-code-block")
     expect(html).toContain("katex")
-    expect(html.match(/data-reveal-unit="sentence"/g)?.length).toBeGreaterThanOrEqual(2)
-    expect(html).not.toMatch(/<code[^>]*data-reveal-unit="sentence"/)
-    expect(html).not.toMatch(/class="katex"[^>]*data-reveal-unit="sentence"/)
+    expect(html.match(/data-reveal-unit="prose"/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(html).not.toMatch(/<code[^>]*data-reveal-unit="prose"/)
+    expect(html).not.toMatch(/class="katex"[^>]*data-reveal-unit="prose"/)
   })
 
   it("renders reasoning as compact markdown without artifact previews", () => {

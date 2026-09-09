@@ -1081,11 +1081,12 @@ html.app-route-leaving #root {
 }
 
 .stream-reveal-text {
-  --stream-reveal-delay: 0ms;
+  --stream-reveal-elapsed: 0ms;
   /* Body copy needs a perceptible, evenly paced fade. The queue controls
-     overlap; this curve intentionally does not reuse the fast control easing. */
+     overlap; an owner-relative negative delay resumes a tail after Markdown
+     re-parses instead of restarting or dropping its in-flight fade. */
   animation: streaming-text-in 1500ms linear both;
-  animation-delay: var(--stream-reveal-delay);
+  animation-delay: calc(-1 * var(--stream-reveal-elapsed));
 }
 
 /* The current answer owns enough vertical room to place its user turn in the

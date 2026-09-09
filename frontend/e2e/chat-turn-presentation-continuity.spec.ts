@@ -110,7 +110,8 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   expect(turnPosition).toBeLessThan(0.4)
 
   const liveMarkdown = page.locator(".streaming-markdown .markdown-body")
-  await liveMarkdown.locator(".stream-reveal-text").first().waitFor({ state: "attached" })
+  await expect(liveMarkdown).toContainText("First paragraph")
+  expect(await liveMarkdown.innerHTML()).toContain("stream-reveal-text")
   await expect(page.locator(".streaming-fade")).toHaveCount(0)
 
   // The terminal event may reach the durable row while its visual queue still
@@ -123,6 +124,58 @@ test("send feedback, block streaming, and durable handoff remain one visual turn
   await expect(page.getByText("Second paragraph")).toBeVisible()
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]')).toHaveCount(1)
   await expect(page.getByText("正在同步结果…")).toHaveCount(0)
+  const bottomFollow = await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>("[data-chat-scroll-container]")
+    if (!scroller) throw new Error("chat scroller unavailable")
+    return {
+      distance: scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+      inset: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--chat-scroll-gap")),
+    }
+  })
+  expect(bottomFollow.distance).toBeLessThanOrEqual(Math.max(64, bottomFollow.inset + 8))
+})
+
+test("a burst keeps every recently released prose unit on its own fade timeline", async ({ page }) => {
+  const burst = Array.from({ length: 24 }, (_, index) => `第${index + 1}句。`).join("")
+  await installBaseRoutes(page, () => [])
+  await page.route("**/api/v1/sessions/1/messages/preflight", async (route) => {
+    await route.fulfill({ json: { status: "ok", needs_compaction: false } })
+  })
+  await page.addInitScript((burstContent: string) => {
+    Object.defineProperty(crypto, "randomUUID", { configurable: true, value: () => "burst-reveal-run" })
+    const nativeFetch = window.fetch.bind(window)
+    window.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      if (!url.includes("/api/v1/sessions/1/messages/stream")) return nativeFetch(input, init)
+      const encoder = new TextEncoder()
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: message_start\ndata: {"user_message_id":1}\n\n'))
+          window.setTimeout(() => controller.enqueue(encoder.encode(`event: content_delta\ndata: ${JSON.stringify({ delta: burstContent })}\n\n`)), 20)
+          window.setTimeout(() => {
+            controller.enqueue(encoder.encode('event: message_complete\ndata: {"finish_reason":"stop"}\n\n'))
+            controller.close()
+          }, 4_000)
+        },
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
+    }
+  }, burst)
+
+  await page.goto("/chat/1")
+  await page.getByTestId("chat-input").fill("Show a paced burst")
+  await page.getByTestId("send-button").click()
+  const liveMarkdown = page.locator(".streaming-markdown .markdown-body")
+  await expect(liveMarkdown).toContainText("第1句。")
+  await page.waitForTimeout(850)
+
+  const tails = await page.locator(".streaming-markdown .stream-reveal-text").evaluateAll((elements) => elements.map((element) => ({
+    sequence: element.getAttribute("data-reveal-sequence"),
+    elapsed: element.style.getPropertyValue("--stream-reveal-elapsed"),
+    opacity: Number.parseFloat(getComputedStyle(element).opacity),
+  })))
+  expect(tails.length).toBeGreaterThanOrEqual(4)
+  expect(new Set(tails.map((tail) => tail.sequence)).size).toBeGreaterThanOrEqual(4)
+  expect(tails.every((tail) => /^\d+ms$/.test(tail.elapsed) && tail.opacity < 0.98)).toBe(true)
 })
 
 test("clears only the submitted draft while preserving edits made during preparation", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type CSSProperties, type ImgHTMLAttributes, type InputHTMLAttributes } from "react"
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes, type ComponentPropsWithoutRef, type CSSProperties, type ImgHTMLAttributes, type InputHTMLAttributes } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkBreaks from "remark-breaks"
@@ -31,20 +31,8 @@ export const MarkdownContent = memo(function MarkdownContent({
   blockIndexRef.current = 0
   const normalizedContent = useMemo(() => normalizeMarkdownContent(content), [content])
   const revealRuntime = useMemo(() => getRevealRuntime(ownerKey), [ownerKey])
-  const previousRevealSource = revealRuntime.source
   const revealActive = reveal && variant !== "document"
-  const canContinueReveal = revealActive && revealRuntime.initialized
-    && normalizedContent.startsWith(previousRevealSource)
-  // The first snapshot for the current owner gets one bounded reveal. Once a
-  // live owner has measured visible text, the durable handoff starts at that
-  // length and only a genuinely new suffix can animate.
-  const revealStart = revealActive
-    ? canContinueReveal ? revealRuntime.visibleLength : 0
-    : -1
-  if (revealActive) {
-    revealRuntime.source = normalizedContent
-    revealRuntime.initialized = true
-  }
+  const revealOptions = prepareReveal(revealRuntime, normalizedContent, revealActive)
   const preparationIdentity = `${ownerKey}:${normalizedContent}`
   const [pendingState, setPendingState] = useState<{ identity: string; keys: Set<string> }>(() => ({
     identity: preparationIdentity,
@@ -83,6 +71,14 @@ export const MarkdownContent = memo(function MarkdownContent({
   }, [preparationIdentity])
 
   const components = useMemo(() => ({
+    span({ node, ...props }: ComponentPropsWithoutRef<"span"> & { node?: unknown; "data-reveal-sequence"?: string }) {
+      void node
+      const sequence = props["data-reveal-sequence"]
+      // hast-util-to-jsx-runtime keys same-tag siblings by their ordinal, so a
+      // later tail otherwise reuses an already-finished DOM animation. The
+      // inner key is the owner timeline identity and only remounts reveal spans.
+      return <span key={typeof sequence === "string" ? sequence : undefined} {...props} />
+    },
     pre({ children }: { children?: React.ReactNode }) {
       return <>{children}</>
     },
@@ -143,7 +139,7 @@ export const MarkdownContent = memo(function MarkdownContent({
       >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-        rehypePlugins={revealStart >= 0 ? [rehypeKatex, [rehypeReveal, { start: revealStart, runtime: revealRuntime }]] : [rehypeKatex]}
+        rehypePlugins={revealOptions ? [rehypeKatex, [rehypeReveal, revealOptions]] : [rehypeKatex]}
         components={components}
       >
           {normalizedContent}
@@ -157,6 +153,17 @@ interface RevealRuntime {
   source: string
   visibleLength: number
   initialized: boolean
+  ranges: RevealRange[]
+  nextSequence: number
+  pendingSource: string | null
+  pendingStart: number
+}
+
+interface RevealRange {
+  start: number
+  end: number
+  bornAt: number
+  sequence: number
 }
 
 const revealRuntimeRegistry = new Map<string, RevealRuntime>()
@@ -164,7 +171,15 @@ const revealRuntimeRegistry = new Map<string, RevealRuntime>()
 function getRevealRuntime(ownerKey: string): RevealRuntime {
   const existing = revealRuntimeRegistry.get(ownerKey)
   if (existing) return existing
-  const runtime = { source: "", visibleLength: 0, initialized: false }
+  const runtime = {
+    source: "",
+    visibleLength: 0,
+    initialized: false,
+    ranges: [],
+    nextSequence: 0,
+    pendingSource: null,
+    pendingStart: 0,
+  }
   revealRuntimeRegistry.set(ownerKey, runtime)
   if (revealRuntimeRegistry.size > 64) {
     const oldest = revealRuntimeRegistry.keys().next().value
@@ -183,60 +198,63 @@ interface RevealNode {
 
 interface RevealOptions {
   start: number
+  append: boolean
+  now: number
   runtime: RevealRuntime
 }
 
-const STREAM_SENTENCE_STAGGER_MS = 180
+const STREAM_REVEAL_DURATION_MS = 1500
 
-const sentenceSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl
-  ? new Intl.Segmenter("zh", { granularity: "sentence" })
-  : null
+function prepareReveal(runtime: RevealRuntime, source: string, active: boolean): RevealOptions | null {
+  if (!active) return null
 
-// Annotate only the newly released suffix after Markdown has parsed the source.
-// The presentation queue owns when content reaches this layer; the renderer
-// only preserves that owner-relative tail without resetting a later burst to a
-// shared delay cap.
+  const previousSource = runtime.source
+  const continuing = runtime.initialized && source.startsWith(previousSource)
+  if (!continuing) {
+    runtime.visibleLength = 0
+    runtime.ranges = []
+    runtime.nextSequence = 0
+    runtime.pendingSource = null
+    runtime.pendingStart = 0
+  }
+
+  const sourceChanged = !runtime.initialized || !continuing || source.length > previousSource.length
+  if (sourceChanged && source.length > 0) {
+    runtime.pendingSource = source
+    runtime.pendingStart = continuing ? runtime.visibleLength : 0
+  }
+  runtime.source = source
+  runtime.initialized = true
+  const append = runtime.pendingSource === source
+  return {
+    start: append ? runtime.pendingStart : runtime.visibleLength,
+    append,
+    now: revealNow(),
+    runtime,
+  }
+}
+
+function revealNow() {
+  return typeof performance === "undefined" ? Date.now() : performance.now()
+}
+
+// The presentation queue decides when a safe prose unit enters layout. This
+// pass records that unit once, then rehydrates every still-fading range with
+// its elapsed time on later Markdown renders. A new AST must not cut short a
+// previously born opacity animation.
 function rehypeReveal(options: RevealOptions) {
   return (tree: RevealNode) => {
+    const visibleLength = countRevealVisibleText(tree)
+    const ranges = reconcileRevealRanges(options, visibleLength)
     let visibleIndex = 0
-    let sentenceIndex = 0
     const walk = (node: RevealNode, excluded = false) => {
-      const classes = node.properties?.className
-      const isKatex = Array.isArray(classes) && classes.includes("katex")
-      const nextExcluded = excluded || node.tagName === "pre" || node.tagName === "code" || node.tagName === "svg" || node.tagName === "math" || isKatex
+      const nextExcluded = excluded || isRevealExcluded(node)
       if (node.type === "text" && !excluded) {
         const chars = Array.from(node.value || "")
         const start = visibleIndex
         visibleIndex += chars.length
-        if (options.start < visibleIndex && chars.length > 0) {
-          const split = Math.max(0, options.start - start)
-          const suffix = chars.slice(split).join("")
-          // Markdown can expose paragraph separators as standalone text
-          // nodes. Keep those nodes intact instead of animating invisible
-          // whitespace spans.
-          if (!suffix.trim()) return
-          const children: RevealNode[] = []
-          if (split > 0) children.push({ type: "text", value: chars.slice(0, split).join("") })
-          for (const sentence of splitRevealSentences(suffix)) {
-            if (!sentence.trim()) {
-              children.push({ type: "text", value: sentence })
-              continue
-            }
-            const delay = sentenceIndex * STREAM_SENTENCE_STAGGER_MS
-            children.push({
-              type: "element",
-              tagName: "span",
-              properties: {
-                className: ["stream-reveal-text"],
-                "data-reveal-unit": "sentence",
-                style: `--stream-reveal-delay:${delay}ms`,
-              },
-              children: [{ type: "text", value: sentence }],
-            })
-            sentenceIndex++
-          }
-          Object.assign(node, { type: "root", children })
-        }
+        const children = renderRevealText(chars, start, ranges, options.now)
+        if (children) Object.assign(node, { type: "root", children })
         return
       }
       if (node.children && !nextExcluded) {
@@ -254,33 +272,83 @@ function rehypeReveal(options: RevealOptions) {
   }
 }
 
-function splitRevealSentences(value: string) {
-  if (!value.trim()) return [value]
-  if (sentenceSegmenter) {
-    return Array.from(sentenceSegmenter.segment(value), ({ segment }) => segment)
+function countRevealVisibleText(tree: RevealNode) {
+  let length = 0
+  const walk = (node: RevealNode, excluded = false) => {
+    const nextExcluded = excluded || isRevealExcluded(node)
+    if (node.type === "text" && !excluded) {
+      length += Array.from(node.value || "").length
+      return
+    }
+    if (node.children) node.children.forEach((child) => walk(child, nextExcluded))
   }
+  walk(tree)
+  return length
+}
 
-  // Older engines still get safe punctuation boundaries. A period only ends
-  // a sentence before whitespace/end, so decimals and dotted identifiers stay
-  // together instead of producing noisy micro-fades.
-  const chars = Array.from(value)
-  const segments: string[] = []
-  let start = 0
-  for (let index = 0; index < chars.length; index++) {
-    const char = chars[index]
-    const next = chars[index + 1] || ""
-    const terminal = "。！？!?".includes(char)
-      || char === "\n"
-      || (char === "." && (!next || /\s/u.test(next)))
-    if (!terminal) continue
-    let end = index + 1
-    while (end < chars.length && "”’》）)]}".includes(chars[end])) end++
-    segments.push(chars.slice(start, end).join(""))
-    start = end
-    index = end - 1
+function reconcileRevealRanges(options: RevealOptions, visibleLength: number) {
+  const cutoff = options.now - STREAM_REVEAL_DURATION_MS
+  const ranges = options.runtime.ranges.filter((range) => range.end <= visibleLength && range.bornAt > cutoff)
+  if (options.append && visibleLength > options.start && !ranges.some((range) => (
+    range.start === options.start && range.end === visibleLength
+  ))) {
+    ranges.push({
+      start: options.start,
+      end: visibleLength,
+      bornAt: options.now,
+      sequence: ++options.runtime.nextSequence,
+    })
   }
-  if (start < chars.length) segments.push(chars.slice(start).join(""))
-  return segments.length > 0 ? segments : [value]
+  if (options.append && options.runtime.pendingSource === options.runtime.source) {
+    options.runtime.pendingSource = null
+    options.runtime.pendingStart = visibleLength
+  }
+  options.runtime.ranges = ranges
+  return ranges
+}
+
+function renderRevealText(chars: string[], start: number, ranges: RevealRange[], now: number) {
+  const end = start + chars.length
+  const boundaries = new Set([0, chars.length])
+  let intersects = false
+  for (const range of ranges) {
+    if (range.end <= start || range.start >= end) continue
+    intersects = true
+    boundaries.add(Math.max(0, range.start - start))
+    boundaries.add(Math.min(chars.length, range.end - start))
+  }
+  if (!intersects) return null
+
+  const offsets = [...boundaries].sort((left, right) => left - right)
+  const children: RevealNode[] = []
+  for (let index = 1; index < offsets.length; index++) {
+    const from = offsets[index - 1]
+    const to = offsets[index]
+    const value = chars.slice(from, to).join("")
+    const range = ranges.find((candidate) => start + from >= candidate.start && start + to <= candidate.end)
+    if (!range || !value.trim()) {
+      children.push({ type: "text", value })
+      continue
+    }
+    children.push({
+      type: "element",
+      tagName: "span",
+      properties: {
+        className: ["stream-reveal-text"],
+        "data-reveal-unit": "prose",
+        "data-reveal-sequence": String(range.sequence),
+        style: `--stream-reveal-elapsed:${Math.max(0, Math.floor(now - range.bornAt))}ms`,
+      },
+      children: [{ type: "text", value }],
+    })
+  }
+  return children
+}
+
+function isRevealExcluded(node: RevealNode) {
+  const classes = node.properties?.className
+  const isKatex = Array.isArray(classes) && classes.includes("katex")
+  return node.tagName === "pre" || node.tagName === "code" || node.tagName === "svg" || node.tagName === "math" || isKatex
 }
 
 function normalizeTexMathDelimiters(markdown: string) {

@@ -111,6 +111,10 @@ export function useStreamPresentation(target: string, ownerKey: string, enabled:
       active.nextBirthAt = now + presentationDelayMs(unit.visualCost)
       active.partialAfter = 0
       setDisplayedContent(active.target.slice(0, unit.end))
+      // MessageList remains the only scroll owner. This signal says layout
+      // changed because a paced unit became visible, including after the
+      // network lifecycle has handed off to a durable answer.
+      window.dispatchEvent(new Event("effchat:stream-presentation"))
       active.frame = requestAnimationFrame(tick)
     }
 

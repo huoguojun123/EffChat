@@ -143,6 +143,16 @@ func TestRuntimeProfileExposesGPT6AstraEfforts(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileLimitsGPT6AstraToolsToResponses(t *testing.T) {
+	modelInfo := &model.Model{ID: "gpt-6-astra", Provider: "openai", ToolUse: true, Reasoning: true}
+	if profile := RuntimeProfileForModelWithAdapter(modelInfo, "openai_compatible"); profile.SupportsTools {
+		t.Fatalf("Chat Completions profile must not advertise Astra tools: %+v", profile)
+	}
+	if profile := RuntimeProfileForModelWithAdapter(modelInfo, "openai_responses"); !profile.SupportsTools {
+		t.Fatalf("Responses profile must advertise Astra tools: %+v", profile)
+	}
+}
+
 func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 	cases := []struct {
 		name          string

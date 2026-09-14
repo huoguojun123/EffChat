@@ -635,6 +635,16 @@ func OpenAIOmitsSamplingParameters(modelID string) bool {
 	return isGPT6AstraModel(normalizeModelID(modelID))
 }
 
+// ModelSupportsToolsForAdapter narrows capabilities that depend on the wire
+// protocol. Astra accepts Chat Completions text requests, but its tool-calling
+// contract is available only through the Responses API.
+func ModelSupportsToolsForAdapter(modelID, adapter string, declared bool) bool {
+	if !declared {
+		return false
+	}
+	return !isGPT6AstraModel(normalizeModelID(modelID)) || normalizeAdapter(adapter) == "openai_responses"
+}
+
 func isGrokReasoningModel(id string) bool {
 	// Grok 4.20 reasoning does not advertise the standard reasoning_effort
 	// contract, while its multi-agent sibling uses effort for agent count.

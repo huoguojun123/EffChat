@@ -35,7 +35,7 @@ func RuntimeProfileForModelWithAdapter(m *model.Model, adapter string) model.Mod
 		ThinkingFormat:        string(format),
 		ThinkingEffortOptions: options,
 		SupportsVision:        m.Vision,
-		SupportsTools:         m.ToolUse,
+		SupportsTools:         ModelSupportsToolsForAdapter(m.ID, adapter, m.ToolUse),
 		SearchImpl:            m.SearchImpl,
 		TemperaturePolicy:     model.NormalizeTemperaturePolicy(m.TemperaturePolicy),
 		TemperatureValue:      cloneFloat64Pointer(m.TemperatureValue),

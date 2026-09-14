@@ -364,6 +364,7 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	req.Temperature = effectiveTemperature
 	req.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile)
 	channelMaterial := runtimeAIChannelMaterial(channel)
+	modelMaterial.ToolUse = modelbank.ModelSupportsToolsForAdapter(modelInfo.ID, channel.Adapter, modelMaterial.ToolUse)
 	requestMaterial := runtimeRequestMaterial{
 		SystemName: req.SystemName, SystemPrompt: req.SystemPrompt, Temperature: req.Temperature,
 		MaxTokens: req.MaxTokens, SchemaVersion: req.SchemaVersion, MessageFormat: req.MessageFormat,

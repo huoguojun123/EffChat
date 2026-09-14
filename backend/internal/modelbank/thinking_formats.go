@@ -26,6 +26,7 @@ const (
 	ThinkingFormatNone                  ThinkingFormat = "none"
 	ThinkingFormatOpenAIReasoningEffort ThinkingFormat = "openai_reasoning_effort"
 	ThinkingFormatOpenAIGPT56           ThinkingFormat = "openai_gpt_5_6"
+	ThinkingFormatOpenAIGPT6Astra       ThinkingFormat = "openai_gpt_6_astra"
 	ThinkingFormatDeepSeekV4            ThinkingFormat = "deepseek_v4"
 	ThinkingFormatDeepSeekV4Disabled    ThinkingFormat = "deepseek_v4_disabled"
 	ThinkingFormatDashScopeQwen         ThinkingFormat = "dashscope_qwen"
@@ -83,6 +84,7 @@ var validThinkingFormats = map[string]bool{
 	string(ThinkingFormatNone):                  true,
 	string(ThinkingFormatOpenAIReasoningEffort): true,
 	string(ThinkingFormatOpenAIGPT56):           true,
+	string(ThinkingFormatOpenAIGPT6Astra):       true,
 	string(ThinkingFormatDeepSeekV4):            true,
 	string(ThinkingFormatDeepSeekV4Disabled):    true,
 	string(ThinkingFormatDashScopeQwen):         true,
@@ -203,6 +205,9 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	if isDashScopeQwenThinkingModel(id) {
 		return ThinkingFormatDashScopeQwen
 	}
+	if isGPT6AstraModel(id) {
+		return ThinkingFormatOpenAIGPT6Astra
+	}
 	if isGPT56Model(id) {
 		return ThinkingFormatOpenAIGPT56
 	}
@@ -228,6 +233,13 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 	}
 
 	switch format {
+	case ThinkingFormatOpenAIGPT6Astra:
+		switch effort {
+		case ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax:
+			return effort
+		default:
+			return ThinkingEffortMedium
+		}
 	case ThinkingFormatOpenAIGPT56:
 		switch effort {
 		case ThinkingEffortNone, ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax:
@@ -263,13 +275,24 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		if effort == ThinkingEffortMax && anthropicSupportsMaxEffort(modelID) {
 			return effort
 		}
-		return ThinkingEffortMedium
+		// Anthropic's adaptive models use high when effort is omitted. Mirror the
+		// provider contract so an untouched EffChat selector does not silently
+		// downgrade new conversations to medium.
+		return ThinkingEffortHigh
 	case ThinkingFormatXAIGrok:
+		if effort == ThinkingEffortNone && xAICanDisableReasoning(modelID) {
+			return effort
+		}
 		if effort == ThinkingEffortLow || effort == ThinkingEffortMedium || effort == ThinkingEffortHigh {
 			return effort
 		}
 		if effort == ThinkingEffortXHigh && xAISupportsXHighEffort(modelID) {
 			return effort
+		}
+		if xAICanDisableReasoning(modelID) {
+			// Grok 4.3 defaults to low and is the only current standard model that
+			// accepts an explicit none value.
+			return ThinkingEffortLow
 		}
 		// Grok's ordinary reasoning models cannot disable reasoning; xAI defaults
 		// these requests to high, so mirror that instead of inventing an off mode.
@@ -341,6 +364,14 @@ func ApplyThinkingRuntimeMetadataWithAdapter(m *model.Model, adapter string) *mo
 
 func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []model.ThinkingEffortOption {
 	switch format {
+	case ThinkingFormatOpenAIGPT6Astra:
+		return []model.ThinkingEffortOption{
+			{Value: string(ThinkingEffortLow), Label: "低", Description: "GPT-6 Astra 最低推理投入，优先速度。"},
+			{Value: string(ThinkingEffortMedium), Label: "中", Description: "GPT-6 Astra 默认档位，平衡质量与延迟。"},
+			{Value: string(ThinkingEffortHigh), Label: "高", Description: "适合复杂分析、调试和多步任务。"},
+			{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适合质量优先的深度任务。"},
+			{Value: string(ThinkingEffortMax), Label: "最大", Description: "用于最困难、可接受高延迟的任务。"},
+		}
 	case ThinkingFormatOpenAIGPT56:
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortNone), Label: "关闭", Description: "不使用额外推理，优先最低延迟。"},
@@ -358,9 +389,9 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		}
 	case ThinkingFormatDeepSeekV4:
 		return []model.ThinkingEffortOption{
-			{Value: string(ThinkingEffortLow), Label: "Low", Description: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=low。"},
-			{Value: string(ThinkingEffortHigh), Label: "High", Description: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=high。"},
-			{Value: string(ThinkingEffortMax), Label: "Max", Description: "适用 deepseek-v4 / deepseek_v4；下发 thinking.type=enabled + reasoning_effort=max。"},
+			{Value: string(ThinkingEffortLow), Label: "Low", Description: "适用 deepseek-flash 与兼容 V4 alias；下发 thinking.type=enabled + reasoning_effort=low。"},
+			{Value: string(ThinkingEffortHigh), Label: "High", Description: "适用 deepseek-flash 与兼容 V4 alias；下发 thinking.type=enabled + reasoning_effort=high。"},
+			{Value: string(ThinkingEffortMax), Label: "Max", Description: "适用 deepseek-flash 与兼容 V4 alias；下发 thinking.type=enabled + reasoning_effort=max。"},
 		}
 	case ThinkingFormatDashScopeQwen:
 		return []model.ThinkingEffortOption{
@@ -405,13 +436,17 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		}
 		return options
 	case ThinkingFormatXAIGrok:
-		options := []model.ThinkingEffortOption{
-			{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Grok 标准推理模型；下发 reasoning_effort=low。"},
-			{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Grok 标准推理模型；下发 reasoning_effort=medium。"},
-			{Value: string(ThinkingEffortHigh), Label: "高", Description: "xAI 默认档位；下发 reasoning_effort=high。"},
+		options := make([]model.ThinkingEffortOption, 0, 5)
+		if xAICanDisableReasoning(modelID) {
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortNone), Label: "关闭", Description: "Grok 4.3 使用 reasoning_effort=none 关闭推理。"})
 		}
+		options = append(options,
+			model.ThinkingEffortOption{Value: string(ThinkingEffortLow), Label: "低", Description: "适用 Grok 标准推理模型；下发 reasoning_effort=low。"},
+			model.ThinkingEffortOption{Value: string(ThinkingEffortMedium), Label: "中", Description: "适用 Grok 标准推理模型；下发 reasoning_effort=medium。"},
+			model.ThinkingEffortOption{Value: string(ThinkingEffortHigh), Label: "高", Description: "xAI 默认档位；下发 reasoning_effort=high。"},
+		)
 		if xAISupportsXHighEffort(modelID) {
-			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.6、4.20 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.3、4.6 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
 		}
 		return options
 	case ThinkingFormatGLMThinking:
@@ -476,6 +511,8 @@ func isThinkingFormatApplicableWithContext(provider, adapter, modelID, displayNa
 	a := normalizeAdapter(adapter)
 	id := normalizeModelID(strings.TrimSpace(modelID + " " + displayName))
 	switch format {
+	case ThinkingFormatOpenAIGPT6Astra:
+		return a != "anthropic" && a != "google" && isGPT6AstraModel(id)
 	case ThinkingFormatOpenAIGPT56:
 		return a != "anthropic" && a != "google" && isGPT56Model(id)
 	case ThinkingFormatOpenAIReasoningEffort:
@@ -542,7 +579,8 @@ func normalizeModelID(modelID string) string {
 }
 
 func isDeepSeekV4Model(id string) bool {
-	return strings.Contains(id, "deepseek-v4") || strings.Contains(id, "deepseek_v4")
+	return strings.Contains(id, "deepseek-v4") || strings.Contains(id, "deepseek_v4") ||
+		strings.Contains(id, "deepseek-flash")
 }
 
 func isDashScopeQwenThinkingModel(id string) bool {
@@ -587,12 +625,24 @@ func isGPT56Model(id string) bool {
 	return strings.Contains(id, "gpt-5.6")
 }
 
+func isGPT6AstraModel(id string) bool {
+	return strings.Contains(id, "gpt-6-astra")
+}
+
+// OpenAIOmitsSamplingParameters reports model families whose official API
+// contract requires service defaults instead of temperature/top_p.
+func OpenAIOmitsSamplingParameters(modelID string) bool {
+	return isGPT6AstraModel(normalizeModelID(modelID))
+}
+
 func isGrokReasoningModel(id string) bool {
-	// grok-4.20-multi-agent uses a different agent-count control. Treat it as
-	// unsupported here rather than sending a standard reasoning budget to it.
+	// Grok 4.20 reasoning does not advertise the standard reasoning_effort
+	// contract, while its multi-agent sibling uses effort for agent count.
+	// Keep both out of this request profile rather than sending guessed fields.
 	// Explicit non-reasoning variants must also stay out of this family even if
 	// an imported catalog incorrectly marks their generic reasoning capability.
 	return strings.Contains(id, "grok-") &&
+		!strings.Contains(id, "grok-4.20") &&
 		!strings.Contains(id, "multi-agent") &&
 		!strings.Contains(id, "non-reasoning")
 }
@@ -600,8 +650,18 @@ func isGrokReasoningModel(id string) bool {
 func xAISupportsXHighEffort(modelID string) bool {
 	id := normalizeModelID(modelID)
 	return strings.Contains(id, "grok-4.6") ||
-		strings.Contains(id, "grok-4.20") ||
+		strings.Contains(id, "grok-4.3") ||
 		strings.Contains(id, "grok-4-1-fast")
+}
+
+func xAICanDisableReasoning(modelID string) bool {
+	return strings.Contains(normalizeModelID(modelID), "grok-4.3")
+}
+
+// XAICanDisableReasoning exposes the model-specific utility contract without
+// duplicating xAI family matching in the Agent request builder.
+func XAICanDisableReasoning(modelID string) bool {
+	return xAICanDisableReasoning(modelID)
 }
 
 func isGLMThinkingModel(id string) bool {

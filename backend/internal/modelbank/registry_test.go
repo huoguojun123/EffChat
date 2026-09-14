@@ -71,6 +71,31 @@ func TestBuiltinsIncludeGPT56Family(t *testing.T) {
 	}
 }
 
+func TestBuiltinsIncludeCurrentGPT6AndClaudeFable(t *testing.T) {
+	resetRegistryToBuiltins()
+	cases := []struct {
+		id       string
+		provider string
+		context  int
+		output   int
+	}{
+		{id: "gpt-6-astra", provider: "openai", context: 1050000, output: 128000},
+		{id: "claude-fable-5-1", provider: "anthropic", context: 1000000, output: 128000},
+	}
+	for _, tc := range cases {
+		info := Get(tc.id)
+		if info == nil {
+			t.Fatalf("missing builtin %s", tc.id)
+		}
+		if info.Provider != tc.provider || info.Capabilities.ContextWindow != tc.context || info.Capabilities.MaxOutput != tc.output {
+			t.Fatalf("%s profile = provider:%q limits:%d/%d", tc.id, info.Provider, info.Capabilities.ContextWindow, info.Capabilities.MaxOutput)
+		}
+		if !info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+			t.Fatalf("%s capabilities = %+v", tc.id, info.Capabilities)
+		}
+	}
+}
+
 func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 	resetRegistryToBuiltins()
 	cases := []struct {
@@ -98,12 +123,14 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "MiniMax-M3", provider: "minimax", context: 1000000, output: 524288, vision: true},
 		{id: "MiniMax-M2.7", provider: "minimax", context: 204800, output: 131072},
 		{id: "MiniMax-M2.7-highspeed", provider: "minimax", context: 204800, output: 131072},
+		{id: "grok-4.3", provider: "xai", context: 1000000, output: 0, vision: true},
+		{id: "grok-4.20", provider: "xai", context: 1000000, output: 0, vision: true},
 		{id: "grok-4.6", provider: "xai", context: 500000, output: 0, vision: true},
 		{id: "kimi-k3", provider: "moonshot", context: 1048576, output: 1048576, vision: true},
 		{id: "kimi-k2.7-code", provider: "moonshot", context: 262144, output: 0, vision: true},
 		{id: "kimi-k2.7-code-highspeed", provider: "moonshot", context: 262144, output: 0, vision: true},
 		{id: "kimi-k2.6", provider: "moonshot", context: 262144, output: 0, vision: true},
-		{id: "deepseek-v4-flash-vision-exp", provider: "deepseek", context: 1000000, output: 384000, vision: true},
+		{id: "deepseek-flash", provider: "deepseek", context: 1000000, output: 384000, vision: true},
 	}
 	for _, tc := range cases {
 		info := Get(tc.id)
@@ -119,9 +146,23 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 	}
 }
 
+func TestGrokNonReasoningBuiltinKeepsReasoningDisabled(t *testing.T) {
+	resetRegistryToBuiltins()
+	info := Get("grok-4.20-non-reasoning")
+	if info == nil {
+		t.Fatal("missing grok-4.20-non-reasoning builtin")
+	}
+	if info.Provider != "xai" || info.Capabilities.ContextWindow != 1000000 || !info.Capabilities.Vision || !info.Capabilities.ToolUse {
+		t.Fatalf("unexpected non-reasoning profile: %+v", info)
+	}
+	if info.Capabilities.Reasoning {
+		t.Fatalf("non-reasoning model must not advertise reasoning: %+v", info.Capabilities)
+	}
+}
+
 func TestBuiltinsDoNotRestoreRetiredDeepSeekAliases(t *testing.T) {
 	resetRegistryToBuiltins()
-	for _, id := range []string{"deepseek-chat", "deepseek-reasoner"} {
+	for _, id := range []string{"deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"} {
 		if Get(id) != nil {
 			t.Fatalf("retired DeepSeek alias %s must not return from the builtin fallback", id)
 		}

@@ -58,6 +58,10 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			temperature = nil
 			openAIProfile = model.OpenAIRequestProfile{}
 		}
+		if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+			temperature = nil
+			openAIProfile.TopP = nil
+		}
 		cfg := &openai.ChatModelConfig{
 			Model:            req.ModelID,
 			APIKey:           channel.APIKey,
@@ -97,6 +101,9 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		return a.wrapUsageModel(cm, req), nil
 
 	case service.AdapterOpenAIResponses:
+		if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+			temperature = nil
+		}
 		cfg := &openairesponses.Config{
 			Model:       req.ModelID,
 			APIKey:      channel.APIKey,
@@ -191,6 +198,9 @@ func (a *EinoAgent) buildResponsesAgenticModel(ctx context.Context, req *ChatReq
 	if err != nil {
 		return nil, fmt.Errorf("invalid model temperature profile: %w", err)
 	}
+	if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+		temperature = nil
+	}
 	cfg := &openairesponses.Config{
 		Model:       req.ModelID,
 		APIKey:      channel.APIKey,
@@ -252,7 +262,7 @@ func applyOpenAITokenLimit(req *ChatRequest, cfg *openai.ChatModelConfig) {
 		return
 	}
 	switch format {
-	case modelbank.ThinkingFormatOpenAIReasoningEffort, modelbank.ThinkingFormatOpenAIGPT56:
+	case modelbank.ThinkingFormatOpenAIReasoningEffort, modelbank.ThinkingFormatOpenAIGPT56, modelbank.ThinkingFormatOpenAIGPT6Astra:
 		cfg.MaxCompletionTokens = limit
 		return
 	}

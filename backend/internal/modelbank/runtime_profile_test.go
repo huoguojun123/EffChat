@@ -125,6 +125,24 @@ func TestRuntimeProfileExposesGPT56Efforts(t *testing.T) {
 	}
 }
 
+func TestRuntimeProfileExposesGPT6AstraEfforts(t *testing.T) {
+	profile := RuntimeProfileForModelWithAdapter(&model.Model{
+		ID:          "gpt-6-astra",
+		DisplayName: "GPT-6 Astra",
+		Provider:    "openai",
+		Reasoning:   true,
+	}, "openai_responses")
+	if profile.Family != "openai" || profile.WireProtocol != WireProtocolOpenAIResponses {
+		t.Fatalf("runtime profile = %+v", profile)
+	}
+	if profile.ThinkingFormat != string(ThinkingFormatOpenAIGPT6Astra) || profile.DefaultThinkingEffort != "medium" {
+		t.Fatalf("thinking profile = %+v", profile)
+	}
+	if len(profile.ThinkingEffortOptions) != 5 || profile.ThinkingEffortOptions[4].Value != "max" {
+		t.Fatalf("effort options = %+v", profile.ThinkingEffortOptions)
+	}
+}
+
 func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -136,6 +154,8 @@ func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 		defaultEffort string
 	}{
 		{name: "grok 4.5", provider: "xai", modelID: "grok-4.5", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 3, defaultEffort: "high"},
+		{name: "grok 4.3", provider: "xai", modelID: "grok-4.3", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 5, defaultEffort: "low"},
+		{name: "grok 4.20", provider: "xai", modelID: "grok-4.20", family: "xai", format: ThinkingFormatNone, optionCount: 0, defaultEffort: ""},
 		{name: "grok 4.6", provider: "xai", modelID: "grok-4.6", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 4, defaultEffort: "high"},
 		{name: "qwen 3.8", provider: "qwen", modelID: "qwen3.8-max", family: "qwen", format: ThinkingFormatDashScopeQwen, optionCount: 3, defaultEffort: "medium"},
 		{name: "qwen 3.7", provider: "qwen", modelID: "qwen3.7-flash", family: "qwen", format: ThinkingFormatDashScopeQwen, optionCount: 3, defaultEffort: "medium"},

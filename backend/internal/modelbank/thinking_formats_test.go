@@ -69,6 +69,15 @@ func TestResolveThinkingFormatDisablesDeepSeekV4WhenReasoningOff(t *testing.T) {
 	}
 }
 
+func TestDeepSeekFlashUsesV4ThinkingContract(t *testing.T) {
+	if got := ResolveThinkingFormat("deepseek", "deepseek-flash", "auto", true); got != ThinkingFormatDeepSeekV4 {
+		t.Fatalf("thinking format = %q, want %q", got, ThinkingFormatDeepSeekV4)
+	}
+	if got := ResolveThinkingFormat("deepseek", "deepseek-flash", "auto", false); got != ThinkingFormatDeepSeekV4Disabled {
+		t.Fatalf("disabled format = %q, want %q", got, ThinkingFormatDeepSeekV4Disabled)
+	}
+}
+
 func TestApplyThinkingRuntimeMetadata(t *testing.T) {
 	m := ApplyThinkingRuntimeMetadata(&model.Model{
 		ID:             "deepseek-v4-flash",
@@ -98,6 +107,7 @@ func TestResolveThinkingFormatKnownFamilies(t *testing.T) {
 	}{
 		{name: "openai reasoning", provider: "openai", modelID: "gpt-5.1", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "gpt 5.6 reasoning", provider: "openai", modelID: "gpt-5.6", reasoning: true, want: ThinkingFormatOpenAIGPT56},
+		{name: "gpt 6 astra reasoning", provider: "openai", modelID: "gpt-6-astra", reasoning: true, want: ThinkingFormatOpenAIGPT6Astra},
 		{name: "qwen thinking", provider: "openai", modelID: "qwen3-max", reasoning: true, want: ThinkingFormatDashScopeQwen},
 		{name: "qwen non-reasoning does not auto-enable thinking", provider: "openai", modelID: "Qwen/Qwen3-VL-32B-Instruct", reasoning: false, want: ThinkingFormatNone},
 		{name: "gemini thinking", provider: "google", modelID: "gemini-2.5-pro", reasoning: true, want: ThinkingFormatGeminiThinking},
@@ -109,6 +119,8 @@ func TestResolveThinkingFormatKnownFamilies(t *testing.T) {
 		{name: "claude 3.5 remains manual budget", provider: "anthropic", modelID: "claude-3-5-haiku-latest", reasoning: false, want: ThinkingFormatAnthropicBudget},
 		{name: "openai reasoning through custom gateway", provider: "my-gateway", modelID: "gpt-5.1", reasoning: true, want: ThinkingFormatOpenAIReasoningEffort},
 		{name: "grok reasoning", provider: "xai", modelID: "grok-4.5", reasoning: true, want: ThinkingFormatXAIGrok},
+		{name: "grok 4.3 reasoning", provider: "xai", modelID: "grok-4.3", reasoning: true, want: ThinkingFormatXAIGrok},
+		{name: "grok 4.20 keeps provider default", provider: "xai", modelID: "grok-4.20", reasoning: true, want: ThinkingFormatNone},
 		{name: "grok 4.6 reasoning", provider: "xai", modelID: "grok-4.6", reasoning: true, want: ThinkingFormatXAIGrok},
 		{name: "grok multi agent remains unsupported", provider: "xai", modelID: "grok-4.20-multi-agent", reasoning: true, want: ThinkingFormatNone},
 		{name: "grok explicit non reasoning remains unsupported", provider: "xai", modelID: "grok-4-fast-non-reasoning", reasoning: true, want: ThinkingFormatNone},
@@ -137,6 +149,9 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 		want      ThinkingEffort
 	}{
 		{name: "grok cannot disable ordinary reasoning", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "none", want: ThinkingEffortHigh},
+		{name: "grok 4.3 accepts disabled", format: ThinkingFormatXAIGrok, modelID: "grok-4.3", requested: "none", want: ThinkingEffortNone},
+		{name: "grok 4.3 defaults low", format: ThinkingFormatXAIGrok, modelID: "grok-4.3", requested: "", want: ThinkingEffortLow},
+		{name: "grok 4.3 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.3", requested: "xhigh", want: ThinkingEffortXHigh},
 		{name: "grok keeps medium", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "medium", want: ThinkingEffortMedium},
 		{name: "grok 4.5 rejects xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "xhigh", want: ThinkingEffortHigh},
 		{name: "grok 4.6 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.6", requested: "xhigh", want: ThinkingEffortXHigh},
@@ -177,6 +192,9 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 	}
 	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.5"); len(got) != 3 {
 		t.Fatalf("Grok 4.5 options = %#v", got)
+	}
+	if got := ThinkingEffortOptionsForModel(ThinkingFormatXAIGrok, "grok-4.3"); len(got) != 5 || got[0].Value != "none" || got[4].Value != "xhigh" {
+		t.Fatalf("Grok 4.3 options = %#v", got)
 	}
 }
 
@@ -283,6 +301,28 @@ func TestGPT56ThinkingEfforts(t *testing.T) {
 	}
 }
 
+func TestGPT6AstraThinkingEfforts(t *testing.T) {
+	wants := []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}
+	options := ThinkingEffortOptionsForModel(ThinkingFormatOpenAIGPT6Astra, "gpt-6-astra")
+	if len(options) != len(wants) {
+		t.Fatalf("options = %d, want %d", len(options), len(wants))
+	}
+	for i, want := range wants {
+		if options[i].Value != string(want) {
+			t.Fatalf("option[%d] = %q, want %q", i, options[i].Value, want)
+		}
+		if got := ResolveThinkingEffortForModel(ThinkingFormatOpenAIGPT6Astra, "gpt-6-astra", string(want)); got != want {
+			t.Fatalf("resolved effort = %q, want %q", got, want)
+		}
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatOpenAIGPT6Astra, "gpt-6-astra", "none"); got != ThinkingEffortMedium {
+		t.Fatalf("disabled Astra effort = %q, want medium", got)
+	}
+	if !OpenAIOmitsSamplingParameters("openai/gpt-6-astra-2026-09-14") {
+		t.Fatal("dated Astra alias must omit sampling parameters")
+	}
+}
+
 func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -298,7 +338,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 		{
 			name:     "deepseek",
 			format:   ThinkingFormatDeepSeekV4,
-			contains: []string{"deepseek-v4", "reasoning_effort=low", "thinking.type=enabled", "reasoning_effort=max"},
+			contains: []string{"deepseek-flash", "reasoning_effort=low", "thinking.type=enabled", "reasoning_effort=max"},
 		},
 		{
 			name:     "qwen",
@@ -331,7 +371,7 @@ func TestThinkingEffortOptionsDescribeModelFamilies(t *testing.T) {
 			name:     "grok",
 			format:   ThinkingFormatXAIGrok,
 			modelID:  "grok-4.6",
-			contains: []string{"Grok 标准推理模型", "reasoning_effort", "Grok 4.6"},
+			contains: []string{"Grok 标准推理模型", "reasoning_effort", "Grok 4.3、4.6"},
 		},
 		{
 			name:     "glm",
@@ -420,8 +460,14 @@ func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
 			}
 		})
 	}
-	if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, "claude-sonnet-4-6", "xhigh"); got != ThinkingEffortMedium {
-		t.Fatalf("Claude 4.6 xhigh = %q, want medium fallback", got)
+	if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, "claude-sonnet-4-6", "xhigh"); got != ThinkingEffortHigh {
+		t.Fatalf("Claude 4.6 xhigh = %q, want high provider fallback", got)
+	}
+}
+
+func TestAnthropicAdaptiveDefaultsToProviderHigh(t *testing.T) {
+	if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, "claude-fable-5-1", ""); got != ThinkingEffortHigh {
+		t.Fatalf("Fable 5.1 default effort = %q, want high", got)
 	}
 }
 

@@ -7,6 +7,22 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.11] - 2026-09-14
+
+### Added
+
+- Added verified built-in catalog entries and request contracts for GPT-6 Astra, Claude Fable 5.1, Grok 4.3/4.20, and DeepSeek V4.1 Flash without changing administrator-owned channel configuration.
+
+### Fixed
+
+- Applied each provider's verified reasoning defaults and request-field constraints, including Astra's Responses-only tool boundary and omission of unsupported sampling fields.
+- Removed the obsolete DeepSeek V4 built-in aliases while retaining family and wire compatibility for existing administrator-managed model records.
+
+### Verification
+
+- Backend model-bank, Agent, full test, and vet suites passed; frontend lint, 61 test files/383 tests, production build, and PWA checks passed.
+- No database migration, public API, deployment topology, Korea, runtime environment, or persisted-user-data changes.
+
 ## [0.4.1-beta.10] - 2026-09-09
 
 ### Fixed

@@ -42,10 +42,10 @@ func TestApplyOpenAICompatibleThinkingDeepSeekMax(t *testing.T) {
 }
 
 func TestApplyOpenAICompatibleThinkingDeepSeekLow(t *testing.T) {
-	cfg := &openai.ChatModelConfig{Model: "deepseek-v4-flash"}
+	cfg := &openai.ChatModelConfig{Model: "deepseek-flash"}
 	applyOpenAICompatibleThinking(&ChatRequest{
 		Provider:       "openai",
-		ModelID:        "deepseek-v4-flash",
+		ModelID:        "deepseek-flash",
 		Reasoning:      true,
 		ThinkingEffort: string(modelbank.ThinkingEffortLow),
 	}, cfg)
@@ -81,6 +81,30 @@ func TestApplyOpenAICompatibleThinkingSupportsGPT56ExtendedEfforts(t *testing.T)
 		if got := cfg.ExtraFields["reasoning_effort"]; got != effort {
 			t.Fatalf("effort %q encoded as %#v", effort, got)
 		}
+	}
+}
+
+func TestApplyOpenAICompatibleThinkingSupportsGPT6Astra(t *testing.T) {
+	cfg := &openai.ChatModelConfig{Model: "gpt-6-astra"}
+	applyOpenAICompatibleThinking(&ChatRequest{
+		Provider:       "openai",
+		ModelID:        cfg.Model,
+		Reasoning:      true,
+		ThinkingEffort: string(modelbank.ThinkingEffortMax),
+	}, cfg)
+	if got := cfg.ExtraFields["reasoning_effort"]; got != "max" {
+		t.Fatalf("reasoning_effort = %#v, want max", got)
+	}
+
+	utility := &openai.ChatModelConfig{Model: cfg.Model}
+	applyOpenAICompatibleThinking(&ChatRequest{Provider: "openai", ModelID: cfg.Model, Reasoning: true, SuppressThinking: true}, utility)
+	if got := utility.ExtraFields["reasoning_effort"]; got != "low" {
+		t.Fatalf("utility reasoning_effort = %#v, want low", got)
+	}
+
+	responsesReasoning := openAIResponsesReasoning(&ChatRequest{Provider: "openai", ModelID: cfg.Model, Reasoning: true, SuppressThinking: true})
+	if responsesReasoning == nil || responsesReasoning.Effort != "low" {
+		t.Fatalf("Responses utility reasoning = %#v, want low", responsesReasoning)
 	}
 }
 
@@ -140,6 +164,19 @@ func TestOpenAIResponsesReasoningSupportsGPT56Max(t *testing.T) {
 	})
 	if reasoning == nil || reasoning.Effort != "max" {
 		t.Fatalf("Responses reasoning = %#v, want max", reasoning)
+	}
+}
+
+func TestApplyOpenAICompatibleThinkingGrok43UtilityDisablesReasoning(t *testing.T) {
+	cfg := &openai.ChatModelConfig{Model: "grok-4.3"}
+	applyOpenAICompatibleThinking(&ChatRequest{
+		Provider:         "xai",
+		ModelID:          "grok-4.3",
+		Reasoning:        true,
+		SuppressThinking: true,
+	}, cfg)
+	if got := cfg.ExtraFields["reasoning_effort"]; got != "none" {
+		t.Fatalf("reasoning_effort = %#v, want none", got)
 	}
 }
 

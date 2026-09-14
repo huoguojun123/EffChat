@@ -31,8 +31,16 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		if format == modelbank.ThinkingFormatDeepSeekV4 || format == modelbank.ThinkingFormatDeepSeekV4Disabled {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
 		} else if format == modelbank.ThinkingFormatXAIGrok {
-			// Standard Grok reasoning cannot be disabled. Utilities request the
-			// lowest legal effort instead of omitting the field and inheriting high.
+			if modelbank.XAICanDisableReasoning(req.ModelID) {
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortNone))
+			} else {
+				// Most standard Grok reasoning models cannot be disabled. Utilities
+				// request the lowest legal effort instead of inheriting high.
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			}
+		} else if format == modelbank.ThinkingFormatOpenAIGPT6Astra {
+			// Astra reasoning cannot be disabled. Utility calls explicitly request
+			// the lowest supported effort instead of inheriting the model default.
 			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
 		} else if format == modelbank.ThinkingFormatDashScopeQwen {
 			if modelbank.QwenThinkingCanDisable(req.ModelID) {
@@ -60,6 +68,8 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch format {
+	case modelbank.ThinkingFormatOpenAIGPT6Astra:
+		setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
 	case modelbank.ThinkingFormatOpenAIGPT56:
 		setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
 	case modelbank.ThinkingFormatOpenAIReasoningEffort:
@@ -121,12 +131,21 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 // Responses SDK. Vendor-specific thinking formats and EffChat's forward-looking
 // "max" value must not leak into this wire protocol as unvalidated strings.
 func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
-	if req == nil || req.SuppressThinking {
+	if req == nil {
 		return nil
 	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
-	if format != modelbank.ThinkingFormatOpenAIReasoningEffort && format != modelbank.ThinkingFormatOpenAIGPT56 {
+	if format != modelbank.ThinkingFormatOpenAIReasoningEffort && format != modelbank.ThinkingFormatOpenAIGPT56 && format != modelbank.ThinkingFormatOpenAIGPT6Astra {
 		return nil
+	}
+	if req.SuppressThinking {
+		if format != modelbank.ThinkingFormatOpenAIGPT6Astra {
+			return nil
+		}
+		return &responses.ReasoningParam{
+			Effort:  shared.ReasoningEffortLow,
+			Summary: shared.ReasoningSummaryAuto,
+		}
 	}
 	effort := modelbank.ResolveThinkingEffortForModel(format, req.ModelID, req.ThinkingEffort)
 	switch effort {

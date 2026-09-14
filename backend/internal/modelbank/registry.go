@@ -20,6 +20,13 @@ import (
 func builtinModels() map[string]*ModelInfo {
 	return map[string]*ModelInfo{
 		// ============ OpenAI ============
+		"gpt-6-astra": {
+			ID: "gpt-6-astra", DisplayName: "GPT-6 Astra", Provider: "openai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1050000, MaxOutput: 128000,
+			},
+		},
 		"gpt-5.6": {
 			ID: "gpt-5.6", DisplayName: "GPT-5.6", Provider: "openai", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -88,6 +95,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Anthropic ============
+		"claude-fable-5-1": {
+			ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-fable-5": {
 			ID: "claude-fable-5", DisplayName: "Claude Fable 5", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -324,6 +338,27 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ xAI ============
+		"grok-4.3": {
+			ID: "grok-4.3", DisplayName: "Grok 4.3", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000,
+			},
+		},
+		"grok-4.20": {
+			ID: "grok-4.20", DisplayName: "Grok 4.20", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000,
+			},
+		},
+		"grok-4.20-non-reasoning": {
+			ID: "grok-4.20-non-reasoning", DisplayName: "Grok 4.20 Non-Reasoning", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000,
+			},
+		},
 		"grok-4.6": {
 			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -333,17 +368,10 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ DeepSeek ============
-		"deepseek-v4-flash-vision-exp": {
-			ID: "deepseek-v4-flash-vision-exp", DisplayName: "DeepSeek V4 Flash Vision Experimental", Provider: "deepseek", Enabled: true,
+		"deepseek-flash": {
+			ID: "deepseek-flash", DisplayName: "DeepSeek V4.1 Flash", Provider: "deepseek", Enabled: true,
 			Capabilities: ModelCapabilities{
 				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
-				ContextWindow: 1000000, MaxOutput: 384000,
-			},
-		},
-		"deepseek-v4-flash": {
-			ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Provider: "deepseek", Enabled: true,
-			Capabilities: ModelCapabilities{
-				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
 				ContextWindow: 1000000, MaxOutput: 384000,
 			},
 		},

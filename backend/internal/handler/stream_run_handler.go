@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -458,6 +459,18 @@ func executeAgentRun(exec agentRunExecution) {
 		})
 		return
 	}
+	if err := validateAcceptedUserMessageContext(messages, userMessage); err != nil {
+		logger.Error("accepted user message missing from agent context: request_id=%q run_id=%q session=%d message=%d err=%v", requestID, runSnapshot.RunID, sessionID, userMessage.ID, err)
+		payload := gin.H{"error": "本轮消息上下文未完整就绪，请重试", "code": "conversation_context_incomplete", "retryable": true}
+		if requestID != "" {
+			payload["request_id"] = requestID
+		}
+		_ = writeRunTerminal(nil, runHub, runSnapshot.RunID, service.RunTerminal{
+			Status: service.RunStatusFailed, PublicErrorCode: "conversation_context_incomplete", PublicErrorMessage: "本轮消息上下文未完整就绪，请重试",
+			Event: streaming.EventError, Data: payload,
+		})
+		return
+	}
 
 	agentReq := buildAgentRequestFromSession(session, user, messages, titleService, enabledSkills, thinkingEffortFromMessage(userMessage))
 	agentReq.SchemaVersion = userMessage.SchemaVersion
@@ -708,6 +721,41 @@ func loadRunConversationMessages(ctx context.Context, messageService *service.Me
 		return nil, service.ErrRetryTargetStale
 	}
 	return messageService.ListForRetryAgentContext(ctx, sessionID, userID, runSnapshot.RetryTargetMessageID)
+}
+
+// validateAcceptedUserMessageContext protects the admission-to-execution boundary.
+// The worker deliberately reloads history after the durable admission commit, but
+// a missing or altered accepted turn must fail closed before any model call. This
+// keeps a transaction/visibility defect from becoming a silent partial prompt.
+func validateAcceptedUserMessageContext(messages []*model.Message, accepted *model.Message) error {
+	if accepted == nil || accepted.ID <= 0 {
+		return errors.New("accepted user message is missing")
+	}
+	expected, err := repository.ParseMessageData(accepted.MessageData)
+	if err != nil {
+		return fmt.Errorf("parse accepted message: %w", err)
+	}
+	expectedRole, _ := expected["role"].(string)
+	expectedContent, _ := expected["content"].(string)
+	for _, message := range messages {
+		if message == nil || message.ID != accepted.ID {
+			continue
+		}
+		actual, parseErr := repository.ParseMessageData(message.MessageData)
+		if parseErr != nil {
+			return fmt.Errorf("parse reloaded message %d: %w", accepted.ID, parseErr)
+		}
+		actualRole, _ := actual["role"].(string)
+		actualContent, _ := actual["content"].(string)
+		if actualRole != expectedRole || actualRole != "user" {
+			return fmt.Errorf("reloaded message %d role mismatch", accepted.ID)
+		}
+		if actualContent != expectedContent {
+			return fmt.Errorf("reloaded message %d content mismatch", accepted.ID)
+		}
+		return nil
+	}
+	return fmt.Errorf("accepted message %d is absent from agent context", accepted.ID)
 }
 
 func loadPostRunMemorySession(sessionService *service.SessionService, sessionID, userID int64) (*model.Session, error) {

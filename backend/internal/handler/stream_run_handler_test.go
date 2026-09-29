@@ -740,6 +740,35 @@ func TestLoadRunConversationMessagesUsesOriginalRetryTarget(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptedUserMessageContextRequiresExactContent(t *testing.T) {
+	accepted := &model.Message{
+		ID:          41,
+		MessageData: []byte(`{"role":"user","content":"完整的首轮消息\nwith unicode ✓"}`),
+	}
+
+	t.Run("accepts exact reloaded message", func(t *testing.T) {
+		if err := validateAcceptedUserMessageContext([]*model.Message{{
+			ID:          41,
+			MessageData: []byte(`{"role":"user","content":"完整的首轮消息\nwith unicode ✓"}`),
+		}}, accepted); err != nil {
+			t.Fatalf("validate exact context: %v", err)
+		}
+	})
+	t.Run("rejects truncated content", func(t *testing.T) {
+		if err := validateAcceptedUserMessageContext([]*model.Message{{
+			ID:          41,
+			MessageData: []byte(`{"role":"user","content":"完整的首轮消息"}`),
+		}}, accepted); err == nil {
+			t.Fatal("truncated context unexpectedly accepted")
+		}
+	})
+	t.Run("rejects absent message", func(t *testing.T) {
+		if err := validateAcceptedUserMessageContext(nil, accepted); err == nil {
+			t.Fatal("absent context unexpectedly accepted")
+		}
+	})
+}
+
 func TestLoadPostRunMemorySessionUsesDetachedContext(t *testing.T) {
 	env := setupTestEnv(t)
 	session := createResumeTestSession(t, env)

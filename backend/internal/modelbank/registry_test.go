@@ -58,6 +58,17 @@ func TestLoadModels_EmptyClearsRegistry(t *testing.T) {
 	resetRegistryToBuiltins() // 还原，避免影响 search_config_test 等同包测试
 }
 
+func TestGetOrDefaultUnknownModelUsesConservativeCapabilities(t *testing.T) {
+	resetRegistryToBuiltins()
+	info := GetOrDefault("future-model-without-evidence", "openai")
+	if info == nil || info.ID != "future-model-without-evidence" || info.Provider != "openai" {
+		t.Fatalf("unexpected fallback model: %+v", info)
+	}
+	if info.Capabilities.Vision || info.Capabilities.ToolUse || info.Capabilities.Reasoning || info.Capabilities.SearchImpl != SearchImplNone {
+		t.Fatalf("unknown model must use conservative capabilities: %+v", info.Capabilities)
+	}
+}
+
 func TestBuiltinsIncludeGPT56Family(t *testing.T) {
 	resetRegistryToBuiltins()
 	for _, id := range []string{"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {

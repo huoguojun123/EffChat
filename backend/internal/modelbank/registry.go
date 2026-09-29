@@ -423,7 +423,9 @@ func Get(modelID string) *ModelInfo {
 	return registry[modelID]
 }
 
-// GetOrDefault 获取模型信息，找不到时返回一个保守默认（不支持原生搜索）
+// GetOrDefault 获取模型信息，找不到时返回一个保守默认。
+// 未知型号不猜测工具、视觉或推理能力；管理员显式保存的模型仍由 LoadModels
+// 提供完整能力字段。这样新型号不会因为名称相似而被错误注入高级请求参数。
 func GetOrDefault(modelID, provider string) *ModelInfo {
 	if m := Get(modelID); m != nil {
 		return m
@@ -435,7 +437,6 @@ func GetOrDefault(modelID, provider string) *ModelInfo {
 		Provider:    provider,
 		Enabled:     true,
 		Capabilities: ModelCapabilities{
-			ToolUse:    true,
 			SearchImpl: SearchImplNone,
 		},
 	}

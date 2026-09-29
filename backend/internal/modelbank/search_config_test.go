@@ -68,10 +68,10 @@ func TestResolveSearchConfig(t *testing.T) {
 			wantEnabled: true, wantNative: true, wantAppTool: true,
 		},
 		{
-			name:    "未知模型 → 当作无原生搜索，挂应用工具",
+			name:    "未知模型 → 保守不声明工具能力",
 			modelID: "some-unknown-model", provider: "openai",
 			mode: SearchModeAuto, preferNative: true,
-			wantEnabled: true, wantNative: false, wantAppTool: true,
+			wantEnabled: true, wantNative: false, wantAppTool: false,
 		},
 	}
 

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -321,6 +322,31 @@ func TestADKRunCompletionReplayDoesNotDuplicateDurableState(t *testing.T) {
 	}
 	if events := runEventsForRegression(t, harness.runHub, runID, session.ID, env.userID); countRunEvents(events, streaming.EventMessageStart) != 1 || countRunEvents(events, streaming.EventMessageComplete) != 1 {
 		t.Fatalf("replay duplicated run event ledger: %+v", events)
+	}
+}
+
+func TestADKFirstTurnProviderPayloadKeepsCompleteAcceptedContent(t *testing.T) {
+	const content = "首轮完整内容\n第二行 ✓ with English"
+	var payloadMatched atomic.Bool
+	provider := newScriptedOpenAIProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read provider request: %v", err)
+		} else if strings.Contains(string(body), content) {
+			payloadMatched.Store(true)
+		}
+		writeOpenAIStreamingCompletion(w, "first turn captured")
+	})
+	env := setupTestEnv(t)
+	harness := newADKRunRegressionHarness(t, env, provider)
+	session := harness.createSession(t, "first turn payload")
+	stream := harness.send(t, session.ID, "first-turn-payload", content)
+	if stream.Code != http.StatusOK || !strings.Contains(stream.Body.String(), "event: "+streaming.EventMessageComplete) {
+		t.Fatalf("first-turn stream status=%d body=%s", stream.Code, stream.Body.String())
+	}
+	harness.drainUsage(t)
+	if !payloadMatched.Load() {
+		t.Fatal("provider payload did not contain the complete accepted first-turn content")
 	}
 }
 

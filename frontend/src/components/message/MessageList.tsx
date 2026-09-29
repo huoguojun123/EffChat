@@ -24,6 +24,7 @@ import { buildConversationTurns, conversationTurnMarkerRange, conversationTurnPr
 import { useSearchParams } from "react-router"
 
 const INITIAL_BOTTOM_LOCK_MS = 1400
+const NEW_TURN_LAYOUT_SETTLE_MS = 900
 
 export function MessageList() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -56,6 +57,8 @@ export function MessageList() {
   const bottomLockSessionRef = useRef<number | null>(null)
   const bottomLockUntilRef = useRef(0)
   const bottomLockTimerRef = useRef(0)
+  const newTurnRafRef = useRef(0)
+  const newTurnAnchorUntilRef = useRef(0)
   const userCancelledBottomLockRef = useRef(false)
   const userPausedAutoFollowRef = useRef(false)
   const suppressOlderLoadUntilRef = useRef(0)
@@ -182,10 +185,19 @@ export function MessageList() {
     const top = turn.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
     const readingBand = Math.min(144, Math.max(40, container.clientHeight * 0.22))
     container.scrollTop = Math.max(0, top - readingBand)
+    newTurnAnchorUntilRef.current = Date.now() + NEW_TURN_LAYOUT_SETTLE_MS
     wasNearBottomRef.current = true
     userPausedAutoFollowRef.current = false
     return true
   }, [visibleMessages])
+
+  const settleNewUserTurn = useCallback(() => {
+    cancelAnimationFrame(newTurnRafRef.current)
+    newTurnRafRef.current = requestAnimationFrame(() => {
+      if (Date.now() > newTurnAnchorUntilRef.current) return
+      placeNewUserTurnInReadingBand()
+    })
+  }, [placeNewUserTurnInReadingBand])
 
   const clearPendingAnchor = useCallback(() => {
     window.clearTimeout(pendingAnchorTimerRef.current)
@@ -207,7 +219,7 @@ export function MessageList() {
     const el = scrollRef.current
     if (!el || !activeSessionId) return
     if (bottomLockSessionRef.current !== activeSessionId) return
-    if (pendingAnchorRef.current != null || userCancelledBottomLockRef.current || Date.now() > bottomLockUntilRef.current) {
+    if (pendingAnchorRef.current != null || newTurnAnchorUntilRef.current > Date.now() || userCancelledBottomLockRef.current || Date.now() > bottomLockUntilRef.current) {
       clearInitialBottomLock()
       return
     }
@@ -332,6 +344,8 @@ export function MessageList() {
   useEffect(() => {
     wasNearBottomRef.current = true
     userPausedAutoFollowRef.current = false
+    newTurnAnchorUntilRef.current = 0
+    cancelAnimationFrame(newTurnRafRef.current)
     if (initialScrolledSessionRef.current !== activeSessionId) previousMessageCountRef.current = 0
     clearReasoningState("stream:")
   }, [activeSessionId, clearReasoningState])
@@ -362,7 +376,8 @@ export function MessageList() {
     previousMessageCountRef.current = messages.length
     if (!wasNearBottomRef.current || userPausedAutoFollowRef.current) return
     if (!placeNewUserTurnInReadingBand()) scrollToBottom(true)
-  }, [messages.length, placeNewUserTurnInReadingBand, scrollToBottom])
+    else settleNewUserTurn()
+  }, [messages.length, placeNewUserTurnInReadingBand, scrollToBottom, settleNewUserTurn])
 
   useEffect(() => {
     const target = listRef.current
@@ -372,13 +387,15 @@ export function MessageList() {
       // MessageList is the sole scroll owner. This catches late layout from
       // Markdown, previews, fonts and composer inset without teaching those
       // components how to move the conversation viewport.
-      if (isStreaming && wasNearBottomRef.current && !userPausedAutoFollowRef.current) {
+      if (newTurnAnchorUntilRef.current > Date.now()) {
+        settleNewUserTurn()
+      } else if (isStreaming && wasNearBottomRef.current && !userPausedAutoFollowRef.current) {
         scheduleBottomFollow()
       }
     })
     observer.observe(target)
     return () => observer.disconnect()
-  }, [isStreaming, keepInitialBottomLocked, scheduleBottomFollow])
+  }, [isStreaming, keepInitialBottomLocked, scheduleBottomFollow, settleNewUserTurn])
 
   useEffect(() => {
     window.addEventListener("effchat:stream-presentation", scheduleBottomFollow)
@@ -402,6 +419,8 @@ export function MessageList() {
       // the same follow owner in both the live and post-handoff phases.
       userPausedAutoFollowRef.current = true
       wasNearBottomRef.current = false
+      newTurnAnchorUntilRef.current = 0
+      cancelAnimationFrame(newTurnRafRef.current)
       cancelAnimationFrame(rafRef.current)
       stopBottomFollow()
     }
@@ -420,6 +439,7 @@ export function MessageList() {
   useEffect(() => () => {
     cancelAnimationFrame(rafRef.current)
     stopBottomFollow()
+    cancelAnimationFrame(newTurnRafRef.current)
     cancelAnimationFrame(trimRafRef.current)
     window.clearTimeout(bottomLockTimerRef.current)
     window.clearTimeout(recoveryDelayTimerRef.current)

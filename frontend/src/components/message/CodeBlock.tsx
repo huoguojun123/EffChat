@@ -68,11 +68,9 @@ export const CodeBlock = memo(function CodeBlock({ code, language, streaming = f
   const previewReady = readyPreviewId === previewArtifact.id
   const requestedPreview = previewable && mode === "preview" && !streaming
   const showPreview = requestedPreview && previewReady
-  const highlightedHtml = streaming
-    ? fallbackCodeHtml(displayCode)
-    : highlightState.identity === highlightIdentity
-      ? highlightState.html
-      : fallbackCodeHtml(displayCode)
+  const highlightedHtml = highlightState.identity === highlightIdentity
+    ? highlightState.html
+    : fallbackCodeHtml(displayCode)
 
   function handleCopy() {
     navigator.clipboard.writeText(code)
@@ -217,7 +215,11 @@ export const CodeBlock = memo(function CodeBlock({ code, language, streaming = f
                 : "relative opacity-100"}
             >
               <div className={expanded ? "code-scrollbar overflow-x-auto" : "code-scrollbar max-h-full overflow-auto"}>
-                <div className="shiki-code-block" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+                {streaming ? (
+                  <pre className="shiki-code-block streaming-code-source"><code>{displayCode}</code></pre>
+                ) : (
+                  <div className="shiki-code-block" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+                )}
               </div>
             </div>
             {previewable && !streaming ? (

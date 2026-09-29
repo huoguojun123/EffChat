@@ -44,6 +44,46 @@ func TestConvertToEinoMessagesAppendsWebToolContextToLatestUser(t *testing.T) {
 	}
 }
 
+func TestConvertToEinoMessagesPreservesFirstTurnPayloadAndAttachmentBoundary(t *testing.T) {
+	content := "首轮完整内容\n第二行 ✓ 中文与 English"
+	user := messageFromSchema(t, schema.UserMessage(content))
+	user.ID = 901
+	var payload map[string]any
+	if err := json.Unmarshal(user.MessageData, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["_image_parts"] = []map[string]any{{"file_id": 12, "filename": "diagram.png", "file_type": "image/png"}}
+	user.MessageData, _ = json.Marshal(payload)
+
+	got, err := convertToEinoMessages([]*model.Message{user}, false)
+	if err != nil {
+		t.Fatalf("convertToEinoMessages: %v", err)
+	}
+	if len(got) != 1 || got[0].Role != schema.User || !strings.HasPrefix(got[0].Content, content) {
+		t.Fatalf("first-turn model payload = %#v, want exact user content", got)
+	}
+	if strings.Contains(got[0].Content, "file_id") || strings.Contains(got[0].Content, "_image_parts") {
+		t.Fatalf("raw attachment metadata leaked into first-turn text: %q", got[0].Content)
+	}
+}
+
+func TestConvertToEinoMessagesKeepsDistinctTurnsInOrder(t *testing.T) {
+	first := messageFromSchema(t, schema.UserMessage("第一轮\n完整 ✓"))
+	first.ID = 902
+	assistant := messageFromSchema(t, schema.AssistantMessage("第一轮回答", nil))
+	assistant.ID = 903
+	second := messageFromSchema(t, schema.UserMessage("第二轮"))
+	second.ID = 904
+
+	got, err := convertToEinoMessages([]*model.Message{first, assistant, second}, false)
+	if err != nil {
+		t.Fatalf("convertToEinoMessages: %v", err)
+	}
+	if len(got) != 3 || got[0].Content != "第一轮\n完整 ✓" || got[1].Content != "第一轮回答" || got[2].Content != "第二轮" {
+		t.Fatalf("ordered model messages = %#v", got)
+	}
+}
+
 func TestConvertToEinoMessagesSkipsFailedWebSearchContext(t *testing.T) {
 	searchContent, _ := json.Marshal(map[string]interface{}{
 		"summary":       "failed",

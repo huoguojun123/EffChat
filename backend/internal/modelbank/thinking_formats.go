@@ -208,6 +208,9 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	if isGPT6RequiredReasoningModel(id) {
 		return ThinkingFormatOpenAIGPT6Astra
 	}
+	if IsGPT6LunaModel(id) {
+		return ThinkingFormatOpenAIGPT56
+	}
 	if isGPT56Model(id) {
 		return ThinkingFormatOpenAIGPT56
 	}
@@ -373,6 +376,16 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			{Value: string(ThinkingEffortMax), Label: "最大", Description: "用于最困难、可接受高延迟的任务。"},
 		}
 	case ThinkingFormatOpenAIGPT56:
+		if IsGPT6LunaModel(modelID) {
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortNone), Label: "关闭", Description: "GPT-6 Luna 无推理模式，可在 Chat Completions 使用工具。"},
+				{Value: string(ThinkingEffortLow), Label: "低", Description: "GPT-6 Luna 低推理投入，优先速度。"},
+				{Value: string(ThinkingEffortMedium), Label: "中", Description: "GPT-6 Luna 默认档位，平衡质量与延迟。"},
+				{Value: string(ThinkingEffortHigh), Label: "高", Description: "适合复杂分析和多步任务。"},
+				{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适合质量优先的深度任务。"},
+				{Value: string(ThinkingEffortMax), Label: "最大", Description: "适合最复杂且可接受高延迟的任务。"},
+			}
+		}
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortNone), Label: "关闭", Description: "不使用额外推理，优先最低延迟。"},
 			{Value: string(ThinkingEffortLow), Label: "低", Description: "适合快速问答、检索和轻量工具调用。"},
@@ -635,6 +648,10 @@ func isGPT6RequiredReasoningModel(id string) bool {
 	return isGPT6AstraModel(id) || strings.Contains(id, "gpt-6.1-sol")
 }
 
+func IsGPT6LunaModel(id string) bool {
+	return strings.Contains(id, "gpt-6-luna")
+}
+
 // OpenAIOmitsSamplingParameters reports model families whose official API
 // contract requires service defaults instead of temperature/top_p.
 func OpenAIOmitsSamplingParameters(modelID string) bool {
@@ -648,7 +665,25 @@ func ModelSupportsToolsForAdapter(modelID, adapter string, declared bool) bool {
 	if !declared {
 		return false
 	}
-	return !isGPT6RequiredReasoningModel(normalizeModelID(modelID)) || normalizeAdapter(adapter) == "openai_responses"
+	id := normalizeModelID(modelID)
+	if IsGPT6LunaModel(id) {
+		return true
+	}
+	return !isGPT6RequiredReasoningModel(id) || normalizeAdapter(adapter) == "openai_responses"
+}
+
+// ModelSupportsToolsForRequest applies request-level protocol constraints that
+// cannot be represented by the static model capability flag. GPT-6 Luna's
+// Chat Completions endpoint accepts function calling only when reasoning is
+// disabled; Responses keeps tools available at every supported effort.
+func ModelSupportsToolsForRequest(modelID, adapter string, effort ThinkingEffort, declared bool) bool {
+	if !ModelSupportsToolsForAdapter(modelID, adapter, declared) {
+		return false
+	}
+	if IsGPT6LunaModel(normalizeModelID(modelID)) && normalizeAdapter(adapter) == "openai_compatible" {
+		return effort == ThinkingEffortNone
+	}
+	return true
 }
 
 func isGrokReasoningModel(id string) bool {

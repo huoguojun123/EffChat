@@ -42,6 +42,8 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			// Astra reasoning cannot be disabled. Utility calls explicitly request
 			// the lowest supported effort instead of inheriting the model default.
 			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+		} else if format == modelbank.ThinkingFormatOpenAIGPT56 && modelbank.IsGPT6LunaModel(req.ModelID) {
+			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortNone))
 		} else if format == modelbank.ThinkingFormatDashScopeQwen {
 			if modelbank.QwenThinkingCanDisable(req.ModelID) {
 				setOpenAIExtraField(cfg, "enable_thinking", false)

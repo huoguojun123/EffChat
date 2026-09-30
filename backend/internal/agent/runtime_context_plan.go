@@ -14,6 +14,9 @@ type runtimeContextPlan struct {
 }
 
 func (a *EinoAgent) buildRuntimeContextPlan(req *ChatRequest) runtimeContextPlan {
+	if req == nil {
+		return runtimeContextPlan{}
+	}
 	runtime := a.resolveToolRuntimeConfig()
 	if req != nil && req.RuntimeResolved && req.RuntimeToolConfig != nil {
 		runtime = req.RuntimeToolConfig
@@ -25,6 +28,18 @@ func (a *EinoAgent) buildRuntimeContextPlan(req *ChatRequest) runtimeContextPlan
 	decision := modelbank.ResolveSearchConfig(req.ModelID, req.Provider, searchMode, req.PreferModelNativeSearch)
 	if req.RuntimeResolved {
 		decision = modelbank.ResolveSearchConfigForCapabilities(req.SearchImpl, req.ToolUse, searchMode, req.PreferModelNativeSearch)
+	}
+	// Some models expose tools only for a particular effort/protocol pair.
+	// Apply that request-level contract before deriving mounted application
+	// tools, so prompt capabilities match the wire request.
+	effort := modelbank.ResolveThinkingEffortForModel(modelbank.ThinkingFormat(req.ThinkingFormat), req.ModelID, req.ThinkingEffort)
+	declaredTools := req.ToolUse
+	if info := modelbank.Get(req.ModelID); info != nil {
+		declaredTools = info.Capabilities.ToolUse
+	}
+	if !modelbank.ModelSupportsToolsForRequest(req.ModelID, adapterForRequest(req), effort, declaredTools) {
+		req.ToolUse = false
+		decision = modelbank.SearchDecision{}
 	}
 	searchRuntime := a.resolveSearchRuntimeConfig()
 	if req.RuntimeResolved {
@@ -69,6 +84,13 @@ func (a *EinoAgent) buildRuntimeContextPlan(req *ChatRequest) runtimeContextPlan
 		mountedTools:    mounted,
 		schemaTokenCost: estimateMountedToolSchemaTokens(mounted),
 	}
+}
+
+func adapterForRequest(req *ChatRequest) string {
+	if req != nil && req.RuntimeChannel != nil {
+		return req.RuntimeChannel.Adapter
+	}
+	return ""
 }
 
 func runtimeMemoryAvailable(state service.RuntimeConfigState) bool {

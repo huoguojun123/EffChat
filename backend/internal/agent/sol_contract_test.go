@@ -86,3 +86,44 @@ func TestSol61WireReasoningContract(t *testing.T) {
 		})
 	}
 }
+
+func TestLunaChatToolsRequireNoneReasoning(t *testing.T) {
+	if !modelbank.ModelSupportsToolsForAdapter("gpt-6-luna", "openai_compatible", true) {
+		t.Fatal("Luna should advertise Chat tools at the model capability layer")
+	}
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+		if modelbank.ResolveThinkingEffortForModel(modelbank.ThinkingFormatOpenAIGPT56, "gpt-6-luna", effort) == modelbank.ThinkingEffortNone {
+			t.Fatalf("effort %q unexpectedly normalized to none", effort)
+		}
+	}
+}
+
+func TestBuildLunaChatModelUsesNoneForUtilityCalls(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		bodies <- body
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"chat_luna\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-6-luna\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	a := NewEinoAgent(service.NewChannelService(nil), nil, 4096, nil, nil, nil, nil, nil, nil)
+	cm, err := a.buildChatModel(t.Context(), &ChatRequest{
+		ModelID: "gpt-6-luna", Provider: "openai", Reasoning: true, SuppressThinking: true,
+		RuntimeChannel: &model.AIChannel{Key: "fixture", Adapter: service.AdapterOpenAICompatible, BaseURL: server.URL + "/v1", APIKey: "test-key", Enabled: true},
+	}, modelbank.SearchDecision{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modelstream.Collect(t.Context(), cm, []*schema.Message{schema.UserMessage("hello")}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	body := <-bodies
+	if body["reasoning_effort"] != "none" || body["model"] != "gpt-6-luna" {
+		t.Fatalf("request = %#v", body)
+	}
+}

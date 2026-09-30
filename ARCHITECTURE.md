@@ -112,6 +112,8 @@ Responses 的本地 Agentic→经典消息转换保留上游已提供的完整 `
 
 Grok 4.7 内置候选使用已核验的 500K 上下文、图片输入和工具能力；输出上限未取得官方数值，不推测填入。其 Chat Completions 复用 xAI reasoning profile，支持 `low/medium/high/xhigh`、默认 `high`、不可关闭推理，并省略 reasoning 模型不支持的 penalty/stop 字段。该兼容路径不承诺 Responses 加密推理的跨轮持久化和重放已完成。
 
+GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。该共享仅限已核验的推理档位与 Responses-only 工具限制，不继承 Astra 的 sampling 省略规则。当前 Sol 详情证据没有完整给出 vision 和 token 上限，内置候选对此保持保守，管理员已有能力配置不被覆盖。
+
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
 
 会话压缩只改变 Agent 实际携带的上下文，不改变用户可回看的消息历史。完整加载、冷加载窗口、turn 索引和分页继续包含压缩前的 user/assistant/tool 消息；active checkpoint 作为逻辑 divider 插在它所压缩的最后一个 user turn 之后，并且只随包含该锚点的一个页面返回。刷新、重新登录和分页因此保持历史可见，而 Agent context 仍由独立的压缩上下文查询过滤已压缩消息并注入 checkpoint。撤销只撤销 checkpoint 对后续模型上下文的作用，不承担恢复 UI 可见性的职责。

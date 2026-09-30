@@ -20,6 +20,12 @@ import (
 func builtinModels() map[string]*ModelInfo {
 	return map[string]*ModelInfo{
 		// ============ OpenAI ============
+		"gpt-6.1-sol": {
+			ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol", Provider: "openai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+			},
+		},
 		"gpt-6-astra": {
 			ID: "gpt-6-astra", DisplayName: "GPT-6 Astra", Provider: "openai", Enabled: true,
 			Capabilities: ModelCapabilities{

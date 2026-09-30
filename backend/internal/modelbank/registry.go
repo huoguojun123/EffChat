@@ -359,6 +359,15 @@ func builtinModels() map[string]*ModelInfo {
 				ContextWindow: 1000000,
 			},
 		},
+		// xAI's model detail confirms the context limit but does not publish an
+		// output limit here; leave MaxOutput unset instead of guessing a cap.
+		"grok-4.7": {
+			ID: "grok-4.7", DisplayName: "Grok 4.7", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 500000,
+			},
+		},
 		"grok-4.6": {
 			ID: "grok-4.6", DisplayName: "Grok 4.6", Provider: "xai", Enabled: true,
 			Capabilities: ModelCapabilities{

@@ -446,7 +446,7 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			model.ThinkingEffortOption{Value: string(ThinkingEffortHigh), Label: "高", Description: "xAI 默认档位；下发 reasoning_effort=high。"},
 		)
 		if xAISupportsXHighEffort(modelID) {
-			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.3、4.6 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.3、4.6、4.7 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
 		}
 		return options
 	case ThinkingFormatGLMThinking:
@@ -660,6 +660,7 @@ func isGrokReasoningModel(id string) bool {
 func xAISupportsXHighEffort(modelID string) bool {
 	id := normalizeModelID(modelID)
 	return strings.Contains(id, "grok-4.6") ||
+		strings.Contains(id, "grok-4.7") ||
 		strings.Contains(id, "grok-4.3") ||
 		strings.Contains(id, "grok-4-1-fast")
 }

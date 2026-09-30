@@ -167,6 +167,7 @@ func TestRuntimeProfileExposesVendorSpecificThinkingControls(t *testing.T) {
 		{name: "grok 4.3", provider: "xai", modelID: "grok-4.3", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 5, defaultEffort: "low"},
 		{name: "grok 4.20", provider: "xai", modelID: "grok-4.20", family: "xai", format: ThinkingFormatNone, optionCount: 0, defaultEffort: ""},
 		{name: "grok 4.6", provider: "xai", modelID: "grok-4.6", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 4, defaultEffort: "high"},
+		{name: "grok 4.7", provider: "xai", modelID: "grok-4.7", family: "xai", format: ThinkingFormatXAIGrok, optionCount: 4, defaultEffort: "high"},
 		{name: "qwen 3.8", provider: "qwen", modelID: "qwen3.8-max", family: "qwen", format: ThinkingFormatDashScopeQwen, optionCount: 3, defaultEffort: "medium"},
 		{name: "qwen 3.7", provider: "qwen", modelID: "qwen3.7-flash", family: "qwen", format: ThinkingFormatDashScopeQwen, optionCount: 3, defaultEffort: "medium"},
 		{name: "glm", provider: "zhipu", modelID: "glm-4.5", family: "glm", format: ThinkingFormatGLMThinking, optionCount: 2, defaultEffort: "high"},

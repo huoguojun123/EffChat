@@ -171,6 +171,18 @@ func TestGrokNonReasoningBuiltinKeepsReasoningDisabled(t *testing.T) {
 	}
 }
 
+func TestGrok47BuiltinUsesVerifiedCapabilities(t *testing.T) {
+	resetRegistryToBuiltins()
+	info := Get("grok-4.7")
+	if info == nil {
+		t.Fatal("missing grok-4.7 builtin")
+	}
+	if info.Provider != "xai" || info.Capabilities.ContextWindow != 500000 || info.Capabilities.MaxOutput != 0 ||
+		!info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+		t.Fatalf("unexpected Grok 4.7 profile: %+v", info)
+	}
+}
+
 func TestBuiltinsDoNotRestoreRetiredDeepSeekAliases(t *testing.T) {
 	resetRegistryToBuiltins()
 	for _, id := range []string{"deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"} {

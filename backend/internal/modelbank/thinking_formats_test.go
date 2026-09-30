@@ -155,6 +155,8 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 		{name: "grok keeps medium", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "medium", want: ThinkingEffortMedium},
 		{name: "grok 4.5 rejects xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "xhigh", want: ThinkingEffortHigh},
 		{name: "grok 4.6 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.6", requested: "xhigh", want: ThinkingEffortXHigh},
+		{name: "grok 4.7 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.7", requested: "xhigh", want: ThinkingEffortXHigh},
+		{name: "grok 4.7 cannot disable", format: ThinkingFormatXAIGrok, modelID: "grok-4.7", requested: "none", want: ThinkingEffortHigh},
 		{name: "glm accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "none", want: ThinkingEffortNone},
 		{name: "glm normalizes enabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "low", want: ThinkingEffortHigh},
 		{name: "glm 5.2 accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-5.2", requested: "none", want: ThinkingEffortNone},

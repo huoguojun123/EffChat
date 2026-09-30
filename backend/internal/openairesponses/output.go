@@ -176,8 +176,10 @@ func applyResponseMeta(out *schema.Message, meta *schema.AgenticResponseMeta, st
 	if meta.TokenUsage != nil {
 		usage := meta.TokenUsage
 		out.ResponseMeta.Usage = &schema.TokenUsage{
-			PromptTokens:            usage.PromptTokens,
-			PromptTokenDetails:      schema.PromptTokenDetails{CachedTokens: usage.PromptTokenDetails.CachedTokens},
+			PromptTokens: usage.PromptTokens,
+			// Keep the provider's read/write accounting intact at the classic
+			// boundary; reconstructing only CachedTokens silently drops writes.
+			PromptTokenDetails:      usage.PromptTokenDetails,
 			CompletionTokens:        usage.CompletionTokens,
 			CompletionTokensDetails: schema.CompletionTokensDetails{ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens},
 			TotalTokens:             usage.TotalTokens,

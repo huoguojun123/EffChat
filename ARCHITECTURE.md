@@ -166,6 +166,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 Claude 5.5 的编译期候选包括 `claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5`，继续复用 Anthropic native adaptive 请求与现有图片/工具链。Opus/Haiku 5.5 默认 effort 为 `medium`，Sonnet 5.5 为 `high`；显式选择不被默认值覆盖，utility 使用 `low`。Haiku 4.5 继续保留 manual budget。此目录补充不会写入管理员数据库；新模型的 account/prefix-bound thinking 重放仍需按官方契约单独验证，不能以普通文本流 fixture 代表跨账户或修改 system/tools 后可重放。
 
+MiniMax 精确型号 `MiniMax-M3.1-Flash` 始终思考，使用 `low/medium/high/xhigh/max`，默认 `max`；旧的关闭偏好和 utility 请求归一为最低合法 `low`。OpenAI-compatible 发送 `reasoning_split=true`、`reasoning_effort` 与 `max_completion_tokens`，Anthropic-compatible 发送 adaptive 与 `output_config.effort`；均省略不接受的采样参数，管理员保存值不变。原 M3 的关闭开关与 M2 的无控制字段行为不变。现有文字/图片与同次工具往返通过 HTTP fixture 验证；Anthropic-compatible unsigned thinking 重放仅允许精确 M3/M3.1，Claude 仍要求原始签名。此支持不包含视频、新 endpoint、跨运行历史 reasoning 重放或真实账号可用性承诺。
+
 Sol 6.1 的内置能力按官方模型详情声明 text/image 输入、1,050,000 context 与 128,000 output；Chat Completions 和 Responses 的文本/图片序列化均有本地 HTTP fixture。工具仍仅在 Responses adapter 挂载，目录能力不绕过运行时 gate，也不会覆盖管理员已经保存的能力值。
 
 Anthropic native 适配器保留 cache read/write token，流式 usage 对外统一为累计快照：输入/缓存计数不会在输出帧丢失，总量等于 prompt + completion，累计输出不重复求和。消息和 Eino callback 均覆盖本地 HTTP fixture；产品 usage 数据库/API 仍只存已有 cached_tokens，不能据此宣称已持久化 cache write 或区分 missing/zero。

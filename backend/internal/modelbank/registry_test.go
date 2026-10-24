@@ -149,6 +149,7 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "glm-5.3-flash", provider: "zhipu", context: 1000000, output: 131072, vision: true},
 		{id: "glm-5.3", provider: "zhipu", context: 1000000, output: 128000},
 		{id: "glm-5.2", provider: "zhipu", context: 1000000, output: 128000},
+		{id: "MiniMax-M3.1-Flash", provider: "minimax", context: 1000000, output: 524288, vision: true},
 		{id: "MiniMax-M3", provider: "minimax", context: 1000000, output: 524288, vision: true},
 		{id: "MiniMax-M2.7", provider: "minimax", context: 204800, output: 131072},
 		{id: "MiniMax-M2.7-highspeed", provider: "minimax", context: 204800, output: 131072},

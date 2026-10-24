@@ -666,9 +666,10 @@ func (cm *ChatModel) populateInput(params *anthropic.MessageNewParams, system []
 
 	msgParams := make([]anthropic.MessageParam, 0, len(msgs))
 	hasSetMsgBreakPoint := false
+	allowUnsignedThinking := strings.EqualFold(cm.model, "MiniMax-M3") || strings.EqualFold(cm.model, "MiniMax-M3.1-Flash")
 
 	for _, msg := range msgs {
-		msgParam, err := convSchemaMessage(msg)
+		msgParam, err := convSchemaMessage(msg, allowUnsignedThinking)
 		if err != nil {
 			return fmt.Errorf("convert schema message fail: %w", err)
 		}
@@ -965,7 +966,7 @@ func (cm *ChatModel) IsCallbacksEnabled() bool {
 	return true
 }
 
-func convSchemaMessage(message *schema.Message) (mp anthropic.MessageParam, err error) {
+func convSchemaMessage(message *schema.Message, allowUnsignedThinking bool) (mp anthropic.MessageParam, err error) {
 	var messageParams []anthropic.ContentBlockParamUnion
 
 	if message.Role == schema.Assistant {
@@ -974,6 +975,13 @@ func convSchemaMessage(message *schema.Message) (mp anthropic.MessageParam, err 
 			signature, hasSignature := getThinkingSignature(message)
 			if hasSignature && signature != "" {
 				messageParams = append(messageParams, anthropic.NewThinkingBlock(signature, thinkingContent))
+			} else if allowUnsignedThinking {
+				// MiniMax's compatible protocol returns unsigned thinking blocks and
+				// requires their verbatim replay during tool continuations. Never
+				// relax Claude's signed-block gate or synthesize a signature for it.
+				block := anthropic.NewThinkingBlock("", thinkingContent)
+				block.OfThinking.SetExtraFields(map[string]any{"signature": param.Omit})
+				messageParams = append(messageParams, block)
 			}
 		}
 

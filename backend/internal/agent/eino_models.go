@@ -52,8 +52,8 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			openAIProfile.PresencePenalty = nil
 			openAIProfile.FrequencyPenalty = nil
 		}
-		if modelbank.KimiOmitsSamplingParameters(req.ModelID) {
-			// Current Kimi thinking models require fixed sampling values. Omit the
+		if modelbank.KimiOmitsSamplingParameters(req.ModelID) || modelbank.IsMiniMaxM31Flash(req.ModelID) {
+			// These verified thinking models require fixed sampling values. Omit the
 			// stored reusable profile on this wire request instead of overwriting it.
 			temperature = nil
 			openAIProfile = model.OpenAIRequestProfile{}
@@ -268,6 +268,10 @@ func applyOpenAITokenLimit(req *ChatRequest, cfg *openai.ChatModelConfig) {
 		return
 	}
 	limit := ptrIntPositive(req.MaxTokens)
+	if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+		cfg.MaxCompletionTokens = limit
+		return
+	}
 	format := modelbank.ResolveThinkingFormat(req.Provider, req.ModelID, req.ThinkingFormat, req.Reasoning)
 	if format == modelbank.ThinkingFormatKimiThinking && modelbank.ResolveKimiThinkingContract(req.ModelID) == modelbank.KimiThinkingK3 {
 		cfg.MaxCompletionTokens = limit

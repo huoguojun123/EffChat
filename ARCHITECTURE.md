@@ -182,6 +182,8 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
 
 跨运行历史投影会重建 system、裁减旧图片并规范化工具序列，不能保证 Claude 签名思考绑定的原始前缀。投影因此统一省略历史 Claude thinking/signature 对，避免仅清空 `ReasoningContent` 后被 adapter 从 Extra 重新发送；数据库原文、展示内容、无签名 MiniMax thinking 和其它 provider 元数据不变。当前运行内的工具续接仍保留签名。这是安全重置策略，会失去跨运行思考连续性，不等于 append-only preserved thinking、账户迁移或真实缓存命中率验证；Kimi 等要求全历史 reasoning 的契约需独立处理，不能套用此省略策略。
 
+默认系统模板将稳定规则置于日期、用户和会话上下文之前；已有管理员模板不迁移、不自动重排，能力过滤、Skills、工具预算和会话记忆继续按既有规则追加。本地合成 HTTP fixture 测量实际请求 bytes/hash 与解码后的 system 公共前缀，守护重复请求确定性、日期/标题变化及自定义模板边界。JSON 字段顺序不是厂商缓存键，模型、工具定义和动态上下文的变化仍可能影响缓存；该测量不等于真实 token 命中率或成本 A/B。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

@@ -800,11 +800,20 @@ func isGeminiThinkingModel(id string) bool {
 	return strings.Contains(id, "gemini")
 }
 
+// IsGeminiArgon deliberately matches the verified model ID, not future 4.x
+// aliases. Google also accepts the resource-qualified models/ form.
+func IsGeminiArgon(modelID string) bool {
+	return strings.TrimPrefix(normalizeModelID(modelID), "models/") == "gemini-4-argon"
+}
+
 // ResolveGeminiThinkingContract returns only contracts verified for the
 // current generateContent API. Unknown future versions intentionally receive
 // no inferred control field instead of inheriting an incompatible request.
 func ResolveGeminiThinkingContract(modelID string) GeminiThinkingContract {
 	id := normalizeModelID(modelID)
+	if IsGeminiArgon(id) {
+		return GeminiThinkingLevel
+	}
 	if strings.Contains(id, "gemini-2.5") {
 		return GeminiThinkingBudget
 	}

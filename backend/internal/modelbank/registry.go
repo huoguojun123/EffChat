@@ -195,6 +195,15 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Google Gemini ============
+		"gemini-4-argon": {
+			ID: "gemini-4-argon", DisplayName: "Gemini 4 Argon", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				// Upstream single-stream limit; the client rejects >32768 for
+				// the common Generate/Stream subset without continuation.
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
 		"gemini-3.8-flash": {
 			ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -218,6 +227,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 		"gemini-3.5-flash": {
 			ID: "gemini-3.5-flash", DisplayName: "Gemini 3.5 Flash", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
+		"gemini-3.5-flash-lite": {
+			ID: "gemini-3.5-flash-lite", DisplayName: "Gemini 3.5 Flash-Lite", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{
 				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
 				ContextWindow: 1048576, MaxOutput: 65536,

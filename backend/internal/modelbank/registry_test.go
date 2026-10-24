@@ -6,6 +6,20 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 )
 
+func TestBuiltinCurrentGeminiCapabilities(t *testing.T) {
+	models := builtinModels()
+	for _, id := range []string{"gemini-4-argon", "gemini-3.5-flash-lite"} {
+		info := models[id]
+		if info == nil {
+			t.Fatalf("missing builtin %s", id)
+		}
+		c := info.Capabilities
+		if info.Provider != "google" || !c.Vision || !c.ToolUse || !c.Reasoning || c.SearchImpl != SearchImplParams || c.ContextWindow != 1048576 || c.MaxOutput != 65536 {
+			t.Fatalf("%s capabilities = %+v", id, c)
+		}
+	}
+}
+
 // TestLoadModels_OverridesBuiltins 验证 DB 记录能覆盖内置默认，且能力字段正确映射。
 func TestLoadModels_OverridesBuiltins(t *testing.T) {
 	// 用一个与内置不同的自定义模型加载

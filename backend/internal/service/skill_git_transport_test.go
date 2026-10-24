@@ -76,35 +76,32 @@ func TestSanitizedGitEnvironmentRejectsInheritedTransportConfiguration(t *testin
 
 func TestGitCommandHonorsContextCancellation(t *testing.T) {
 	dir := t.TempDir()
-	marker := filepath.Join(dir, "started")
 	fakeGit := filepath.Join(dir, "git")
-	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\ntouch \"$EFFCHAT_TEST_GIT_MARKER\"\nwhile :; do sleep 1; done\n"), 0o755); err != nil {
+	// Start is the process-ready boundary. The old asynchronous Run + touch
+	// poll mixed shell scheduling with cancellation, and its sleep children
+	// inherited CombinedOutput pipes after the shell was killed. Replace the
+	// shell with one long-lived process so this test owns exactly what it kills.
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("EFFCHAT_TEST_GIT_MARKER", marker)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cmd := gitCommand(ctx, gitTransportPlan{}, "ls-remote", "https://git.example/skill.git", "HEAD")
-	done := make(chan error, 1)
-	go func() {
-		_, err := cmd.CombinedOutput()
-		done <- err
-	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		if _, err := os.Stat(marker); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("fake Git process did not start")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start fake Git: %v", err)
 	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		if err == nil || ctx.Err() != context.Canceled || cmd.ProcessState.Success() {
+			t.Fatalf("canceled Git exited successfully: err=%v context=%v", err, ctx.Err())
+		}
 	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
 		t.Fatal("Git subprocess did not stop after context cancellation")
 	}
 }

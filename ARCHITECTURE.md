@@ -178,6 +178,8 @@ Anthropic native 适配器保留 cache read/write token，流式 usage 对外统
 
 Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` 和 Gemini 3.x（含 3.5 Flash-Lite）；忽略不支持的采样参数，不将规则泛化到未知 4.x。Argon 的 1,048,576 是输入、思考、输出共享上下文，并不代表本客户端支持百万输出。当前锁定的 Go SDK 未接入 long-decode continuation，因此 Generate/Stream 共用单请求最大 32,768 output tokens：未指定时显式设置该值，管理员显式配置更大值时在构造阶段报错，不静默改写配置。目录中的 65,536 是上游单次流式上限；更长输出和续传仍未支持。普通文字/图片、工具往返、thought signature 和 usage 由本地 HTTP fixture 验证，不代表真实账号、Google grounding 与 long-decode 已验收。
 
+工具预算在同次 ADK 运行中耗尽后保留普通与 deferred 工具定义，只追加一次收尾提示，并在模型边界设置 `tool_choice=none`；classic 模型使用 `WithToolChoice`，typed Responses 使用 `WithAgenticToolChoice`。实际工具执行仍由治理层独立拦截，不能信任上游一定遵守 none。这样避免为了收尾删除工具定义而破坏缓存/签名思考的工具前缀；不代表跨运行重建的历史已满足 preserved thinking 约束。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

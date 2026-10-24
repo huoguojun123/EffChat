@@ -23,7 +23,8 @@ func builtinModels() map[string]*ModelInfo {
 		"gpt-6.1-sol": {
 			ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol", Provider: "openai", Enabled: true,
 			Capabilities: ModelCapabilities{
-				ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1050000, MaxOutput: 128000,
 			},
 		},
 		"gpt-6-luna": {

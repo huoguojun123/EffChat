@@ -166,6 +166,8 @@ checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成�
 
 Claude 5.5 的编译期候选包括 `claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5`，继续复用 Anthropic native adaptive 请求与现有图片/工具链。Opus/Haiku 5.5 默认 effort 为 `medium`，Sonnet 5.5 为 `high`；显式选择不被默认值覆盖，utility 使用 `low`。Haiku 4.5 继续保留 manual budget。此目录补充不会写入管理员数据库；新模型的 account/prefix-bound thinking 重放仍需按官方契约单独验证，不能以普通文本流 fixture 代表跨账户或修改 system/tools 后可重放。
 
+Sol 6.1 的内置能力按官方模型详情声明 text/image 输入、1,050,000 context 与 128,000 output；Chat Completions 和 Responses 的文本/图片序列化均有本地 HTTP fixture。工具仍仅在 Responses adapter 挂载，目录能力不绕过运行时 gate，也不会覆盖管理员已经保存的能力值。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

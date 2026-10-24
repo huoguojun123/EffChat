@@ -64,7 +64,8 @@ func TestSol61WireReasoningContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := modelstream.Collect(t.Context(), cm, []*schema.Message{schema.UserMessage("hello")}, time.Second)
+			const fixtureImage = "data:image/png;base64,aW1hZ2U="
+			result, err := modelstream.Collect(t.Context(), cm, []*schema.Message{userImage("describe fixture", fixtureImage)}, time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,6 +75,42 @@ func TestSol61WireReasoningContract(t *testing.T) {
 			body := <-bodies
 			if body["model"] != "gpt-6.1-sol" {
 				t.Fatalf("model = %#v", body["model"])
+			}
+			// Both supported endpoints must retain the entire multimodal input;
+			// advertising vision alone does not prove serialization works.
+			inputKey, imageType := "messages", "image_url"
+			if adapter == service.AdapterOpenAIResponses {
+				inputKey, imageType = "input", "input_image"
+			}
+			messages, ok := body[inputKey].([]any)
+			if !ok || len(messages) == 0 {
+				t.Fatalf("input = %#v", body[inputKey])
+			}
+			var parts []any
+			for _, item := range messages {
+				message, _ := item.(map[string]any)
+				if message["role"] != "user" {
+					t.Fatalf("role = %v", message["role"])
+				}
+				// Responses may encode text and image as adjacent user items.
+				switch content := message["content"].(type) {
+				case string:
+					parts = append(parts, map[string]any{"text": content})
+				case []any:
+					parts = append(parts, content...)
+				}
+			}
+			if len(parts) != 2 {
+				t.Fatalf("content parts = %#v", parts)
+			}
+			textPart, _ := parts[0].(map[string]any)
+			imagePart, _ := parts[1].(map[string]any)
+			imageURL := imagePart["image_url"]
+			if nested, ok := imageURL.(map[string]any); ok {
+				imageURL = nested["url"]
+			}
+			if textPart["text"] != "describe fixture" || imagePart["type"] != imageType || imageURL != fixtureImage {
+				t.Fatalf("multimodal input changed: %#v", parts)
 			}
 			if adapter == service.AdapterOpenAIResponses {
 				thinking, _ := body["reasoning"].(map[string]any)

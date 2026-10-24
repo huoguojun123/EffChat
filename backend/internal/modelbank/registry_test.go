@@ -91,6 +91,7 @@ func TestBuiltinsIncludeCurrentGPT6AndClaudeFable(t *testing.T) {
 		output   int
 	}{
 		{id: "gpt-6-astra", provider: "openai", context: 1050000, output: 128000},
+		{id: "gpt-6.1-sol", provider: "openai", context: 1050000, output: 128000},
 		{id: "claude-fable-5-1", provider: "anthropic", context: 1000000, output: 128000},
 	}
 	for _, tc := range cases {

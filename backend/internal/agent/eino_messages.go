@@ -22,11 +22,19 @@ func convertToEinoMessages(messages []*model.Message, visionCapable bool) ([]*sc
 		if err := json.Unmarshal(msg.MessageData, m); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal message %d: %w", msg.ID, err)
 		}
-		// 历史 assistant 的 reasoning/thinking 不回传给模型：o系列/Anthropic/DeepSeek
-		// 官方均说明历史推理内容不应回灌（省 token，且部分网关回灌会报错）。DB 与前端
-		// 仍保留用于展示；当前轮的实时 thinking 走流式不经此路径，不受影响。
+		// 默认历史投影省略通用 reasoning；不能据此推断所有 provider 都禁止回放。
+		// DB 与前端保留原文，当前运行内生成的 thinking 不经过此投影。
 		if m.Role == schema.Assistant {
 			m.ReasoningContent = ""
+			// Claude 的签名思考还保存在 adapter Extra 中。这里会重建 system、
+			// 裁减图片和重排工具历史，无法保证其绑定前缀不变，因此一致省略所有
+			// 历史签名块，而不是让 adapter 恢复已失效的块或只删除其中一部分。
+			// 只修改本次反序列化的副本；不清空其它 provider 元数据，也不删除
+			// MiniMax 兼容协议要求的 unsigned thinking。
+			if _, signed := m.Extra["_eino_claude_thinking_signature"]; signed {
+				delete(m.Extra, "_eino_claude_thinking")
+				delete(m.Extra, "_eino_claude_thinking_signature")
+			}
 			if assistantMessageIsEmptyForModel(m) {
 				continue
 			}

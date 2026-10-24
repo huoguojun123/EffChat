@@ -313,6 +313,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ GLM ============
+		"glm-5.3-flashx": {
+			ID: "glm-5.3-flashx", DisplayName: "GLM-5.3-FlashX", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 131072,
+			},
+		},
 		"glm-5.3-flash": {
 			ID: "glm-5.3-flash", DisplayName: "GLM-5.3-Flash", Provider: "zhipu", Enabled: true,
 			Capabilities: ModelCapabilities{

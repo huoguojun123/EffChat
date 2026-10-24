@@ -314,6 +314,10 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 			if effort == ThinkingEffortNone {
 				return ThinkingEffortLow
 			}
+			// GLM 5.3 defaults to max; keep the switchable 5.2 default at high.
+			if GLMAlwaysUsesThinking(modelID) {
+				return ThinkingEffortMax
+			}
 			return ThinkingEffortHigh
 		}
 		if effort == ThinkingEffortNone {

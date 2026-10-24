@@ -421,6 +421,9 @@ func TestResolveGeminiThinkingContract(t *testing.T) {
 		{modelID: "gemini-3.6-flash", want: GeminiThinkingLevel, omit: true},
 		{modelID: "gemini-3.7-flash", want: GeminiThinkingLevel, omit: true},
 		{modelID: "gemini-3.8-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-4-argon", want: GeminiThinkingLevel, omit: true},
+		{modelID: " models/GEMINI-4-ARGON ", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-4-argon-unverified", want: GeminiThinkingUnknown},
 		{modelID: "gemini-4.0-unverified", want: GeminiThinkingUnknown},
 		{modelID: "custom-google-model", want: GeminiThinkingUnknown},
 	}

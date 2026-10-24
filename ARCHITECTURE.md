@@ -170,6 +170,8 @@ Sol 6.1 的内置能力按官方模型详情声明 text/image 输入、1,050,000
 
 Anthropic native 适配器保留 cache read/write token，流式 usage 对外统一为累计快照：输入/缓存计数不会在输出帧丢失，总量等于 prompt + completion，累计输出不重复求和。消息和 Eino callback 均覆盖本地 HTTP fixture；产品 usage 数据库/API 仍只存已有 cached_tokens，不能据此宣称已持久化 cache write 或区分 missing/zero。
 
+Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` 和 Gemini 3.x（含 3.5 Flash-Lite）；忽略不支持的采样参数，不将规则泛化到未知 4.x。Argon 的 1,048,576 是输入、思考、输出共享上下文，并不代表本客户端支持百万输出。当前锁定的 Go SDK 未接入 long-decode continuation，因此 Generate/Stream 共用单请求最大 32,768 output tokens：未指定时显式设置该值，管理员显式配置更大值时在构造阶段报错，不静默改写配置。目录中的 65,536 是上游单次流式上限；更长输出和续传仍未支持。普通文字/图片、工具往返、thought signature 和 usage 由本地 HTTP fixture 验证，不代表真实账号、Google grounding 与 long-decode 已验收。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

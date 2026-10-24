@@ -143,6 +143,12 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		return a.wrapUsageModel(cm, req), nil
 
 	case service.AdapterGoogle:
+		// The pinned SDK does not implement Argon continuation tokens. Use the
+		// Generate/Stream common single-request limit; never silently clamp a
+		// saved admin value or return a partial long-decode answer as complete.
+		if modelbank.IsGeminiArgon(req.ModelID) && req.MaxTokens > 32768 {
+			return nil, fmt.Errorf("Gemini 4 Argon supports at most 32768 output tokens in this client; long-decode continuation is not supported")
+		}
 		clientCfg := &genai.ClientConfig{APIKey: channel.APIKey}
 		if channel.BaseURL != "" {
 			clientCfg.HTTPOptions = genai.HTTPOptions{BaseURL: channel.BaseURL}
@@ -155,6 +161,12 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			Client:    client,
 			Model:     req.ModelID,
 			MaxTokens: ptrIntPositive(req.MaxTokens),
+		}
+		if modelbank.IsGeminiArgon(req.ModelID) && cfg.MaxTokens == nil {
+			// Do not defer to different endpoint defaults: an unspecified
+			// local limit must use the same supported Generate/Stream subset.
+			limit := 32768
+			cfg.MaxTokens = &limit
 		}
 		if !modelbank.GeminiOmitsSamplingParameters(req.ModelID) {
 			cfg.Temperature = ptrFloat32(temperature)

@@ -222,7 +222,7 @@ func applyGeminiThinking(req *ChatRequest, cfg *gemini.Config) {
 	}
 	contract := modelbank.ResolveGeminiThinkingContract(req.ModelID)
 	if req.SuppressThinking {
-		// Gemini 3.x cannot disable thinking. Sending the lowest supported level
+		// Verified level-based Gemini models cannot disable thinking. Sending the lowest supported level
 		// keeps utility calls bounded; omitting the config would restore the
 		// provider default (currently medium) and defeat suppression.
 		if contract == modelbank.GeminiThinkingLevel {

@@ -523,6 +523,10 @@ func TestKimiThinkingContracts(t *testing.T) {
 		format    ThinkingFormat
 	}{
 		{modelID: "kimi-k3", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k3.1-pro", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k3.1-pro-highspeed", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "gateway/kimi-k3.1-pro", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k3.9-future", reasoning: true, contract: KimiThinkingUnknown, format: ThinkingFormatNone},
 		{modelID: "kimi-k2.7-code", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
 		{modelID: "kimi-k2.7-code-highspeed", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
 		{modelID: "kimi-k2.6", reasoning: true, contract: KimiThinkingK26, format: ThinkingFormatKimiThinking},

@@ -383,6 +383,20 @@ func (cm *ChatModel) Stream(ctx context.Context, input []*schema.Message, opts .
 			if message == nil {
 				continue
 			}
+			if message.ResponseMeta != nil && message.ResponseMeta.Usage != nil {
+				// Anthropic splits input/cache usage from cumulative output usage.
+				// Eino concatenation uses maxima and EffChat records the last usage
+				// frame, so publish complete snapshots rather than partial counters.
+				// Copy each snapshot: previously emitted chunks belong to consumers.
+				u := message.ResponseMeta.Usage
+				previous := streamCtx.usage
+				u.PromptTokens = max(u.PromptTokens, previous.PromptTokens)
+				u.CompletionTokens = max(u.CompletionTokens, previous.CompletionTokens)
+				u.PromptTokenDetails.CachedTokens = max(u.PromptTokenDetails.CachedTokens, previous.PromptTokenDetails.CachedTokens)
+				u.PromptTokenDetails.CacheWriteTokens = max(u.PromptTokenDetails.CacheWriteTokens, previous.PromptTokenDetails.CacheWriteTokens)
+				u.TotalTokens = u.PromptTokens + u.CompletionTokens
+				streamCtx.usage = *u
+			}
 			if isMessageEmpty(message) {
 				waitList = append(waitList, message)
 				continue
@@ -918,7 +932,8 @@ func (cm *ChatModel) getCallbackOutput(output *schema.Message) *model.CallbackOu
 		result.TokenUsage = &model.TokenUsage{
 			PromptTokens: output.ResponseMeta.Usage.PromptTokens,
 			PromptTokenDetails: model.PromptTokenDetails{
-				CachedTokens: output.ResponseMeta.Usage.PromptTokenDetails.CachedTokens,
+				CachedTokens:     output.ResponseMeta.Usage.PromptTokenDetails.CachedTokens,
+				CacheWriteTokens: output.ResponseMeta.Usage.PromptTokenDetails.CacheWriteTokens,
 			},
 			CompletionTokens: output.ResponseMeta.Usage.CompletionTokens,
 			TotalTokens:      output.ResponseMeta.Usage.TotalTokens,
@@ -1284,7 +1299,8 @@ func toTokenUsage(u anthropic.Usage) *schema.TokenUsage {
 	return &schema.TokenUsage{
 		PromptTokens: promptTokens,
 		PromptTokenDetails: schema.PromptTokenDetails{
-			CachedTokens: int(u.CacheReadInputTokens),
+			CachedTokens:     int(u.CacheReadInputTokens),
+			CacheWriteTokens: int(u.CacheCreationInputTokens),
 		},
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
@@ -1298,7 +1314,8 @@ func toDeltaTokenUsage(u anthropic.MessageDeltaUsage) *schema.TokenUsage {
 	return &schema.TokenUsage{
 		PromptTokens: promptTokens,
 		PromptTokenDetails: schema.PromptTokenDetails{
-			CachedTokens: int(u.CacheReadInputTokens),
+			CachedTokens:     int(u.CacheReadInputTokens),
+			CacheWriteTokens: int(u.CacheCreationInputTokens),
 		},
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
@@ -1327,6 +1344,7 @@ func convOutputMessage(resp *anthropic.Message) (*schema.Message, error) {
 
 type streamContext struct {
 	toolIndex *int
+	usage     schema.TokenUsage
 }
 
 func convContentBlockToEinoMsg(

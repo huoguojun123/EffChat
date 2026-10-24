@@ -444,6 +444,7 @@ func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
 		{modelID: "claude-sonnet-4-6", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortMax}},
 		{modelID: "claude-opus-4-8", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
 		{modelID: "claude-sonnet-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+		{modelID: "claude-haiku-5-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
 		{modelID: "claude-fable-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
 	}
 	for _, tc := range cases {
@@ -470,6 +471,23 @@ func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
 func TestAnthropicAdaptiveDefaultsToProviderHigh(t *testing.T) {
 	if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, "claude-fable-5-1", ""); got != ThinkingEffortHigh {
 		t.Fatalf("Fable 5.1 default effort = %q, want high", got)
+	}
+}
+
+func TestClaude55RuntimeDefaultsAndLegacyBudget(t *testing.T) {
+	for _, tc := range []struct{ id, want string }{
+		{"claude-opus-5-5", "medium"}, {"claude-haiku-5-5", "medium"}, {"claude-sonnet-5-5", "high"},
+	} {
+		profile := RuntimeProfileForModel(&model.Model{ID: tc.id, Provider: "anthropic", Reasoning: true})
+		if profile.DefaultThinkingEffort != tc.want || profile.ThinkingFormat != string(ThinkingFormatAnthropicAdaptive) {
+			t.Fatalf("%s profile = %+v", tc.id, profile)
+		}
+		if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, tc.id, "high"); got != ThinkingEffortHigh {
+			t.Fatalf("%s explicit high changed to %s", tc.id, got)
+		}
+	}
+	if got := ResolveThinkingFormat("anthropic", "claude-haiku-4-5", "", true); got != ThinkingFormatAnthropicBudget {
+		t.Fatalf("legacy Haiku format = %s", got)
 	}
 }
 

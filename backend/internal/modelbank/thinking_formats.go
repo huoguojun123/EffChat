@@ -278,9 +278,12 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		if effort == ThinkingEffortMax && anthropicSupportsMaxEffort(modelID) {
 			return effort
 		}
-		// Anthropic's adaptive models use high when effort is omitted. Mirror the
-		// provider contract so an untouched EffChat selector does not silently
-		// downgrade new conversations to medium.
+		// Mirror the model-specific provider default; Opus/Haiku 5.5 changed
+		// it to medium. Explicit saved effort still wins above this fallback.
+		id := normalizeModelID(modelID)
+		if strings.Contains(id, "claude-opus-5-5") || strings.Contains(id, "claude-haiku-5-5") {
+			return ThinkingEffortMedium
+		}
 		return ThinkingEffortHigh
 	case ThinkingFormatXAIGrok:
 		if effort == ThinkingEffortNone && xAICanDisableReasoning(modelID) {
@@ -835,7 +838,7 @@ func isAnthropicAdaptiveModel(id string) bool {
 		strings.Contains(id, "4.7") || strings.Contains(id, "4-7") ||
 		strings.Contains(id, "4.8") || strings.Contains(id, "4-8") ||
 		strings.Contains(id, "claude-5") || strings.Contains(id, "claude5") ||
-		strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5")
+		strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5") || strings.Contains(id, "haiku-5-5")
 }
 
 func anthropicSupportsXHighEffort(modelID string) bool {
@@ -845,7 +848,7 @@ func anthropicSupportsXHighEffort(modelID string) bool {
 	}
 	return strings.Contains(id, "claude") && (strings.Contains(id, "4.7") || strings.Contains(id, "4-7") ||
 		strings.Contains(id, "4.8") || strings.Contains(id, "4-8") || strings.Contains(id, "claude-5") ||
-		strings.Contains(id, "claude5") || strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5"))
+		strings.Contains(id, "claude5") || strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5") || strings.Contains(id, "haiku-5-5"))
 }
 
 func anthropicSupportsMaxEffort(modelID string) bool {

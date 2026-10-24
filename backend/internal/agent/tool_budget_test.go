@@ -38,8 +38,9 @@ func TestToolBudgetMiddlewareForcesFinalWithoutCountingHistory(t *testing.T) {
 		{Role: schema.Tool, ToolCallID: "history_call", Content: "old result"},
 	}
 	state := &adk.ChatModelAgentState{
-		Messages:  history,
-		ToolInfos: []*schema.ToolInfo{{Name: "web_search"}},
+		Messages:          history,
+		ToolInfos:         []*schema.ToolInfo{{Name: "web_search"}},
+		DeferredToolInfos: []*schema.ToolInfo{{Name: "fixture_deferred"}},
 	}
 
 	_, state, err := mw.BeforeModelRewriteState(context.Background(), state, nil)
@@ -60,8 +61,11 @@ func TestToolBudgetMiddlewareForcesFinalWithoutCountingHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeforeModelRewriteState second call: %v", err)
 	}
-	if len(state.ToolInfos) != 0 {
-		t.Fatalf("tool infos should be cleared after budget exhaustion, got %#v", state.ToolInfos)
+	if len(state.ToolInfos) != 1 || state.ToolInfos[0].Name != "web_search" {
+		t.Fatalf("tool definitions must remain stable after budget exhaustion, got %#v", state.ToolInfos)
+	}
+	if len(state.DeferredToolInfos) != 1 || state.DeferredToolInfos[0].Name != "fixture_deferred" {
+		t.Fatal("deferred tool definitions must remain stable too")
 	}
 	if got := state.Messages[len(state.Messages)-1].Content; !strings.Contains(got, "Do not call more tools") {
 		t.Fatalf("final notice missing, got: %q", got)

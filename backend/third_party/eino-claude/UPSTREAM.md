@@ -21,6 +21,12 @@ Checked against upstream `v0.1.26` on 2026-10-24: that release includes cache
 write mappings but still writes the named stream return error from its reader
 goroutine. Upgrading solely to remove this fork is therefore insufficient.
 
+The verified MiniMax M3 and M3.1 Flash compatible endpoints also require replay
+of unsigned thinking blocks in tool continuations. That serialization exception
+is restricted to those exact model IDs; Claude still requires its original
+signature and no signature is fabricated. Both protocols have HTTP fixtures in
+the root backend; this does not establish durable database-history replay.
+
 The patch is intentionally isolated through the root backend `go.mod` replace
 directive. When an upstream release removes the race, delete this directory
 and the replace directive only after the Anthropic native integration race test

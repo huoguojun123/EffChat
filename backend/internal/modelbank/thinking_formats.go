@@ -321,6 +321,16 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		}
 		return ThinkingEffortHigh
 	case ThinkingFormatMiniMaxThinking:
+		if IsMiniMaxM31Flash(modelID) {
+			switch effort {
+			case ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax:
+				return effort
+			case ThinkingEffortNone:
+				return ThinkingEffortLow
+			default:
+				return ThinkingEffortMax
+			}
+		}
 		if isMiniMaxM2Model(normalizeModelID(modelID)) {
 			// MiniMax M2.x keeps thinking on. There is no valid user-controlled
 			// budget, so callers receive no effort selector for this family.
@@ -482,6 +492,15 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			{Value: string(ThinkingEffortHigh), Label: "开启", Description: "适用 GLM 4.5+；下发 thinking.type=enabled。"},
 		}
 	case ThinkingFormatMiniMaxThinking:
+		if IsMiniMaxM31Flash(modelID) {
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortLow), Label: "低", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortMedium), Label: "中", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortHigh), Label: "高", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortMax), Label: "最大", Description: "MiniMax M3.1 Flash 默认档位；不可关闭思考。"},
+			}
+		}
 		if isMiniMaxM2Model(normalizeModelID(modelID)) {
 			return nil
 		}
@@ -741,7 +760,14 @@ func isMiniMaxM2Model(modelID string) bool {
 }
 
 func MiniMaxThinkingCanDisable(modelID string) bool {
-	return !isMiniMaxM2Model(modelID)
+	return !isMiniMaxM2Model(modelID) && !IsMiniMaxM31Flash(modelID)
+}
+
+// IsMiniMaxM31Flash must not inherit M3's off switch or assume that future
+// MiniMax names share M3.1's effort contract. Saved channel endpoints stay owned
+// by the administrator; this predicate changes only the verified wire fields.
+func IsMiniMaxM31Flash(modelID string) bool {
+	return normalizeModelID(modelID) == "minimax-m3.1-flash"
 }
 
 func isVolcengineThinkingModel(id string) bool {

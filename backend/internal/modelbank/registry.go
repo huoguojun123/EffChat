@@ -336,6 +336,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ MiniMax ============
+		"MiniMax-M3.1-Flash": {
+			ID: "MiniMax-M3.1-Flash", DisplayName: "MiniMax M3.1 Flash", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 524288,
+			},
+		},
 		"MiniMax-M3": {
 			ID: "MiniMax-M3", DisplayName: "MiniMax M3", Provider: "minimax", Enabled: true,
 			Capabilities: ModelCapabilities{

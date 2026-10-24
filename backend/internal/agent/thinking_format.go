@@ -57,6 +57,14 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			} else {
 				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
 			}
+		} else if format == modelbank.ThinkingFormatMiniMaxThinking {
+			setOpenAIExtraField(cfg, "reasoning_split", true)
+			if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "adaptive"})
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			} else if modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+			}
 		} else if format == modelbank.ThinkingFormatKimiThinking {
 			switch modelbank.ResolveKimiThinkingContract(req.ModelID) {
 			case modelbank.KimiThinkingK3:
@@ -104,6 +112,9 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		// The OpenAI-compatible Eino adapter already maps reasoning_content into
 		// schema.Message.ReasoningContent, so no parallel response path is needed.
 		setOpenAIExtraField(cfg, "reasoning_split", true)
+		if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		}
 		if effort != modelbank.ThinkingEffortAuto {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": thinkingTypeForToggle(effort, "adaptive")})
 		}
@@ -178,6 +189,12 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 			}
 			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
 			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
+		} else if format == modelbank.ThinkingFormatMiniMaxThinking && modelbank.IsMiniMaxM31Flash(req.ModelID) {
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
+			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
 		} else if format == modelbank.ThinkingFormatMiniMaxThinking && modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
 			if cfg.AdditionalRequestFields == nil {
 				cfg.AdditionalRequestFields = map[string]any{}
@@ -204,11 +221,14 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 		cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
 	case modelbank.ThinkingFormatMiniMaxThinking:
-		if modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+		if modelbank.MiniMaxThinkingCanDisable(req.ModelID) || modelbank.IsMiniMaxM31Flash(req.ModelID) {
 			if cfg.AdditionalRequestFields == nil {
 				cfg.AdditionalRequestFields = map[string]any{}
 			}
 			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": thinkingTypeForToggle(effort, "adaptive")}
+			if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+				cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
+			}
 		}
 	}
 	logThinkingFormat(req, format, effort)

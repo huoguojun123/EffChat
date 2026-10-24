@@ -7,6 +7,27 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 )
 
+func TestMiniMax31EffortContract(t *testing.T) {
+	const id = "MiniMax-M3.1-Flash"
+	if MiniMaxThinkingCanDisable(id) {
+		t.Fatal("M3.1 thinking cannot be disabled")
+	}
+	for _, value := range []string{"low", "medium", "high", "xhigh", "max"} {
+		if got := ResolveThinkingEffortForModel(ThinkingFormatMiniMaxThinking, id, value); string(got) != value {
+			t.Errorf("%s -> %s", value, got)
+		}
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatMiniMaxThinking, id, ""); got != ThinkingEffortMax {
+		t.Errorf("default=%s", got)
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatMiniMaxThinking, id, "none"); got != ThinkingEffortLow {
+		t.Errorf("none=%s", got)
+	}
+	if options := ThinkingEffortOptionsForModel(ThinkingFormatMiniMaxThinking, id); len(options) != 5 {
+		t.Errorf("options=%v", options)
+	}
+}
+
 func TestResolveThinkingFormatPrefersModelIDOverProvider(t *testing.T) {
 	got := ResolveThinkingFormat("openai", "deepseek-ai/deepseek-v4-flash", "auto", true)
 	if got != ThinkingFormatDeepSeekV4 {

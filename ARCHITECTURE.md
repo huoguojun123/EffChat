@@ -180,6 +180,8 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
 
 工具预算在同次 ADK 运行中耗尽后保留普通与 deferred 工具定义，只追加一次收尾提示，并在模型边界设置 `tool_choice=none`；classic 模型使用 `WithToolChoice`，typed Responses 使用 `WithAgenticToolChoice`。实际工具执行仍由治理层独立拦截，不能信任上游一定遵守 none。这样避免为了收尾删除工具定义而破坏缓存/签名思考的工具前缀；不代表跨运行重建的历史已满足 preserved thinking 约束。
 
+跨运行历史投影会重建 system、裁减旧图片并规范化工具序列，不能保证 Claude 签名思考绑定的原始前缀。投影因此统一省略历史 Claude thinking/signature 对，避免仅清空 `ReasoningContent` 后被 adapter 从 Extra 重新发送；数据库原文、展示内容、无签名 MiniMax thinking 和其它 provider 元数据不变。当前运行内的工具续接仍保留签名。这是安全重置策略，会失去跨运行思考连续性，不等于 append-only preserved thinking、账户迁移或真实缓存命中率验证；Kimi 等要求全历史 reasoning 的契约需独立处理，不能套用此省略策略。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

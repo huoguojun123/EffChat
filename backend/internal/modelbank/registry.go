@@ -108,6 +108,27 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Anthropic ============
+		"claude-opus-5-5": {
+			ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-sonnet-5-5": {
+			ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-haiku-5-5": {
+			ID: "claude-haiku-5-5", DisplayName: "Claude Haiku 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-fable-5-1": {
 			ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{

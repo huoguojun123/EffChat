@@ -373,6 +373,20 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Moonshot Kimi ============
+		"kimi-k3.1-pro": {
+			ID: "kimi-k3.1-pro", DisplayName: "Kimi K3.1 Pro", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1048576, MaxOutput: 1048576,
+			},
+		},
+		"kimi-k3.1-pro-highspeed": {
+			ID: "kimi-k3.1-pro-highspeed", DisplayName: "Kimi K3.1 Pro HighSpeed", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1048576, MaxOutput: 1048576,
+			},
+		},
 		"kimi-k3": {
 			ID: "kimi-k3", DisplayName: "Kimi K3", Provider: "moonshot", Enabled: true,
 			Capabilities: ModelCapabilities{

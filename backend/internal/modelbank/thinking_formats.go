@@ -793,8 +793,11 @@ func isKimiAlwaysThinkingModel(id string) bool {
 // fields instead of inheriting the wrong Kimi generation contract.
 func ResolveKimiThinkingContract(modelID string) KimiThinkingContract {
 	id := normalizeModelID(modelID)
+	// Preserve gateway namespaces, but do not infer today's K3 parameters for
+	// unverified future generations merely because their name contains "kimi-k3".
+	name := id[strings.LastIndex(id, "/")+1:]
 	switch {
-	case strings.Contains(id, "kimi-k3"):
+	case name == "kimi-k3" || name == "kimi-k3.1-pro" || name == "kimi-k3.1-pro-highspeed":
 		return KimiThinkingK3
 	case strings.Contains(id, "kimi-k2.7-code"):
 		return KimiThinkingK27Code

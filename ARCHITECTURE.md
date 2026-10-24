@@ -168,6 +168,8 @@ Claude 5.5 的编译期候选包括 `claude-opus-5-5`、`claude-sonnet-5-5`、`c
 
 MiniMax 精确型号 `MiniMax-M3.1-Flash` 始终思考，使用 `low/medium/high/xhigh/max`，默认 `max`；旧的关闭偏好和 utility 请求归一为最低合法 `low`。OpenAI-compatible 发送 `reasoning_split=true`、`reasoning_effort` 与 `max_completion_tokens`，Anthropic-compatible 发送 adaptive 与 `output_config.effort`；均省略不接受的采样参数，管理员保存值不变。原 M3 的关闭开关与 M2 的无控制字段行为不变。现有文字/图片与同次工具往返通过 HTTP fixture 验证；Anthropic-compatible unsigned thinking 重放仅允许精确 M3/M3.1，Claude 仍要求原始签名。此支持不包含视频、新 endpoint、跨运行历史 reasoning 重放或真实账号可用性承诺。
 
+Kimi K3 与精确 `kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed` 共用已核验契约：始终思考、默认 effort=max、utility/none→low，使用 `max_completion_tokens` 并省略固定采样参数；未知 K3 后续型号不自动继承。K3.1 的本地 HTTP fixture 验证 base64 图片、完整同次 assistant reasoning/tool 回放与 usage；公共图片 URL、视频、托管搜索和跨运行 preserved thinking 不属于此切片。候选记录 1,048,576 context/output 上限，不代表默认输出预算或付费账号验证。
+
 GLM 5.3（含 Flash/FlashX）始终思考，默认 effort 为 `max`；显式 `low/high/max` 保持不变，旧关闭偏好和 utility 使用最低合法 `low`，5.2 默认仍为 `high`。Flash/FlashX 的图片、流式工具往返和 usage 有本地 HTTP fixture；不自动开启 `clear_thinking=false` 或 `tool_stream`，不替换渠道，也不承诺特定账号或 Coding Plan 可用。候选目录补充不写入管理员数据库。
 
 Sol 6.1 的内置能力按官方模型详情声明 text/image 输入、1,050,000 context 与 128,000 output；Chat Completions 和 Responses 的文本/图片序列化均有本地 HTTP fixture。工具仍仅在 Responses adapter 挂载，目录能力不绕过运行时 gate，也不会覆盖管理员已经保存的能力值。

@@ -168,6 +168,8 @@ Claude 5.5 的编译期候选包括 `claude-opus-5-5`、`claude-sonnet-5-5`、`c
 
 Sol 6.1 的内置能力按官方模型详情声明 text/image 输入、1,050,000 context 与 128,000 output；Chat Completions 和 Responses 的文本/图片序列化均有本地 HTTP fixture。工具仍仅在 Responses adapter 挂载，目录能力不绕过运行时 gate，也不会覆盖管理员已经保存的能力值。
 
+Anthropic native 适配器保留 cache read/write token，流式 usage 对外统一为累计快照：输入/缓存计数不会在输出帧丢失，总量等于 prompt + completion，累计输出不重复求和。消息和 Eino callback 均覆盖本地 HTTP fixture；产品 usage 数据库/API 仍只存已有 cached_tokens，不能据此宣称已持久化 cache write 或区分 missing/zero。
+
 ## 工具与联网
 
 - 工具通过 Eino Tool interface 挂载，不做 MCP runtime。

@@ -7,6 +7,14 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Updated the Go 1.26 toolchain and pinned Docker builder to 1.26.10, and
+  updated the Go networking dependencies for the current security fixes.
+- Pinned Excelize to upstream security-fix commit `6258dcebc4e2` while awaiting
+  a tagged release, covering malformed workbook parsing and unbounded row
+  iteration. Existing files, database schema and deployment topology are unchanged.
+
 ## [0.4.1-beta.11] - 2026-09-14
 
 ### Added

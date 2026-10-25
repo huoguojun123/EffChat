@@ -6,7 +6,7 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 
 ## 技术栈
 
-- Backend：Go 1.26.6、Gin、Eino v0.9.21、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
+- Backend：Go 1.26.10、Gin、Eino v0.9.21、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
 - Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理；镜像以固定

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -329,11 +328,21 @@ func TestADKFirstTurnProviderPayloadKeepsCompleteAcceptedContent(t *testing.T) {
 	const content = "首轮完整内容\n第二行 ✓ with English"
 	var payloadMatched atomic.Bool
 	provider := newScriptedOpenAIProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read provider request: %v", err)
-		} else if strings.Contains(string(body), content) {
-			payloadMatched.Store(true)
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		// Compare decoded message content: JSON escapes newlines on the wire.
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode provider request: %v", err)
+		} else {
+			for _, message := range payload.Messages {
+				if message.Role == "user" && message.Content == content {
+					payloadMatched.Store(true)
+				}
+			}
 		}
 		writeOpenAIStreamingCompletion(w, "first turn captured")
 	})

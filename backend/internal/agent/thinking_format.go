@@ -42,6 +42,8 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			// Astra reasoning cannot be disabled. Utility calls explicitly request
 			// the lowest supported effort instead of inheriting the model default.
 			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+		} else if format == modelbank.ThinkingFormatOpenAIGPT56 && modelbank.IsGPT6LunaModel(req.ModelID) {
+			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortNone))
 		} else if format == modelbank.ThinkingFormatDashScopeQwen {
 			if modelbank.QwenThinkingCanDisable(req.ModelID) {
 				setOpenAIExtraField(cfg, "enable_thinking", false)
@@ -53,6 +55,14 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "enabled"})
 				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
 			} else {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
+			}
+		} else if format == modelbank.ThinkingFormatMiniMaxThinking {
+			setOpenAIExtraField(cfg, "reasoning_split", true)
+			if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "adaptive"})
+				setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
+			} else if modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
 				setOpenAIExtraField(cfg, "thinking", map[string]any{"type": "disabled"})
 			}
 		} else if format == modelbank.ThinkingFormatKimiThinking {
@@ -102,6 +112,9 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 		// The OpenAI-compatible Eino adapter already maps reasoning_content into
 		// schema.Message.ReasoningContent, so no parallel response path is needed.
 		setOpenAIExtraField(cfg, "reasoning_split", true)
+		if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+			setOpenAIExtraField(cfg, "reasoning_effort", string(effort))
+		}
 		if effort != modelbank.ThinkingEffortAuto {
 			setOpenAIExtraField(cfg, "thinking", map[string]any{"type": thinkingTypeForToggle(effort, "adaptive")})
 		}
@@ -176,6 +189,12 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 			}
 			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
 			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
+		} else if format == modelbank.ThinkingFormatMiniMaxThinking && modelbank.IsMiniMaxM31Flash(req.ModelID) {
+			if cfg.AdditionalRequestFields == nil {
+				cfg.AdditionalRequestFields = map[string]any{}
+			}
+			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive"}
+			cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(modelbank.ThinkingEffortLow)}
 		} else if format == modelbank.ThinkingFormatMiniMaxThinking && modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
 			if cfg.AdditionalRequestFields == nil {
 				cfg.AdditionalRequestFields = map[string]any{}
@@ -202,11 +221,14 @@ func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {
 		cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": "adaptive", "display": "summarized"}
 		cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
 	case modelbank.ThinkingFormatMiniMaxThinking:
-		if modelbank.MiniMaxThinkingCanDisable(req.ModelID) {
+		if modelbank.MiniMaxThinkingCanDisable(req.ModelID) || modelbank.IsMiniMaxM31Flash(req.ModelID) {
 			if cfg.AdditionalRequestFields == nil {
 				cfg.AdditionalRequestFields = map[string]any{}
 			}
 			cfg.AdditionalRequestFields["thinking"] = map[string]any{"type": thinkingTypeForToggle(effort, "adaptive")}
+			if modelbank.IsMiniMaxM31Flash(req.ModelID) {
+				cfg.AdditionalRequestFields["output_config"] = map[string]any{"effort": string(effort)}
+			}
 		}
 	}
 	logThinkingFormat(req, format, effort)
@@ -220,7 +242,7 @@ func applyGeminiThinking(req *ChatRequest, cfg *gemini.Config) {
 	}
 	contract := modelbank.ResolveGeminiThinkingContract(req.ModelID)
 	if req.SuppressThinking {
-		// Gemini 3.x cannot disable thinking. Sending the lowest supported level
+		// Verified level-based Gemini models cannot disable thinking. Sending the lowest supported level
 		// keeps utility calls bounded; omitting the config would restore the
 		// provider default (currently medium) and defeat suppression.
 		if contract == modelbank.GeminiThinkingLevel {

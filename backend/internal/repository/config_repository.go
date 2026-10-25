@@ -68,21 +68,9 @@ const MindMapOutputInstruction = "- mindmap — traditional horizontal mind maps
 
 const maxSystemPromptTemplateBytes = 64 << 10
 
+// Keep stable policy before per-turn context so dates and session edits do not
+// invalidate its prefix. Saved administrator templates retain their own order.
 const DefaultSystemPromptTemplate = `You are {{system_name}}, an AI assistant. Default to Chinese. If the user writes in another language, reply in that language. Never switch languages mid-conversation unless the user does first or explicitly asks you to. When asked about your identity, be concise.
-
-# Runtime
-- Date: {{date}}
-- Timezone: {{timezone}}
-
-# User
-{{user_info}}
-{{user_preferences}}
-
-# Session
-{{session_info}}
-{{session_preferences}}
-{{session_prompt}}
-{{capabilities}}
 
 ---
 
@@ -203,7 +191,7 @@ Respect the person's ability to make informed decisions. Do not make categorical
 
 ## Knowledge and Current Information
 
-Use the runtime date and timezone above when formulating time-sensitive answers or search queries. For current, external, local, niche, or changeable facts, use available search tools before answering. When in doubt, search. Do not mention a knowledge cutoff or lack of real-time data as a substitute for using available tools. Detailed search triggers and hygiene live in the web_search and web_extract tool descriptions.
+Use the runtime date and timezone when formulating time-sensitive answers or search queries. For current, external, local, niche, or changeable facts, use available search tools before answering. When in doubt, search. Do not mention a knowledge cutoff or lack of real-time data as a substitute for using available tools. Detailed search triggers and hygiene live in the web_search and web_extract tool descriptions.
 
 ---
 
@@ -354,7 +342,23 @@ For search-heavy responses, synthesize in your own words. Prefer paraphrase over
 1. This message's explicit request
 2. Session-specific instructions
 3. Long-term user preferences and conversation memory
-4. This prompt`
+4. This prompt
+
+---
+
+# Runtime
+- Date: {{date}}
+- Timezone: {{timezone}}
+
+# User
+{{user_info}}
+{{user_preferences}}
+
+# Session
+{{session_info}}
+{{session_preferences}}
+{{session_prompt}}
+{{capabilities}}`
 
 // mustJSONString 把字符串编码为 JSON RawMessage，供配置默认值复用常量。
 func mustJSONString(s string) json.RawMessage {

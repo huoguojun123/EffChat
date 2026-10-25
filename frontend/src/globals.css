@@ -1222,6 +1222,18 @@ html.app-route-leaving #root {
   min-height: 1.45em;
 }
 
+.shiki-code-block.streaming-code-source {
+  margin: 0;
+  padding: 0.75rem;
+  overflow: visible;
+  background: transparent;
+  color: var(--foreground);
+  font-family: var(--chat-code-font-family, var(--font-mono));
+  font-size: 0.875rem;
+  line-height: 1.45;
+  white-space: pre;
+}
+
 .shiki span {
   color: var(--shiki-light);
 }

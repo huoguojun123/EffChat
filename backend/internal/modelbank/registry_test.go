@@ -6,6 +6,20 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 )
 
+func TestBuiltinCurrentGeminiCapabilities(t *testing.T) {
+	models := builtinModels()
+	for _, id := range []string{"gemini-4-argon", "gemini-3.5-flash-lite"} {
+		info := models[id]
+		if info == nil {
+			t.Fatalf("missing builtin %s", id)
+		}
+		c := info.Capabilities
+		if info.Provider != "google" || !c.Vision || !c.ToolUse || !c.Reasoning || c.SearchImpl != SearchImplParams || c.ContextWindow != 1048576 || c.MaxOutput != 65536 {
+			t.Fatalf("%s capabilities = %+v", id, c)
+		}
+	}
+}
+
 // TestLoadModels_OverridesBuiltins 验证 DB 记录能覆盖内置默认，且能力字段正确映射。
 func TestLoadModels_OverridesBuiltins(t *testing.T) {
 	// 用一个与内置不同的自定义模型加载
@@ -58,6 +72,17 @@ func TestLoadModels_EmptyClearsRegistry(t *testing.T) {
 	resetRegistryToBuiltins() // 还原，避免影响 search_config_test 等同包测试
 }
 
+func TestGetOrDefaultUnknownModelUsesConservativeCapabilities(t *testing.T) {
+	resetRegistryToBuiltins()
+	info := GetOrDefault("future-model-without-evidence", "openai")
+	if info == nil || info.ID != "future-model-without-evidence" || info.Provider != "openai" {
+		t.Fatalf("unexpected fallback model: %+v", info)
+	}
+	if info.Capabilities.Vision || info.Capabilities.ToolUse || info.Capabilities.Reasoning || info.Capabilities.SearchImpl != SearchImplNone {
+		t.Fatalf("unknown model must use conservative capabilities: %+v", info.Capabilities)
+	}
+}
+
 func TestBuiltinsIncludeGPT56Family(t *testing.T) {
 	resetRegistryToBuiltins()
 	for _, id := range []string{"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
@@ -80,6 +105,7 @@ func TestBuiltinsIncludeCurrentGPT6AndClaudeFable(t *testing.T) {
 		output   int
 	}{
 		{id: "gpt-6-astra", provider: "openai", context: 1050000, output: 128000},
+		{id: "gpt-6.1-sol", provider: "openai", context: 1050000, output: 128000},
 		{id: "claude-fable-5-1", provider: "anthropic", context: 1000000, output: 128000},
 	}
 	for _, tc := range cases {
@@ -107,6 +133,9 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 	}{
 		{id: "claude-opus-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
 		{id: "claude-sonnet-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-opus-5-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-sonnet-5-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
+		{id: "claude-haiku-5-5", provider: "anthropic", context: 1000000, output: 128000, vision: true},
 		{id: "claude-opus-4-8", provider: "anthropic", context: 1000000, output: 128000, vision: true},
 		{id: "claude-sonnet-4-7", provider: "anthropic", context: 1000000, output: 128000, vision: true},
 		{id: "gemini-3.7-flash", provider: "google", context: 1048576, output: 65536, vision: true},
@@ -118,8 +147,10 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "qwen3.7-plus", provider: "qwen", context: 1000000, output: 65536, vision: true},
 		{id: "qwen3.7-flash", provider: "qwen", context: 1000000, output: 65536, vision: true},
 		{id: "glm-5.3-flash", provider: "zhipu", context: 1000000, output: 131072, vision: true},
+		{id: "glm-5.3-flashx", provider: "zhipu", context: 1000000, output: 131072, vision: true},
 		{id: "glm-5.3", provider: "zhipu", context: 1000000, output: 128000},
 		{id: "glm-5.2", provider: "zhipu", context: 1000000, output: 128000},
+		{id: "MiniMax-M3.1-Flash", provider: "minimax", context: 1000000, output: 524288, vision: true},
 		{id: "MiniMax-M3", provider: "minimax", context: 1000000, output: 524288, vision: true},
 		{id: "MiniMax-M2.7", provider: "minimax", context: 204800, output: 131072},
 		{id: "MiniMax-M2.7-highspeed", provider: "minimax", context: 204800, output: 131072},
@@ -127,6 +158,8 @@ func TestBuiltinsIncludeCandidateDayModelFamilies(t *testing.T) {
 		{id: "grok-4.20", provider: "xai", context: 1000000, output: 0, vision: true},
 		{id: "grok-4.6", provider: "xai", context: 500000, output: 0, vision: true},
 		{id: "kimi-k3", provider: "moonshot", context: 1048576, output: 1048576, vision: true},
+		{id: "kimi-k3.1-pro", provider: "moonshot", context: 1048576, output: 1048576, vision: true},
+		{id: "kimi-k3.1-pro-highspeed", provider: "moonshot", context: 1048576, output: 1048576, vision: true},
 		{id: "kimi-k2.7-code", provider: "moonshot", context: 262144, output: 0, vision: true},
 		{id: "kimi-k2.7-code-highspeed", provider: "moonshot", context: 262144, output: 0, vision: true},
 		{id: "kimi-k2.6", provider: "moonshot", context: 262144, output: 0, vision: true},
@@ -157,6 +190,18 @@ func TestGrokNonReasoningBuiltinKeepsReasoningDisabled(t *testing.T) {
 	}
 	if info.Capabilities.Reasoning {
 		t.Fatalf("non-reasoning model must not advertise reasoning: %+v", info.Capabilities)
+	}
+}
+
+func TestGrok47BuiltinUsesVerifiedCapabilities(t *testing.T) {
+	resetRegistryToBuiltins()
+	info := Get("grok-4.7")
+	if info == nil {
+		t.Fatal("missing grok-4.7 builtin")
+	}
+	if info.Provider != "xai" || info.Capabilities.ContextWindow != 500000 || info.Capabilities.MaxOutput != 0 ||
+		!info.Capabilities.Vision || !info.Capabilities.ToolUse || !info.Capabilities.Reasoning {
+		t.Fatalf("unexpected Grok 4.7 profile: %+v", info)
 	}
 }
 

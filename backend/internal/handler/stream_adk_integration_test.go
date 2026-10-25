@@ -324,6 +324,41 @@ func TestADKRunCompletionReplayDoesNotDuplicateDurableState(t *testing.T) {
 	}
 }
 
+func TestADKFirstTurnProviderPayloadKeepsCompleteAcceptedContent(t *testing.T) {
+	const content = "首轮完整内容\n第二行 ✓ with English"
+	var payloadMatched atomic.Bool
+	provider := newScriptedOpenAIProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		// Compare decoded message content: JSON escapes newlines on the wire.
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode provider request: %v", err)
+		} else {
+			for _, message := range payload.Messages {
+				if message.Role == "user" && message.Content == content {
+					payloadMatched.Store(true)
+				}
+			}
+		}
+		writeOpenAIStreamingCompletion(w, "first turn captured")
+	})
+	env := setupTestEnv(t)
+	harness := newADKRunRegressionHarness(t, env, provider)
+	session := harness.createSession(t, "first turn payload")
+	stream := harness.send(t, session.ID, "first-turn-payload", content)
+	if stream.Code != http.StatusOK || !strings.Contains(stream.Body.String(), "event: "+streaming.EventMessageComplete) {
+		t.Fatalf("first-turn stream status=%d body=%s", stream.Code, stream.Body.String())
+	}
+	harness.drainUsage(t)
+	if !payloadMatched.Load() {
+		t.Fatal("provider payload did not contain the complete accepted first-turn content")
+	}
+}
+
 func TestADKRunRetriesOnlyZeroOutputTransientFailure(t *testing.T) {
 	provider := newScriptedOpenAIProvider(t,
 		func(w http.ResponseWriter, _ *http.Request) {

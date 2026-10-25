@@ -58,8 +58,8 @@
       ],
       "name": "@rolldown/binding-*",
       "reason": "Platform binding tarballs omit the Rolldown repository-root license file.",
-      "source": "https://github.com/rolldown/rolldown/blob/f09947ab017d6df74299f691853dcfc4f4f0f86e/LICENSE",
-      "version": "1.1.5"
+      "source": "https://github.com/rolldown/rolldown/blob/89d821ca07cf9ccd84dd92bd3f48af0f579ab21a/LICENSE",
+      "version": "1.2.15"
     }
   ]
 }

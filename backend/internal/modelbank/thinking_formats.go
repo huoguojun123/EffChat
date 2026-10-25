@@ -205,8 +205,11 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	if isDashScopeQwenThinkingModel(id) {
 		return ThinkingFormatDashScopeQwen
 	}
-	if isGPT6AstraModel(id) {
+	if isGPT6RequiredReasoningModel(id) {
 		return ThinkingFormatOpenAIGPT6Astra
+	}
+	if IsGPT6LunaModel(id) {
+		return ThinkingFormatOpenAIGPT56
 	}
 	if isGPT56Model(id) {
 		return ThinkingFormatOpenAIGPT56
@@ -275,9 +278,12 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		if effort == ThinkingEffortMax && anthropicSupportsMaxEffort(modelID) {
 			return effort
 		}
-		// Anthropic's adaptive models use high when effort is omitted. Mirror the
-		// provider contract so an untouched EffChat selector does not silently
-		// downgrade new conversations to medium.
+		// Mirror the model-specific provider default; Opus/Haiku 5.5 changed
+		// it to medium. Explicit saved effort still wins above this fallback.
+		id := normalizeModelID(modelID)
+		if strings.Contains(id, "claude-opus-5-5") || strings.Contains(id, "claude-haiku-5-5") {
+			return ThinkingEffortMedium
+		}
 		return ThinkingEffortHigh
 	case ThinkingFormatXAIGrok:
 		if effort == ThinkingEffortNone && xAICanDisableReasoning(modelID) {
@@ -308,6 +314,10 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 			if effort == ThinkingEffortNone {
 				return ThinkingEffortLow
 			}
+			// GLM 5.3 defaults to max; keep the switchable 5.2 default at high.
+			if GLMAlwaysUsesThinking(modelID) {
+				return ThinkingEffortMax
+			}
 			return ThinkingEffortHigh
 		}
 		if effort == ThinkingEffortNone {
@@ -315,6 +325,16 @@ func ResolveThinkingEffortForModel(format ThinkingFormat, modelID, requested str
 		}
 		return ThinkingEffortHigh
 	case ThinkingFormatMiniMaxThinking:
+		if IsMiniMaxM31Flash(modelID) {
+			switch effort {
+			case ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax:
+				return effort
+			case ThinkingEffortNone:
+				return ThinkingEffortLow
+			default:
+				return ThinkingEffortMax
+			}
+		}
 		if isMiniMaxM2Model(normalizeModelID(modelID)) {
 			// MiniMax M2.x keeps thinking on. There is no valid user-controlled
 			// budget, so callers receive no effort selector for this family.
@@ -366,13 +386,23 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 	switch format {
 	case ThinkingFormatOpenAIGPT6Astra:
 		return []model.ThinkingEffortOption{
-			{Value: string(ThinkingEffortLow), Label: "低", Description: "GPT-6 Astra 最低推理投入，优先速度。"},
-			{Value: string(ThinkingEffortMedium), Label: "中", Description: "GPT-6 Astra 默认档位，平衡质量与延迟。"},
+			{Value: string(ThinkingEffortLow), Label: "低", Description: "GPT-6 Astra / GPT-6.1 Sol 最低推理投入，优先速度。"},
+			{Value: string(ThinkingEffortMedium), Label: "中", Description: "GPT-6 Astra / GPT-6.1 Sol 默认档位，平衡质量与延迟。"},
 			{Value: string(ThinkingEffortHigh), Label: "高", Description: "适合复杂分析、调试和多步任务。"},
 			{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适合质量优先的深度任务。"},
 			{Value: string(ThinkingEffortMax), Label: "最大", Description: "用于最困难、可接受高延迟的任务。"},
 		}
 	case ThinkingFormatOpenAIGPT56:
+		if IsGPT6LunaModel(modelID) {
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortNone), Label: "关闭", Description: "GPT-6 Luna 无推理模式，可在 Chat Completions 使用工具。"},
+				{Value: string(ThinkingEffortLow), Label: "低", Description: "GPT-6 Luna 低推理投入，优先速度。"},
+				{Value: string(ThinkingEffortMedium), Label: "中", Description: "GPT-6 Luna 默认档位，平衡质量与延迟。"},
+				{Value: string(ThinkingEffortHigh), Label: "高", Description: "适合复杂分析和多步任务。"},
+				{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适合质量优先的深度任务。"},
+				{Value: string(ThinkingEffortMax), Label: "最大", Description: "适合最复杂且可接受高延迟的任务。"},
+			}
+		}
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortNone), Label: "关闭", Description: "不使用额外推理，优先最低延迟。"},
 			{Value: string(ThinkingEffortLow), Label: "低", Description: "适合快速问答、检索和轻量工具调用。"},
@@ -446,7 +476,7 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			model.ThinkingEffortOption{Value: string(ThinkingEffortHigh), Label: "高", Description: "xAI 默认档位；下发 reasoning_effort=high。"},
 		)
 		if xAISupportsXHighEffort(modelID) {
-			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.3、4.6 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
+			options = append(options, model.ThinkingEffortOption{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适用 Grok 4.3、4.6、4.7 与 4.1 Fast；下发 reasoning_effort=xhigh。"})
 		}
 		return options
 	case ThinkingFormatGLMThinking:
@@ -466,6 +496,15 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 			{Value: string(ThinkingEffortHigh), Label: "开启", Description: "适用 GLM 4.5+；下发 thinking.type=enabled。"},
 		}
 	case ThinkingFormatMiniMaxThinking:
+		if IsMiniMaxM31Flash(modelID) {
+			return []model.ThinkingEffortOption{
+				{Value: string(ThinkingEffortLow), Label: "低", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortMedium), Label: "中", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortHigh), Label: "高", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "MiniMax M3.1 Flash 思考投入。"},
+				{Value: string(ThinkingEffortMax), Label: "最大", Description: "MiniMax M3.1 Flash 默认档位；不可关闭思考。"},
+			}
+		}
 		if isMiniMaxM2Model(normalizeModelID(modelID)) {
 			return nil
 		}
@@ -512,7 +551,7 @@ func isThinkingFormatApplicableWithContext(provider, adapter, modelID, displayNa
 	id := normalizeModelID(strings.TrimSpace(modelID + " " + displayName))
 	switch format {
 	case ThinkingFormatOpenAIGPT6Astra:
-		return a != "anthropic" && a != "google" && isGPT6AstraModel(id)
+		return a != "anthropic" && a != "google" && isGPT6RequiredReasoningModel(id)
 	case ThinkingFormatOpenAIGPT56:
 		return a != "anthropic" && a != "google" && isGPT56Model(id)
 	case ThinkingFormatOpenAIReasoningEffort:
@@ -629,6 +668,16 @@ func isGPT6AstraModel(id string) bool {
 	return strings.Contains(id, "gpt-6-astra")
 }
 
+// Only verified models share this effort/Responses-only tool contract. Keep
+// sampling rules separate: matching this group does not imply Astra sampling.
+func isGPT6RequiredReasoningModel(id string) bool {
+	return isGPT6AstraModel(id) || strings.Contains(id, "gpt-6.1-sol")
+}
+
+func IsGPT6LunaModel(id string) bool {
+	return strings.Contains(id, "gpt-6-luna")
+}
+
 // OpenAIOmitsSamplingParameters reports model families whose official API
 // contract requires service defaults instead of temperature/top_p.
 func OpenAIOmitsSamplingParameters(modelID string) bool {
@@ -642,7 +691,25 @@ func ModelSupportsToolsForAdapter(modelID, adapter string, declared bool) bool {
 	if !declared {
 		return false
 	}
-	return !isGPT6AstraModel(normalizeModelID(modelID)) || normalizeAdapter(adapter) == "openai_responses"
+	id := normalizeModelID(modelID)
+	if IsGPT6LunaModel(id) {
+		return true
+	}
+	return !isGPT6RequiredReasoningModel(id) || normalizeAdapter(adapter) == "openai_responses"
+}
+
+// ModelSupportsToolsForRequest applies request-level protocol constraints that
+// cannot be represented by the static model capability flag. GPT-6 Luna's
+// Chat Completions endpoint accepts function calling only when reasoning is
+// disabled; Responses keeps tools available at every supported effort.
+func ModelSupportsToolsForRequest(modelID, adapter string, effort ThinkingEffort, declared bool) bool {
+	if !ModelSupportsToolsForAdapter(modelID, adapter, declared) {
+		return false
+	}
+	if IsGPT6LunaModel(normalizeModelID(modelID)) && normalizeAdapter(adapter) == "openai_compatible" {
+		return effort == ThinkingEffortNone
+	}
+	return true
 }
 
 func isGrokReasoningModel(id string) bool {
@@ -660,6 +727,7 @@ func isGrokReasoningModel(id string) bool {
 func xAISupportsXHighEffort(modelID string) bool {
 	id := normalizeModelID(modelID)
 	return strings.Contains(id, "grok-4.6") ||
+		strings.Contains(id, "grok-4.7") ||
 		strings.Contains(id, "grok-4.3") ||
 		strings.Contains(id, "grok-4-1-fast")
 }
@@ -696,7 +764,14 @@ func isMiniMaxM2Model(modelID string) bool {
 }
 
 func MiniMaxThinkingCanDisable(modelID string) bool {
-	return !isMiniMaxM2Model(modelID)
+	return !isMiniMaxM2Model(modelID) && !IsMiniMaxM31Flash(modelID)
+}
+
+// IsMiniMaxM31Flash must not inherit M3's off switch or assume that future
+// MiniMax names share M3.1's effort contract. Saved channel endpoints stay owned
+// by the administrator; this predicate changes only the verified wire fields.
+func IsMiniMaxM31Flash(modelID string) bool {
+	return normalizeModelID(modelID) == "minimax-m3.1-flash"
 }
 
 func isVolcengineThinkingModel(id string) bool {
@@ -718,8 +793,11 @@ func isKimiAlwaysThinkingModel(id string) bool {
 // fields instead of inheriting the wrong Kimi generation contract.
 func ResolveKimiThinkingContract(modelID string) KimiThinkingContract {
 	id := normalizeModelID(modelID)
+	// Preserve gateway namespaces, but do not infer today's K3 parameters for
+	// unverified future generations merely because their name contains "kimi-k3".
+	name := id[strings.LastIndex(id, "/")+1:]
 	switch {
-	case strings.Contains(id, "kimi-k3"):
+	case name == "kimi-k3" || name == "kimi-k3.1-pro" || name == "kimi-k3.1-pro-highspeed":
 		return KimiThinkingK3
 	case strings.Contains(id, "kimi-k2.7-code"):
 		return KimiThinkingK27Code
@@ -755,11 +833,20 @@ func isGeminiThinkingModel(id string) bool {
 	return strings.Contains(id, "gemini")
 }
 
+// IsGeminiArgon deliberately matches the verified model ID, not future 4.x
+// aliases. Google also accepts the resource-qualified models/ form.
+func IsGeminiArgon(modelID string) bool {
+	return strings.TrimPrefix(normalizeModelID(modelID), "models/") == "gemini-4-argon"
+}
+
 // ResolveGeminiThinkingContract returns only contracts verified for the
 // current generateContent API. Unknown future versions intentionally receive
 // no inferred control field instead of inheriting an incompatible request.
 func ResolveGeminiThinkingContract(modelID string) GeminiThinkingContract {
 	id := normalizeModelID(modelID)
+	if IsGeminiArgon(id) {
+		return GeminiThinkingLevel
+	}
 	if strings.Contains(id, "gemini-2.5") {
 		return GeminiThinkingBudget
 	}
@@ -793,7 +880,7 @@ func isAnthropicAdaptiveModel(id string) bool {
 		strings.Contains(id, "4.7") || strings.Contains(id, "4-7") ||
 		strings.Contains(id, "4.8") || strings.Contains(id, "4-8") ||
 		strings.Contains(id, "claude-5") || strings.Contains(id, "claude5") ||
-		strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5")
+		strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5") || strings.Contains(id, "haiku-5-5")
 }
 
 func anthropicSupportsXHighEffort(modelID string) bool {
@@ -803,7 +890,7 @@ func anthropicSupportsXHighEffort(modelID string) bool {
 	}
 	return strings.Contains(id, "claude") && (strings.Contains(id, "4.7") || strings.Contains(id, "4-7") ||
 		strings.Contains(id, "4.8") || strings.Contains(id, "4-8") || strings.Contains(id, "claude-5") ||
-		strings.Contains(id, "claude5") || strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5"))
+		strings.Contains(id, "claude5") || strings.Contains(id, "sonnet-5") || strings.Contains(id, "opus-5") || strings.Contains(id, "haiku-5-5"))
 }
 
 func anthropicSupportsMaxEffort(modelID string) bool {

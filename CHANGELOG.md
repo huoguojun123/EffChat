@@ -7,6 +7,39 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.12] - 2026-10-25
+
+### Fixed
+
+- Preserve the complete accepted first-turn context and stabilize the new-turn
+  reading anchor while the composer and message layout settle.
+- Keep streaming code blocks as plain code until completion to avoid repeated
+  highlighting flashes.
+- Refresh verified model catalog and request contracts for Sol/Luna, Grok,
+  Claude, Gemini, GLM, MiniMax and Kimi without overwriting administrator settings.
+- Correct Claude cache-write/cumulative usage accounting and safely reset
+  historical signed thinking that cannot be replayed intact.
+- Keep tool schemas stable when a tool budget is exhausted and place stable
+  system instructions ahead of dynamic context. Update Eino to 0.9.21.
+
+### Security
+
+- Updated the Go 1.26 toolchain and pinned Docker builder to 1.26.10, and
+  updated the Go networking dependencies for the current security fixes.
+- Pinned Excelize to upstream security-fix commit `6258dcebc4e2` while awaiting
+  a tagged release, covering malformed workbook parsing and unbounded row
+  iteration. Existing files, database schema and deployment topology are unchanged.
+- Update DOMPurify, KaTeX, Pillow, Vite, Vitest and affected transitive
+  dependencies; verify version-pinned native-binding license material.
+
+### Compatibility
+
+- No database migration, public API, deployment topology or stored-user-data change.
+- Gemini Argon support remains bounded to the documented single-request subset.
+  Historical Claude thinking continuity is intentionally reset where signatures
+  are unavailable. Durable Kimi/xAI reasoning replay and complete cache-cost
+  observability remain follow-up work, not capabilities promised by this release.
+
 ## [0.4.1-beta.11] - 2026-09-14
 
 ### Added

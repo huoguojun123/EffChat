@@ -549,6 +549,21 @@ func TestRuntimeContextPlanDoesNotMountUnavailableMemory(t *testing.T) {
 	}
 }
 
+func TestRuntimeContextPlanBlocksLunaChatToolsWithReasoning(t *testing.T) {
+	req := &ChatRequest{
+		ModelID:        "gpt-6-luna",
+		Provider:       "openai",
+		ToolUse:        true,
+		ThinkingFormat: "openai_gpt_5_6",
+		ThinkingEffort: "medium",
+		RuntimeChannel: &model.AIChannel{Adapter: service.AdapterOpenAICompatible},
+	}
+	plan := (&EinoAgent{}).buildRuntimeContextPlan(req)
+	if req.ToolUse || len(plan.mountedTools) != 0 {
+		t.Fatalf("Luna Chat reasoning request mounted tools: tool_use=%v mounted=%v", req.ToolUse, plan.mountedTools)
+	}
+}
+
 func TestAcceptedRuntimeSnapshotRejectsChangedSkillReference(t *testing.T) {
 	first := []SkillInstruction{{
 		ID: "skill-a", Name: "Skill A",

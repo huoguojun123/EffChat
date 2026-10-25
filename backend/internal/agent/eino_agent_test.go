@@ -260,7 +260,7 @@ func TestToolResultMessage_FieldNames(t *testing.T) {
 }
 
 // TestConvertToEinoMessages_RoundTrip 验证存库消息能忠实还原为 schema.Message，
-// 包括 tool_calls 与 reasoning_content，保证工具调用链跨请求可回放。
+// 保留工具调用链；通用 reasoning_content 只在 DB 中保留，不进入默认历史投影。
 func TestConvertToEinoMessages_RoundTrip(t *testing.T) {
 	idx := 0
 	original := &schema.Message{
@@ -307,7 +307,7 @@ func TestConvertToEinoMessages_RoundTrip(t *testing.T) {
 	if m.ToolCalls[0].Function.Name != "web_search" {
 		t.Errorf("tool call name = %q, want web_search", m.ToolCalls[0].Function.Name)
 	}
-	// 历史 assistant 的 reasoning 在喂回模型前被剥离（省 token，避免网关回灌报错）。
+	// 默认历史投影省略通用 reasoning；这不是所有厂商的历史思考契约。
 	if m.ReasoningContent != "" {
 		t.Errorf("reasoning_content = %q, want stripped (empty)", m.ReasoningContent)
 	}

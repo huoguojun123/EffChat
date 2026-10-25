@@ -1,12 +1,12 @@
 # EffChat 架构文档
 
-本文描述当前 `main` 与最新测试版的架构边界；版本差异见 [CHANGELOG.md](CHANGELOG.md)。
+本文描述所在代码基线的架构边界；已发布版本差异见 [CHANGELOG.md](CHANGELOG.md)。
 
 EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主线是 Web-first：React 前端、Go API、PostgreSQL、Python extractor sidecar，以及基于 Eino 的统一 Agent。
 
 ## 技术栈
 
-- Backend：Go 1.26.6、Gin、Eino v0.9.13、eino-ext openai/claude/gemini adapters。Claude adapter v0.1.20 通过 `backend/third_party/eino-claude` 保留一处可审计的上游 race 修正，待官方发布等价修复后移除本地 replace。
+- Backend：Go 1.26.10、Gin、Eino v0.9.21、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
 - Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理；镜像以固定
@@ -26,7 +26,7 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 - 一键部署的 `.env` 与源码部署的 `.env.docker` 只保存基础设施配置：数据库、JWT、端口、数据目录、反代来源、内部服务地址和日志轮转。
 - 模型渠道、模型 API key、搜索服务、网页提取服务和 MinerU OCR 都在管理员网页持久化配置。
 - 不包含代码执行沙盒、Shell 工具、浏览器自动化、完整 RBAC、成本账单和 Skills marketplace。
-- `message_format` / `schema_version` 仍保留兼容字段，但 0.3.4 运行时按当前 Eino `schema.Message` 主线处理，不提供 `/api/v2` 双协议运行时。
+- `message_format` / `schema_version` 保留兼容字段。经典 adapter 使用 `schema.Message`，Responses 主对话使用 `schema.AgenticMessage`；两者共享产品 API、工具治理、SSE 和持久化，不提供 `/api/v2` 双产品运行时。
 
 ## 运行时组件
 
@@ -53,7 +53,7 @@ backend (Gin)
 - `internal/handler`：HTTP 参数解析、鉴权上下文读取、响应格式。
 - `internal/service`：会话、模型、渠道、限额、文件和标题生成等业务编排；文件分段预览由共享 `file_preview_service` 负责 cursor 与 UTF-8 边界。
 - `internal/repository`：PostgreSQL 查询和事务；全局对话检索位于独立 `conversation_search_repository`，不继续扩大消息主仓库。
-- `internal/agent`：Eino ReAct Agent、模型适配、消息转换、工具挂载、发送前压缩和流式事件消费。
+- `internal/agent`：统一产品 Agent 的 Eino ADK classic/typed ReAct 执行、模型适配、消息转换、工具挂载、发送前压缩和流式事件消费。
 - `internal/tool`：现有工具实现，包括文件、Skills、memory、web_search、web_extract。
 - `internal/extractor`：Go 后端访问 Python extractor 的客户端。
 - `internal/usage`：消息、模型 token、工具、搜索、提取和 OCR 用量统计。
@@ -98,7 +98,7 @@ PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化�
 1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；编辑草稿与一次提交快照分开保存在当前标签页的 sessionStorage，不持久化像素高度。提交快照记录 session、client run、原文和受管附件元数据；受理后按同一身份清理，明确失败或刷新后无活动 owner 的 `sending` 快照转为可重试状态，不自动覆盖新草稿。失败记录提供“重试 / 恢复编辑 / 放弃”三个明确入口：恢复编辑在覆盖已有新草稿前要求确认，并恢复原附件选择；删除会话成功后同步清理该会话的草稿与提交快照，并通过窄事件让已挂载的 composer 内存状态同步移除，避免旧快照在后续编辑时被重新序列化。
 2. `useSSE.sendMessage` 调用 `POST /api/v1/sessions/:id/messages/stream`。
 3. 后端在进入 Agent 前校验会话模型、渠道、用户组限额和并发 run。
-4. `EinoAgent.StreamChat` 从 DB 实时解析渠道、模型能力、工具治理和外部服务配置。
+4. `PrepareChat` 解析本轮模型、工具治理和外部服务配置，准备 Agent 与输入快照；`RunPreparedChat` 在 run 所有的上下文中执行并消费事件。`StreamChat` 保留为组合这两个阶段的兼容入口。
 5. Agent 通过 SSE 输出 `content_delta`、`thinking_delta`、`tool_call_start`、`tool_call_result`、`message_complete` 等事件。只有尚未产生任何有效输出的瞬时模型故障可以自动重试一次；一旦已有文本、thinking 或工具输出，后续传输故障不再重放 provider 调用，而是把现有回答作为 `incomplete` 结果收口。每次真实 provider 调用分别记录 usage，但同一个 run 只形成一条用户消息、一组回答消息和一个 selected answer attempt。Provider SDK 不得在该生命周期之下另行隐藏重试；Anthropic native 的 SDK 默认重试已在共享 HTTP transport 关闭，状态码与首包前连接故障统一回到 EffChat 的 retry、usage 和 SSE 所有权。只有正文、thinking/reasoning 或可执行工具调用属于部分输出；provider 的 role、usage、finish 等空 metadata 不得解除首包门禁，也不得在超时后落成空白 `incomplete` 助手消息。
 6. 后端即使前端 SSE 断开，也尽量继续跑完当前 run 并落库。
 7. terminal 决策形成后，RunHub 会冻结迟到输出和取消；瞬时数据库或连接故障使用独立的有界单次上下文重试同一原子提交，只有数据库返回 canonical terminal 后才向所有订阅者发布一次终态。进程在恢复期间退出时，启动 reconciliation 将遗留的 durable running run 转成可重试的 `server_restarted` 终态。
@@ -107,6 +107,14 @@ PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化�
 10. 同一会话、同一消息窗口 generation 的 cursor 对账与 active-run 恢复共用一个 latest-window 同步任务，避免两个并发请求相互作废并使恢复在 resume SSE 前退出。窗口或会话 generation 改变时仍建立新任务并拒绝旧响应；run-specific 调用在共享同步完成后再次核对当前 request ID。
 
 模型渠道的 provider、模型家族与 wire protocol 分开解析。`openai_compatible` 继续走 Chat Completions 兼容协议；`openai_responses` 通过官方 Eino Responses 组件接入 `/v1/responses`。主对话保留 `schema.AgenticMessage` 到 Eino `NewTypedChatModelAgent`，由稳定版 Eino 的 typed ReAct graph 下发本地 Tool schema、执行 Tool 并回送 function result；仅在 Agent 事件出口转换为 EffChat 既有 SSE、RunHub、usage 和 PostgreSQL 消息契约。标题、probe、压缩、记忆维护和网页提炼等不执行本地 Tool 的 utility 调用仍可使用经典消息 adapter，不复制 ReAct、SSE parser 或第二套运行时。Responses 请求固定 `store=false`，不使用 `previous_response_id`、Conversations API、hosted tools 或 MCP runtime。
+
+Responses 的本地 Agentic→经典消息转换保留上游已提供的完整 `PromptTokenDetails`（缓存读和写），不在转换时重建只含读 token 的子集；缺失 usage 仍保持缺失。该边界不代表所有 provider 已返回缓存写入字段，也不代表产品统计已持久化该字段。`store=false` 控制服务端响应存储，与 provider 前缀缓存是否命中是不同概念。
+
+Grok 4.7 内置候选使用已核验的 500K 上下文、图片输入和工具能力；输出上限未取得官方数值，不推测填入。其 Chat Completions 复用 xAI reasoning profile，支持 `low/medium/high/xhigh`、默认 `high`、不可关闭推理，并省略 reasoning 模型不支持的 penalty/stop 字段。该兼容路径不承诺 Responses 加密推理的跨轮持久化和重放已完成。
+
+GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。该共享仅限已核验的推理档位与 Responses-only 工具限制，不继承 Astra 的 sampling 省略规则。候选能力与管理员覆盖边界见下方模型契约说明。
+
+GPT-6 Luna 使用 OpenAI GPT-5.6 兼容推理字段，支持 `none/low/medium/high/xhigh/max`，默认 `medium`；详情确认 text/image 输入、1.05M context 和 128K max output。Luna 的 Responses 支持函数调用；Chat Completions 只有 `reasoning_effort=none` 时允许函数调用，因此 runtime profile 保留 Chat 工具能力，实际请求由 reasoning effort 决定，不能把“模型支持工具”简化成所有档位都可用。
 
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
 
@@ -155,6 +163,26 @@ send/preflight/retry/manual compaction 在 run accepted 前沿用相同公共错
 checkpoint 虽以 `role=user` 进入 Eino 消息序列，但它是系统生成的上下文治理记录，不是用户发送消息。新 checkpoint 在同一事务内按 `compaction_before_message_id` 的逻辑位置收拢被其覆盖的旧 active summary，提交后同一会话至多保留一个 active checkpoint。UI divider 优先锚定到 metadata boundary 之前最后一个普通 user turn；缺少该 metadata 的旧 checkpoint 继续从直接 `compression_summary_id` 子项回退定位，因此多级 checkpoint 和升级前数据共享同一窗口协议。每日消息配额、准入检查和 Admin 今日用量统一排除 `metadata.compaction_summary=true`；普通用户消息即使后来被 retry 或删除，仍按既有消费语义计数。
 
 压缩模型是输出受限且结果会持久化为后续上下文的 utility consumer。它复用当前会话的模型和渠道，但在克隆的任务请求上关闭可选 thinking，避免 reasoning 抢占摘要预算；收流后、checkpoint 落库前还会复用主聊天的 inline `<think>` 分离边界。压缩控制契约只放在首条 system message，原始历史保持各自角色，末尾仅追加被 system 明确排除出待总结数据的应用控制标记；模型不得归因、复述或解释该标记，也不得把 EffChat 的标签或七节格式归因为用户请求。摘要抽取器同时容忍兼容网关把 opening `<analysis>` 移入 reasoning 字段、却在 content 中留下 orphan `</analysis>` 与 `<summary>` 包装的情况，防止隐藏推理进入 durable summary。原始会话请求保持不变，主聊天的 thinking 配置不受影响。
+
+Claude 5.5 的编译期候选包括 `claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5`，继续复用 Anthropic native adaptive 请求与现有图片/工具链。Opus/Haiku 5.5 默认 effort 为 `medium`，Sonnet 5.5 为 `high`；显式选择不被默认值覆盖，utility 使用 `low`。Haiku 4.5 继续保留 manual budget。此目录补充不会写入管理员数据库；新模型的 account/prefix-bound thinking 重放仍需按官方契约单独验证，不能以普通文本流 fixture 代表跨账户或修改 system/tools 后可重放。
+
+MiniMax 精确型号 `MiniMax-M3.1-Flash` 始终思考，使用 `low/medium/high/xhigh/max`，默认 `max`；旧的关闭偏好和 utility 请求归一为最低合法 `low`。OpenAI-compatible 发送 `reasoning_split=true`、`reasoning_effort` 与 `max_completion_tokens`，Anthropic-compatible 发送 adaptive 与 `output_config.effort`；均省略不接受的采样参数，管理员保存值不变。原 M3 的关闭开关与 M2 的无控制字段行为不变。现有文字/图片与同次工具往返通过 HTTP fixture 验证；Anthropic-compatible unsigned thinking 重放仅允许精确 M3/M3.1，Claude 仍要求原始签名。此支持不包含视频、新 endpoint、跨运行历史 reasoning 重放或真实账号可用性承诺。
+
+Kimi K3 与精确 `kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed` 共用已核验契约：始终思考、默认 effort=max、utility/none→low，使用 `max_completion_tokens` 并省略固定采样参数；未知 K3 后续型号不自动继承。K3.1 的本地 HTTP fixture 验证 base64 图片、完整同次 assistant reasoning/tool 回放与 usage；公共图片 URL、视频、托管搜索和跨运行 preserved thinking 不属于此切片。候选记录 1,048,576 context/output 上限，不代表默认输出预算或付费账号验证。
+
+GLM 5.3（含 Flash/FlashX）始终思考，默认 effort 为 `max`；显式 `low/high/max` 保持不变，旧关闭偏好和 utility 使用最低合法 `low`，5.2 默认仍为 `high`。Flash/FlashX 的图片、流式工具往返和 usage 有本地 HTTP fixture；不自动开启 `clear_thinking=false` 或 `tool_stream`，不替换渠道，也不承诺特定账号或 Coding Plan 可用。候选目录补充不写入管理员数据库。
+
+Sol 6.1 的内置能力按官方模型详情声明 text/image 输入、1,050,000 context 与 128,000 output；Chat Completions 和 Responses 的文本/图片序列化均有本地 HTTP fixture。工具仍仅在 Responses adapter 挂载，目录能力不绕过运行时 gate，也不会覆盖管理员已经保存的能力值。
+
+Anthropic native 适配器保留 cache read/write token，流式 usage 对外统一为累计快照：输入/缓存计数不会在输出帧丢失，总量等于 prompt + completion，累计输出不重复求和。消息和 Eino callback 均覆盖本地 HTTP fixture；产品 usage 数据库/API 仍只存已有 cached_tokens，不能据此宣称已持久化 cache write 或区分 missing/zero。
+
+Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` 和 Gemini 3.x（含 3.5 Flash-Lite）；忽略不支持的采样参数，不将规则泛化到未知 4.x。Argon 的 1,048,576 是输入、思考、输出共享上下文，并不代表本客户端支持百万输出。当前锁定的 Go SDK 未接入 long-decode continuation，因此 Generate/Stream 共用单请求最大 32,768 output tokens：未指定时显式设置该值，管理员显式配置更大值时在构造阶段报错，不静默改写配置。目录中的 65,536 是上游单次流式上限；更长输出和续传仍未支持。普通文字/图片、工具往返、thought signature 和 usage 由本地 HTTP fixture 验证，不代表真实账号、Google grounding 与 long-decode 已验收。
+
+工具预算在同次 ADK 运行中耗尽后保留普通与 deferred 工具定义，只追加一次收尾提示，并在模型边界设置 `tool_choice=none`；classic 模型使用 `WithToolChoice`，typed Responses 使用 `WithAgenticToolChoice`。实际工具执行仍由治理层独立拦截，不能信任上游一定遵守 none。这样避免为了收尾删除工具定义而破坏缓存/签名思考的工具前缀；不代表跨运行重建的历史已满足 preserved thinking 约束。
+
+跨运行历史投影会重建 system、裁减旧图片并规范化工具序列，不能保证 Claude 签名思考绑定的原始前缀。投影因此统一省略历史 Claude thinking/signature 对，避免仅清空 `ReasoningContent` 后被 adapter 从 Extra 重新发送；数据库原文、展示内容、无签名 MiniMax thinking 和其它 provider 元数据不变。当前运行内的工具续接仍保留签名。这是安全重置策略，会失去跨运行思考连续性，不等于 append-only preserved thinking、账户迁移或真实缓存命中率验证；Kimi 等要求全历史 reasoning 的契约需独立处理，不能套用此省略策略。
+
+默认系统模板将稳定规则置于日期、用户和会话上下文之前；已有管理员模板不迁移、不自动重排，能力过滤、Skills、工具预算和会话记忆继续按既有规则追加。本地合成 HTTP fixture 测量实际请求 bytes/hash 与解码后的 system 公共前缀，守护重复请求确定性、日期/标题变化及自定义模板边界。JSON 字段顺序不是厂商缓存键，模型、工具定义和动态上下文的变化仍可能影响缓存；该测量不等于真实 token 命中率或成本 A/B。
 
 ## 工具与联网
 

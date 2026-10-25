@@ -1,7 +1,7 @@
 {
   "name": "effchat-web",
   "private": true,
-  "version": "0.4.1-beta.11",
+  "version": "0.4.1-beta.12",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -25,7 +25,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "katex": "^0.17.0",
+    "katex": "0.18.2",
     "lucide-react": "^1.31.0",
     "mermaid": "^11.16.1",
     "react": "^19.2.8",
@@ -49,19 +49,20 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.12",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.9.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.67.0",
-    "vite": "^8.1.5",
+    "vite": "^8.3.5",
     "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "overrides": {
-    "dompurify": "3.4.13",
+    "dompurify": "3.4.17",
+    "katex": "$katex",
     "nanoid": "3.3.18"
   }
 }

@@ -7,6 +7,27 @@ import (
 	"github.com/huoguojun123/EffChat/internal/model"
 )
 
+func TestMiniMax31EffortContract(t *testing.T) {
+	const id = "MiniMax-M3.1-Flash"
+	if MiniMaxThinkingCanDisable(id) {
+		t.Fatal("M3.1 thinking cannot be disabled")
+	}
+	for _, value := range []string{"low", "medium", "high", "xhigh", "max"} {
+		if got := ResolveThinkingEffortForModel(ThinkingFormatMiniMaxThinking, id, value); string(got) != value {
+			t.Errorf("%s -> %s", value, got)
+		}
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatMiniMaxThinking, id, ""); got != ThinkingEffortMax {
+		t.Errorf("default=%s", got)
+	}
+	if got := ResolveThinkingEffortForModel(ThinkingFormatMiniMaxThinking, id, "none"); got != ThinkingEffortLow {
+		t.Errorf("none=%s", got)
+	}
+	if options := ThinkingEffortOptionsForModel(ThinkingFormatMiniMaxThinking, id); len(options) != 5 {
+		t.Errorf("options=%v", options)
+	}
+}
+
 func TestResolveThinkingFormatPrefersModelIDOverProvider(t *testing.T) {
 	got := ResolveThinkingFormat("openai", "deepseek-ai/deepseek-v4-flash", "auto", true)
 	if got != ThinkingFormatDeepSeekV4 {
@@ -155,6 +176,8 @@ func TestVendorThinkingEffortSemantics(t *testing.T) {
 		{name: "grok keeps medium", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "medium", want: ThinkingEffortMedium},
 		{name: "grok 4.5 rejects xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.5", requested: "xhigh", want: ThinkingEffortHigh},
 		{name: "grok 4.6 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.6", requested: "xhigh", want: ThinkingEffortXHigh},
+		{name: "grok 4.7 keeps xhigh", format: ThinkingFormatXAIGrok, modelID: "grok-4.7", requested: "xhigh", want: ThinkingEffortXHigh},
+		{name: "grok 4.7 cannot disable", format: ThinkingFormatXAIGrok, modelID: "grok-4.7", requested: "none", want: ThinkingEffortHigh},
 		{name: "glm accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "none", want: ThinkingEffortNone},
 		{name: "glm normalizes enabled", format: ThinkingFormatGLMThinking, modelID: "glm-4.5", requested: "low", want: ThinkingEffortHigh},
 		{name: "glm 5.2 accepts disabled", format: ThinkingFormatGLMThinking, modelID: "glm-5.2", requested: "none", want: ThinkingEffortNone},
@@ -419,6 +442,9 @@ func TestResolveGeminiThinkingContract(t *testing.T) {
 		{modelID: "gemini-3.6-flash", want: GeminiThinkingLevel, omit: true},
 		{modelID: "gemini-3.7-flash", want: GeminiThinkingLevel, omit: true},
 		{modelID: "gemini-3.8-flash", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-4-argon", want: GeminiThinkingLevel, omit: true},
+		{modelID: " models/GEMINI-4-ARGON ", want: GeminiThinkingLevel, omit: true},
+		{modelID: "gemini-4-argon-unverified", want: GeminiThinkingUnknown},
 		{modelID: "gemini-4.0-unverified", want: GeminiThinkingUnknown},
 		{modelID: "custom-google-model", want: GeminiThinkingUnknown},
 	}
@@ -442,6 +468,7 @@ func TestAnthropicAdaptiveEffortsFollowModelCapabilities(t *testing.T) {
 		{modelID: "claude-sonnet-4-6", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortMax}},
 		{modelID: "claude-opus-4-8", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
 		{modelID: "claude-sonnet-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
+		{modelID: "claude-haiku-5-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
 		{modelID: "claude-fable-5", want: []ThinkingEffort{ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh, ThinkingEffortMax}},
 	}
 	for _, tc := range cases {
@@ -471,6 +498,23 @@ func TestAnthropicAdaptiveDefaultsToProviderHigh(t *testing.T) {
 	}
 }
 
+func TestClaude55RuntimeDefaultsAndLegacyBudget(t *testing.T) {
+	for _, tc := range []struct{ id, want string }{
+		{"claude-opus-5-5", "medium"}, {"claude-haiku-5-5", "medium"}, {"claude-sonnet-5-5", "high"},
+	} {
+		profile := RuntimeProfileForModel(&model.Model{ID: tc.id, Provider: "anthropic", Reasoning: true})
+		if profile.DefaultThinkingEffort != tc.want || profile.ThinkingFormat != string(ThinkingFormatAnthropicAdaptive) {
+			t.Fatalf("%s profile = %+v", tc.id, profile)
+		}
+		if got := ResolveThinkingEffortForModel(ThinkingFormatAnthropicAdaptive, tc.id, "high"); got != ThinkingEffortHigh {
+			t.Fatalf("%s explicit high changed to %s", tc.id, got)
+		}
+	}
+	if got := ResolveThinkingFormat("anthropic", "claude-haiku-4-5", "", true); got != ThinkingFormatAnthropicBudget {
+		t.Fatalf("legacy Haiku format = %s", got)
+	}
+}
+
 func TestKimiThinkingContracts(t *testing.T) {
 	cases := []struct {
 		modelID   string
@@ -479,6 +523,10 @@ func TestKimiThinkingContracts(t *testing.T) {
 		format    ThinkingFormat
 	}{
 		{modelID: "kimi-k3", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k3.1-pro", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k3.1-pro-highspeed", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "gateway/kimi-k3.1-pro", contract: KimiThinkingK3, format: ThinkingFormatKimiThinking},
+		{modelID: "kimi-k3.9-future", reasoning: true, contract: KimiThinkingUnknown, format: ThinkingFormatNone},
 		{modelID: "kimi-k2.7-code", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
 		{modelID: "kimi-k2.7-code-highspeed", contract: KimiThinkingK27Code, format: ThinkingFormatKimiThinking},
 		{modelID: "kimi-k2.6", reasoning: true, contract: KimiThinkingK26, format: ThinkingFormatKimiThinking},

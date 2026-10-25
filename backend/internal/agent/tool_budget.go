@@ -78,8 +78,6 @@ func (m *agenticToolBudgetMiddleware) BeforeModelRewriteState(ctx context.Contex
 	actualCalls := int(b.actualCalls.Load())
 	if rounds >= b.maxRounds || calls >= b.maxCalls || actualCalls >= b.maxCalls || b.forceFinal.Load() {
 		b.forceFinal.Store(true)
-		state.ToolInfos = nil
-		state.DeferredToolInfos = nil
 		if !b.noteAdded {
 			b.noteAdded = true
 			state.Messages = append(state.Messages, schema.UserAgenticMessage(toolBudgetFinalNotice(rounds, maxInt(calls, actualCalls), b.maxRounds, b.maxCalls)))
@@ -119,7 +117,8 @@ func countAgenticGeneratedToolUse(messages []*schema.AgenticMessage, baseline in
 //
 // Eino ADK 的 MaxIterations 能防止无限循环，但报错方式是 "exceeds max
 // iterations"，用户只能看到失败。本中间件更早介入：达到工具轮次/次数上限后
-// 移除可用工具，并向模型追加一条用户态系统提示，要求它基于已拿到的结果转入正文。
+// 保留工具定义但禁止继续调用，并追加一条用户态提示要求基于已有结果转入正文。
+// 删除定义会改变 provider 缓存/签名思考的前缀；实际执行层仍独立拦截超预算调用。
 //
 // 这里同时维护两种计数：
 //   - state.Messages 中新增 assistant tool_calls，用于判断模型已经发起了几轮工具调用；
@@ -185,8 +184,6 @@ func (m *toolBudgetMiddleware) BeforeModelRewriteState(ctx context.Context, stat
 	actualCalls := int(m.actualCalls.Load())
 	if rounds >= m.maxRounds || calls >= m.maxCalls || actualCalls >= m.maxCalls || m.forceFinal.Load() {
 		m.forceFinal.Store(true)
-		state.ToolInfos = nil
-		state.DeferredToolInfos = nil
 		if !m.noteAdded {
 			m.noteAdded = true
 			state.Messages = append(state.Messages, schema.UserMessage(toolBudgetFinalNotice(rounds, maxInt(calls, actualCalls), m.maxRounds, m.maxCalls)))

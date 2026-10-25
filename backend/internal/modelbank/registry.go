@@ -20,6 +20,20 @@ import (
 func builtinModels() map[string]*ModelInfo {
 	return map[string]*ModelInfo{
 		// ============ OpenAI ============
+		"gpt-6.1-sol": {
+			ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol", Provider: "openai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1050000, MaxOutput: 128000,
+			},
+		},
+		"gpt-6-luna": {
+			ID: "gpt-6-luna", DisplayName: "GPT-6 Luna", Provider: "openai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1050000, MaxOutput: 128000,
+			},
+		},
 		"gpt-6-astra": {
 			ID: "gpt-6-astra", DisplayName: "GPT-6 Astra", Provider: "openai", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -95,6 +109,27 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Anthropic ============
+		"claude-opus-5-5": {
+			ID: "claude-opus-5-5", DisplayName: "Claude Opus 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-sonnet-5-5": {
+			ID: "claude-sonnet-5-5", DisplayName: "Claude Sonnet 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-haiku-5-5": {
+			ID: "claude-haiku-5-5", DisplayName: "Claude Haiku 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
 		"claude-fable-5-1": {
 			ID: "claude-fable-5-1", DisplayName: "Claude Fable 5.1", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -160,6 +195,15 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Google Gemini ============
+		"gemini-4-argon": {
+			ID: "gemini-4-argon", DisplayName: "Gemini 4 Argon", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				// Upstream single-stream limit; the client rejects >32768 for
+				// the common Generate/Stream subset without continuation.
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
 		"gemini-3.8-flash": {
 			ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -183,6 +227,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 		"gemini-3.5-flash": {
 			ID: "gemini-3.5-flash", DisplayName: "Gemini 3.5 Flash", Provider: "google", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
+				ContextWindow: 1048576, MaxOutput: 65536,
+			},
+		},
+		"gemini-3.5-flash-lite": {
+			ID: "gemini-3.5-flash-lite", DisplayName: "Gemini 3.5 Flash-Lite", Provider: "google", Enabled: true,
 			Capabilities: ModelCapabilities{
 				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplParams,
 				ContextWindow: 1048576, MaxOutput: 65536,
@@ -262,6 +313,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ GLM ============
+		"glm-5.3-flashx": {
+			ID: "glm-5.3-flashx", DisplayName: "GLM-5.3-FlashX", Provider: "zhipu", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 131072,
+			},
+		},
 		"glm-5.3-flash": {
 			ID: "glm-5.3-flash", DisplayName: "GLM-5.3-Flash", Provider: "zhipu", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -285,6 +343,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ MiniMax ============
+		"MiniMax-M3.1-Flash": {
+			ID: "MiniMax-M3.1-Flash", DisplayName: "MiniMax M3.1 Flash", Provider: "minimax", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1000000, MaxOutput: 524288,
+			},
+		},
 		"MiniMax-M3": {
 			ID: "MiniMax-M3", DisplayName: "MiniMax M3", Provider: "minimax", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -308,6 +373,20 @@ func builtinModels() map[string]*ModelInfo {
 		},
 
 		// ============ Moonshot Kimi ============
+		"kimi-k3.1-pro": {
+			ID: "kimi-k3.1-pro", DisplayName: "Kimi K3.1 Pro", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1048576, MaxOutput: 1048576,
+			},
+		},
+		"kimi-k3.1-pro-highspeed": {
+			ID: "kimi-k3.1-pro-highspeed", DisplayName: "Kimi K3.1 Pro HighSpeed", Provider: "moonshot", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1048576, MaxOutput: 1048576,
+			},
+		},
 		"kimi-k3": {
 			ID: "kimi-k3", DisplayName: "Kimi K3", Provider: "moonshot", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -357,6 +436,15 @@ func builtinModels() map[string]*ModelInfo {
 			Capabilities: ModelCapabilities{
 				Vision: true, ToolUse: true, SearchImpl: SearchImplNone,
 				ContextWindow: 1000000,
+			},
+		},
+		// xAI's model detail confirms the context limit but does not publish an
+		// output limit here; leave MaxOutput unset instead of guessing a cap.
+		"grok-4.7": {
+			ID: "grok-4.7", DisplayName: "Grok 4.7", Provider: "xai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 500000,
 			},
 		},
 		"grok-4.6": {
@@ -423,7 +511,9 @@ func Get(modelID string) *ModelInfo {
 	return registry[modelID]
 }
 
-// GetOrDefault 获取模型信息，找不到时返回一个保守默认（不支持原生搜索）
+// GetOrDefault 获取模型信息，找不到时返回一个保守默认。
+// 未知型号不猜测工具、视觉或推理能力；管理员显式保存的模型仍由 LoadModels
+// 提供完整能力字段。这样新型号不会因为名称相似而被错误注入高级请求参数。
 func GetOrDefault(modelID, provider string) *ModelInfo {
 	if m := Get(modelID); m != nil {
 		return m
@@ -435,7 +525,6 @@ func GetOrDefault(modelID, provider string) *ModelInfo {
 		Provider:    provider,
 		Enabled:     true,
 		Capabilities: ModelCapabilities{
-			ToolUse:    true,
 			SearchImpl: SearchImplNone,
 		},
 	}

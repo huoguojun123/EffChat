@@ -365,6 +365,11 @@ func (a *EinoAgent) captureAcceptedRuntimeSnapshot(ctx context.Context, req *Cha
 	req.OpenAIRequestProfile = model.CloneOpenAIRequestProfile(modelInfo.OpenAIRequestProfile)
 	channelMaterial := runtimeAIChannelMaterial(channel)
 	modelMaterial.ToolUse = modelbank.ModelSupportsToolsForAdapter(modelInfo.ID, channel.Adapter, modelMaterial.ToolUse)
+	if modelbank.IsGPT6LunaModel(modelInfo.ID) {
+		// Static capability remains true for Responses and Luna Chat/none; the
+		// request-level gate is applied after the selected effort is normalized.
+		modelMaterial.ToolUse = modelbank.ModelSupportsToolsForRequest(modelInfo.ID, channel.Adapter, modelbank.ResolveThinkingEffortForModel(modelbank.ThinkingFormat(modelMaterial.Thinking), modelInfo.ID, thinkingEffort), modelMaterial.ToolUse)
+	}
 	requestMaterial := runtimeRequestMaterial{
 		SystemName: req.SystemName, SystemPrompt: req.SystemPrompt, Temperature: req.Temperature,
 		MaxTokens: req.MaxTokens, SchemaVersion: req.SchemaVersion, MessageFormat: req.MessageFormat,

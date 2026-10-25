@@ -1,12 +1,12 @@
 module github.com/huoguojun123/EffChat
 
-go 1.26.6
+go 1.26.10
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.2
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/blevesearch/segment v0.9.1
-	github.com/cloudwego/eino v0.9.13
+	github.com/cloudwego/eino v0.9.21
 	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.20
 	github.com/cloudwego/eino-ext/components/model/gemini v0.1.33
@@ -20,10 +20,11 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/openai/openai-go/v3 v3.50.0
 	github.com/townsendmerino/aikit v1.16.0
-	github.com/xuri/excelize/v2 v2.11.0
-	golang.org/x/crypto v0.55.0
+	// Pin the upstream security fixes until a tagged release includes them.
+	github.com/xuri/excelize/v2 v2.11.1-0.20261003002531-6258dcebc4e2
+	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.45.0
-	golang.org/x/net v0.58.0
+	golang.org/x/net v0.60.0
 	google.golang.org/genai v1.65.0
 )
 
@@ -98,7 +99,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
-	github.com/richardlehane/mscfb v1.0.7 // indirect
+	github.com/richardlehane/mscfb v1.0.8 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
@@ -110,7 +111,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
-	github.com/xuri/efp v0.0.1 // indirect
+	github.com/xuri/efp v0.0.2 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
@@ -123,9 +124,9 @@ require (
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/api v0.264.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect

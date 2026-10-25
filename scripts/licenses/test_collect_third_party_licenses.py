@@ -29,10 +29,10 @@ class LicenseArchiveTests(unittest.TestCase):
 
     def test_platform_fallback_matches_only_the_pinned_version(self) -> None:
         self.assertIsNotNone(
-            collector.fallback_for("frontend", "@rolldown/binding-linux-x64-gnu", "1.1.5")
+            collector.fallback_for("frontend", "@rolldown/binding-linux-x64-gnu", "1.2.15")
         )
         self.assertIsNone(
-            collector.fallback_for("frontend", "@rolldown/binding-linux-x64-gnu", "1.1.6")
+            collector.fallback_for("frontend", "@rolldown/binding-linux-x64-gnu", "1.2.16")
         )
 
     def test_verify_rejects_tampered_license_text(self) -> None:

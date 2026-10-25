@@ -1,12 +1,12 @@
 # EffChat 架构文档
 
-本文描述当前 `main` 与最新测试版的架构边界；版本差异见 [CHANGELOG.md](CHANGELOG.md)。
+本文描述所在代码基线的架构边界；已发布版本差异见 [CHANGELOG.md](CHANGELOG.md)。
 
 EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主线是 Web-first：React 前端、Go API、PostgreSQL、Python extractor sidecar，以及基于 Eino 的统一 Agent。
 
 ## 技术栈
 
-- Backend：Go 1.26.6、Gin、Eino v0.9.13、eino-ext openai/claude/gemini adapters。Claude adapter v0.1.20 通过 `backend/third_party/eino-claude` 保留一处可审计的上游 race 修正，待官方发布等价修复后移除本地 replace。
+- Backend：Go 1.26.6、Gin、Eino v0.9.21、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
 - Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理；镜像以固定
@@ -26,7 +26,7 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 - 一键部署的 `.env` 与源码部署的 `.env.docker` 只保存基础设施配置：数据库、JWT、端口、数据目录、反代来源、内部服务地址和日志轮转。
 - 模型渠道、模型 API key、搜索服务、网页提取服务和 MinerU OCR 都在管理员网页持久化配置。
 - 不包含代码执行沙盒、Shell 工具、浏览器自动化、完整 RBAC、成本账单和 Skills marketplace。
-- `message_format` / `schema_version` 仍保留兼容字段，但 0.3.4 运行时按当前 Eino `schema.Message` 主线处理，不提供 `/api/v2` 双协议运行时。
+- `message_format` / `schema_version` 保留兼容字段。经典 adapter 使用 `schema.Message`，Responses 主对话使用 `schema.AgenticMessage`；两者共享产品 API、工具治理、SSE 和持久化，不提供 `/api/v2` 双产品运行时。
 
 ## 运行时组件
 
@@ -53,7 +53,7 @@ backend (Gin)
 - `internal/handler`：HTTP 参数解析、鉴权上下文读取、响应格式。
 - `internal/service`：会话、模型、渠道、限额、文件和标题生成等业务编排；文件分段预览由共享 `file_preview_service` 负责 cursor 与 UTF-8 边界。
 - `internal/repository`：PostgreSQL 查询和事务；全局对话检索位于独立 `conversation_search_repository`，不继续扩大消息主仓库。
-- `internal/agent`：Eino ReAct Agent、模型适配、消息转换、工具挂载、发送前压缩和流式事件消费。
+- `internal/agent`：统一产品 Agent 的 Eino ADK classic/typed ReAct 执行、模型适配、消息转换、工具挂载、发送前压缩和流式事件消费。
 - `internal/tool`：现有工具实现，包括文件、Skills、memory、web_search、web_extract。
 - `internal/extractor`：Go 后端访问 Python extractor 的客户端。
 - `internal/usage`：消息、模型 token、工具、搜索、提取和 OCR 用量统计。
@@ -98,7 +98,7 @@ PWA 的当前产品边界是可安装的中文应用壳、首屏主题初始化�
 1. 前端 `ChatInput` 使用受限自动增长的紧凑输入框；编辑草稿与一次提交快照分开保存在当前标签页的 sessionStorage，不持久化像素高度。提交快照记录 session、client run、原文和受管附件元数据；受理后按同一身份清理，明确失败或刷新后无活动 owner 的 `sending` 快照转为可重试状态，不自动覆盖新草稿。失败记录提供“重试 / 恢复编辑 / 放弃”三个明确入口：恢复编辑在覆盖已有新草稿前要求确认，并恢复原附件选择；删除会话成功后同步清理该会话的草稿与提交快照，并通过窄事件让已挂载的 composer 内存状态同步移除，避免旧快照在后续编辑时被重新序列化。
 2. `useSSE.sendMessage` 调用 `POST /api/v1/sessions/:id/messages/stream`。
 3. 后端在进入 Agent 前校验会话模型、渠道、用户组限额和并发 run。
-4. `EinoAgent.StreamChat` 从 DB 实时解析渠道、模型能力、工具治理和外部服务配置。
+4. `PrepareChat` 解析本轮模型、工具治理和外部服务配置，准备 Agent 与输入快照；`RunPreparedChat` 在 run 所有的上下文中执行并消费事件。`StreamChat` 保留为组合这两个阶段的兼容入口。
 5. Agent 通过 SSE 输出 `content_delta`、`thinking_delta`、`tool_call_start`、`tool_call_result`、`message_complete` 等事件。只有尚未产生任何有效输出的瞬时模型故障可以自动重试一次；一旦已有文本、thinking 或工具输出，后续传输故障不再重放 provider 调用，而是把现有回答作为 `incomplete` 结果收口。每次真实 provider 调用分别记录 usage，但同一个 run 只形成一条用户消息、一组回答消息和一个 selected answer attempt。Provider SDK 不得在该生命周期之下另行隐藏重试；Anthropic native 的 SDK 默认重试已在共享 HTTP transport 关闭，状态码与首包前连接故障统一回到 EffChat 的 retry、usage 和 SSE 所有权。只有正文、thinking/reasoning 或可执行工具调用属于部分输出；provider 的 role、usage、finish 等空 metadata 不得解除首包门禁，也不得在超时后落成空白 `incomplete` 助手消息。
 6. 后端即使前端 SSE 断开，也尽量继续跑完当前 run 并落库。
 7. terminal 决策形成后，RunHub 会冻结迟到输出和取消；瞬时数据库或连接故障使用独立的有界单次上下文重试同一原子提交，只有数据库返回 canonical terminal 后才向所有订阅者发布一次终态。进程在恢复期间退出时，启动 reconciliation 将遗留的 durable running run 转成可重试的 `server_restarted` 终态。
@@ -112,7 +112,7 @@ Responses 的本地 Agentic→经典消息转换保留上游已提供的完整 `
 
 Grok 4.7 内置候选使用已核验的 500K 上下文、图片输入和工具能力；输出上限未取得官方数值，不推测填入。其 Chat Completions 复用 xAI reasoning profile，支持 `low/medium/high/xhigh`、默认 `high`、不可关闭推理，并省略 reasoning 模型不支持的 penalty/stop 字段。该兼容路径不承诺 Responses 加密推理的跨轮持久化和重放已完成。
 
-GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。该共享仅限已核验的推理档位与 Responses-only 工具限制，不继承 Astra 的 sampling 省略规则。当前 Sol 详情证据没有完整给出 vision 和 token 上限，内置候选对此保持保守，管理员已有能力配置不被覆盖。
+GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。该共享仅限已核验的推理档位与 Responses-only 工具限制，不继承 Astra 的 sampling 省略规则。候选能力与管理员覆盖边界见下方模型契约说明。
 
 GPT-6 Luna 使用 OpenAI GPT-5.6 兼容推理字段，支持 `none/low/medium/high/xhigh/max`，默认 `medium`；详情确认 text/image 输入、1.05M context 和 128K max output。Luna 的 Responses 支持函数调用；Chat Completions 只有 `reasoning_effort=none` 时允许函数调用，因此 runtime profile 保留 Chat 工具能力，实际请求由 reasoning effort 决定，不能把“模型支持工具”简化成所有档位都可用。
 

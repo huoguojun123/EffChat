@@ -30,6 +30,8 @@ backend/bin/
 *.dll
 *.test
 *.out
+__pycache__/
+*.py[cod]
 
 # IDE
 .vscode/

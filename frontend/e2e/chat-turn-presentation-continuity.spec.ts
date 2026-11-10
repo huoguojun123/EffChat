@@ -178,7 +178,9 @@ test("a burst keeps every recently released prose unit on its own fade timeline"
   expect(tails.every((tail) => /^\d+ms$/.test(tail.elapsed) && tail.opacity < 0.98)).toBe(true)
 })
 
-test("a newly accepted user turn enters the reading band instead of the composer edge", async ({ page }) => {
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+test(`a newly accepted user turn hands off the reading band at ${viewport.width}px`, async ({ page }) => {
+  await page.setViewportSize(viewport)
   const earlierAnswer = Array.from({ length: 20 }, (_, index) => `Earlier answer line ${index + 1}.`).join("\n\n")
   await installBaseRoutes(page, () => [
     message(1, "user", "Earlier question"),
@@ -216,7 +218,42 @@ test("a newly accepted user turn enters the reading band instead of the composer
   })
   expect(position).toBeGreaterThan(0.08)
   expect(position).toBeLessThan(0.36)
+
+  // Emulate late Markdown/preview layout while the live stream emits its
+  // presentation events. Neither source may take ownership from the short
+  // reading-band hold, and repeated resizes must not renew that hold forever.
+  const handoff = await page.evaluate(async () => {
+    const scroller = document.querySelector<HTMLElement>("[data-chat-scroll-container]")!
+    const list = scroller.firstElementChild as HTMLElement
+    const lateContent = document.createElement("div")
+    list.append(lateContent)
+    const startTop = scroller.scrollTop
+    const heldPositions: number[] = []
+    for (let step = 0; step < 30; step++) {
+      lateContent.style.height = `${200 + step * 12}px`
+      window.dispatchEvent(new Event("effchat:stream-presentation"))
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      if (step < 5) heldPositions.push(scroller.scrollTop)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    return {
+      earlyDrift: Math.max(...heldPositions.map((top) => Math.abs(top - startTop))),
+      bottomGap: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+    }
+  })
+  expect(handoff.earlyDrift).toBeLessThan(3)
+  expect(handoff.bottomGap).toBeLessThan(3)
+
+  const scroller = page.locator("[data-chat-scroll-container]")
+  await scroller.hover()
+  await page.mouse.wheel(0, -300)
+  await expect.poll(() => scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeGreaterThan(180)
+  const pausedTop = await scroller.evaluate((element) => element.scrollTop)
+  await page.evaluate(() => window.dispatchEvent(new Event("effchat:stream-presentation")))
+  await page.waitForTimeout(250)
+  expect(await scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(pausedTop, 0)
 })
+}
 
 test("clears only the submitted draft while preserving edits made during preparation", async ({ page }) => {
   let releasePreflight!: () => void

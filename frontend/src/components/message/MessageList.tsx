@@ -59,6 +59,7 @@ export function MessageList() {
   const bottomLockTimerRef = useRef(0)
   const newTurnRafRef = useRef(0)
   const newTurnAnchorUntilRef = useRef(0)
+  const newTurnTimerRef = useRef(0)
   const userCancelledBottomLockRef = useRef(false)
   const userPausedAutoFollowRef = useRef(false)
   const suppressOlderLoadUntilRef = useRef(0)
@@ -145,11 +146,11 @@ export function MessageList() {
   // instead of raw-delta and ResizeObserver each issuing their own scroll.
   const scheduleBottomFollow = useCallback(() => {
     const container = scrollRef.current
-    if (!container || !wasNearBottomRef.current || userPausedAutoFollowRef.current) return
+    if (!container || !wasNearBottomRef.current || userPausedAutoFollowRef.current || Date.now() < newTurnAnchorUntilRef.current) return
     if (followRafRef.current) return
     const follow = () => {
       const current = scrollRef.current
-      if (!current || userPausedAutoFollowRef.current) {
+      if (!current || userPausedAutoFollowRef.current || Date.now() < newTurnAnchorUntilRef.current) {
         followRafRef.current = 0
         return
       }
@@ -185,7 +186,6 @@ export function MessageList() {
     const top = turn.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
     const readingBand = Math.min(144, Math.max(40, container.clientHeight * 0.22))
     container.scrollTop = Math.max(0, top - readingBand)
-    newTurnAnchorUntilRef.current = Date.now() + NEW_TURN_LAYOUT_SETTLE_MS
     wasNearBottomRef.current = true
     userPausedAutoFollowRef.current = false
     return true
@@ -345,6 +345,7 @@ export function MessageList() {
     wasNearBottomRef.current = true
     userPausedAutoFollowRef.current = false
     newTurnAnchorUntilRef.current = 0
+    window.clearTimeout(newTurnTimerRef.current)
     cancelAnimationFrame(newTurnRafRef.current)
     if (initialScrolledSessionRef.current !== activeSessionId) previousMessageCountRef.current = 0
     clearReasoningState("stream:")
@@ -375,9 +376,24 @@ export function MessageList() {
     }
     previousMessageCountRef.current = messages.length
     if (!wasNearBottomRef.current || userPausedAutoFollowRef.current) return
-    if (!placeNewUserTurnInReadingBand()) scrollToBottom(true)
-    else settleNewUserTurn()
-  }, [messages.length, placeNewUserTurnInReadingBand, scrollToBottom, settleNewUserTurn])
+    if (placeNewUserTurnInReadingBand()) {
+      // Only accepting a new turn starts this bounded hold. ResizeObserver
+      // may settle its geometry, but must not renew the deadline or compete
+      // with stream-presentation's bottom-follow RAF. A timer hands off even
+      // when the upstream pauses and no further layout event arrives.
+      stopBottomFollow()
+      cancelAnimationFrame(rafRef.current)
+      newTurnAnchorUntilRef.current = Date.now() + NEW_TURN_LAYOUT_SETTLE_MS
+      window.clearTimeout(newTurnTimerRef.current)
+      newTurnTimerRef.current = window.setTimeout(() => {
+        newTurnAnchorUntilRef.current = 0
+        scheduleBottomFollow()
+      }, NEW_TURN_LAYOUT_SETTLE_MS)
+      settleNewUserTurn()
+    } else if (Date.now() >= newTurnAnchorUntilRef.current) {
+      scrollToBottom(true)
+    }
+  }, [messages.length, placeNewUserTurnInReadingBand, scheduleBottomFollow, scrollToBottom, settleNewUserTurn, stopBottomFollow])
 
   useEffect(() => {
     const target = listRef.current
@@ -420,6 +436,7 @@ export function MessageList() {
       userPausedAutoFollowRef.current = true
       wasNearBottomRef.current = false
       newTurnAnchorUntilRef.current = 0
+      window.clearTimeout(newTurnTimerRef.current)
       cancelAnimationFrame(newTurnRafRef.current)
       cancelAnimationFrame(rafRef.current)
       stopBottomFollow()
@@ -440,6 +457,7 @@ export function MessageList() {
     cancelAnimationFrame(rafRef.current)
     stopBottomFollow()
     cancelAnimationFrame(newTurnRafRef.current)
+    window.clearTimeout(newTurnTimerRef.current)
     cancelAnimationFrame(trimRafRef.current)
     window.clearTimeout(bottomLockTimerRef.current)
     window.clearTimeout(recoveryDelayTimerRef.current)
@@ -455,7 +473,10 @@ export function MessageList() {
       if (!el) return
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
       const nearBottom = distance < 120
-      wasNearBottomRef.current = nearBottom
+      // Programmatic placement away from the bottom is not user navigation.
+      // Keep follow intent until the bounded reading-band hold hands off;
+      // wheel/touch/pointer input explicitly cancels it above.
+      wasNearBottomRef.current = nearBottom || Date.now() < newTurnAnchorUntilRef.current
       if (nearBottom) userPausedAutoFollowRef.current = false
       setShowBack(distance > 180)
       if (!windowSwitchingRef.current && el.scrollTop < el.clientHeight * 8 && Date.now() >= suppressOlderLoadUntilRef.current) triggerLoadOlder()

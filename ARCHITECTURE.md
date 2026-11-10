@@ -6,7 +6,8 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 
 ## 技术栈
 
-- Backend：Go 1.26.10、Gin、Eino v0.9.21、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
+- Backend：Go 1.26.10、Gin、Eino v0.9.23、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。流式合并保留后到达的工具签名，并容忍 nullable 元数据；`modelstream` 回归覆盖这两个上游补丁。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
+- Gemini adapter v0.1.37 / Google GenAI v1.70.0 保留半个 SSE 帧中发生的 context cancellation，避免将用户停止误报成 JSON 解析故障；不启用新增的 FileID、Vertex labels 或任意请求字段接口。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
 - Extractor：Python sidecar，负责本地文档解析和 MinerU OCR 代理；镜像以固定
@@ -112,9 +113,11 @@ Responses 的本地 Agentic→经典消息转换保留上游已提供的完整 `
 
 Grok 4.7 内置候选使用已核验的 500K 上下文、图片输入和工具能力；输出上限未取得官方数值，不推测填入。其 Chat Completions 复用 xAI reasoning profile，支持 `low/medium/high/xhigh`、默认 `high`、不可关闭推理，并省略 reasoning 模型不支持的 penalty/stop 字段。该兼容路径不承诺 Responses 加密推理的跨轮持久化和重放已完成。
 
-GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。该共享仅限已核验的推理档位与 Responses-only 工具限制，不继承 Astra 的 sampling 省略规则。候选能力与管理员覆盖边界见下方模型契约说明。
+GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。Sol/Astra 必须省略 temperature/top_p。GPT-6.1 Terra 复用六档 `openai_gpt_5_6` 格式，默认 medium，允许 none；工具只在 Responses 可用。Terra/Luna 仅在实际请求显式发送 none 时保留采样参数，utility 在两个端点均显式发送 none，避免省略字段后继承服务端默认推理。该规则只覆盖已核验型号，不泛化到未知 GPT-6。候选能力与管理员覆盖边界见下方模型契约说明。
 
 GPT-6 Luna 使用 OpenAI GPT-5.6 兼容推理字段，支持 `none/low/medium/high/xhigh/max`，默认 `medium`；详情确认 text/image 输入、1.05M context 和 128K max output。Luna 的 Responses 支持函数调用；Chat Completions 只有 `reasoning_effort=none` 时允许函数调用，因此 runtime profile 保留 Chat 工具能力，实际请求由 reasoning effort 决定，不能把“模型支持工具”简化成所有档位都可用。
+
+Claude Fable 5.2 候选复用 Anthropic adaptive thinking（始终开启）、五档 effort，默认 high，utility 使用 low；保留 1M context / 128K output 和文本/图片输入，不启用托管工具、fast mode 或受限 Mythos。请求省略 sampling 和旧 budget。候选不覆盖数据库；供应商的账号权限和数据保留要求由部署者向供应商确认，HTTP fixture 不代表真实账号可用性。
 
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
 
@@ -151,6 +154,8 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 聊天呈现把 `preparing`、请求尚未确认的 `sending`、accepted 后等待首个输出、generating、recovering 和 syncing 映射为明确文案与动作；accepted 前仍由 composer 保留草稿和附件，不提前制造 assistant 槽。恢复不足 800ms 时无感接续，持续恢复才显示状态，成功后短暂确认“已接续”；reduced-motion 关闭位移和平滑滚动但不隐藏状态。
 
 消息列表是聊天自动滚动的唯一 owner：composer、Markdown、工具和异步预览只通过 inset 或实际布局变化提供事实，不直接写聊天 scrollTop。自动跟随只在用户仍位于底部附近且未主动暂停时执行；当前 assistant 槽保留可被正文自然消耗的最小高度，首轮 user turn 位于阅读区上部，长回答再按帧跟随并继续保留 `--chat-scroll-gap`。用户 wheel、touch 或 pointer 操作立即暂停，回到近底或点击“回到最新”才恢复。用户主动折叠长输入和显式选择历史轮次仍属于直接导航动作，不受自动跟随 owner 限制。
+
+新接受的本地 user turn 只启动一次 900ms 阅读带定位窗口；Markdown/预览的 ResizeObserver 可以稳定布局，但不延长窗口，也不与流式 bottom-follow 同时改写 scrollTop。窗口结束由可取消 timer 交接给同一个跟随 controller，网络暂停也不会永久锁定；快速 durable 回填在窗口内不另起 smooth scroll。用户导航、会话切换和卸载会取消交接。
 
 流式正文先由 `useStreamPresentation` 将网络 target 与真正进入 DOM 的 displayed 前缀分离，不用全文逐字切片或长期底部 mask 伪造速度。当前最新回答以 `run:<requestId>:<segment>:<kind>` 作为有限呈现 owner；实时 delta、恢复快照、syncing 和 durable 消息沿用同一 owner，未显示的 backlog 不占消息高度，已稳定前缀和历史消息不重播。展示队列按 Unicode-safe 短单元、约 60 visual token-equivalent/s 与 60ms 最小间隔连续释放；每个 release 都有 owner-relative birth identity，`MarkdownContent` 会在后续 Markdown 重解析中以已逝时间续接所有仍在约 1500ms 渐显窗口内的范围，而不会从零重播或被新 AST 截断。单元 birth 间隔独立于动画时长并允许自然重叠。展示节奏不排队网络事件、不改变真实 token 计费，也不逐字符计时。live → durable 交接复用同一 owner，terminal 不会把隐藏 suffix 一次性塞回 DOM。代码、公式、SVG、KaTeX 与预览节点不拆字；慢预览只影响局部预览面，chat 正文保持可读。MessageList 仍是自动滚动唯一 owner：每次 release 只通知实际布局变更，由单一、可中断的 RAF bottom-follow 跟随；新接受的本地 user turn 在用户原本贴底时进入上部阅读带，普通 durable 行仍沿用底部跟随。raw delta 不直接贴底，用户主动滚动在 live 和 durable backlog 排空阶段均立即暂停。thinking 与 tool tree 继续按稳定 segment/tool ID 更新，不更换 Markdown parser、不引入虚拟列表或动画依赖；`prefers-reduced-motion` 下直接显示完整内容并关闭滚动插值。
 
@@ -192,6 +197,7 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
 - 工具自身返回的受控业务失败保持结构化结果。repository、持久化或受管文件 I/O 等内部失败必须作为 wrapped Go error 交给 Tool governance，不能伪装成成功 envelope 内的 `error` 字段；治理边界也会把带显式公共 `message` 的结构化失败改写为该公共文案。模型、RunHub 和消息树只接收稳定失败，原始 repository、路径或 provider 原因仅进入受控内部诊断；已有 `error_code` 的网页 typed 失败继续由网页工具自己的分类器负责。
 - 搜索链路由管理员为 Tavily、Brave、Exa、博查和 SearXNG 独立配置并排序；按顺序成功即停止。
 - 网页提取链路按管理员保存的顺序执行已启用的 Firecrawl、Jina、Tavily 和 Exa，第一个取得有效正文的 provider 即停止；Basic 不进入外部服务配置，始终追加为最后一个本地兜底。provider 规范化必须保留第三方相对顺序、移除提前或重复出现的 Basic，并在末尾只补一个 Basic。
+- HTML 解析/渲染使用锁定的 `x/net v0.62.0` 安全修复（GO-2026-6860、GO-2026-6866），避免短文本反复合并的二次复杂度和 raw-text namespace 边界错误；响应体大小限制不替代解析器安全更新。
 - Basic 的 URL 请求、重定向、压缩前与解压后各 2 MiB 响应上限、SSRF 和 DNS rebinding 边界继续由 Go backend 独占；解析后的正文最多保留 512,000 字符。HTML 交给 `go-readability` 提取正文并渲染为普通文本，只保留必要段落、代码和表格换行；`text/plain` 按声明编码解码，二进制或空正文继续进入既有 provider fallback。系统 resolver 只有在全部答案均为 fake-IP 代理使用的 `198.18.0.0/15` 时才由 Basic 专用 resolver 查询独立公网 DNS；真实私网、混合地址、普通 DNS 错误、重定向和拨号重解析仍由原 SSRF policy 拒绝。
 - Basic 正文未超过当前 `detail` 的最终上限时直接返回，不调用小模型。超限正文先复用 Bleve Unicode segmenter 与 Aikit BM25 对段落做 goal（缺省时用标题）相关性排序；仅在候选仍需提炼且 refinement policy 可用时交给既有流式小模型。管理员关闭提炼属于正常本地策略，不标记 degraded；模型开启但不可用、冷却、超时、空结果或失败时，返回按 BM25 选中的原文段落及邻近上下文并记录稳定原因。无有效查询时从多个文档区段取样，只有单段仍超限才做最终字符边界；候选筛选本身不使成功摘要误报 `truncated`。`detail=source` 永远不经过模型改写，只返回带截断状态的相关原文片段。第三方 fallback 成功后仍按既有 policy 执行 refinement。网页提炼复用统一的流式模型消费契约：固定时限只等待首个有效输出，首包后完整收流。任务请求显式关闭 DeepSeek V4 thinking，并在结果边界剥离仍被兼容网关写入正文流首的 `<think>` 块，避免隐藏推理占满工具正文预算。前端工具树把 clean、degraded/truncated 和 hard error 分别呈现为成功、安静 warning 和错误；warning 通过稳定中文文案说明提炼或截断原因，同时保留 fallback 正文和来源链接，流式、RunHub 恢复与历史消息共享同一 renderer。
 - Basic 只记录不含内容的结构化诊断：`success`、`challenge`、`empty`、`unsupported_content`、`http_status`、`fetch_error`、`decode_error`、`parse_error`，以及实际调用提炼模型时的 `basic_refine_called`。日志只包含状态、解析器、响应/正文大小、耗时、截断状态和 URL/goal 字符长度，不记录完整 URL、域名、正文、查询、Key 或用户信息。
@@ -230,6 +236,7 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
   `[no cached value]`，共享公式和数组公式成员继续可搜索且不会与真正空 cell
   混淆。worksheet 结果仍复用共享 GFM serializer，Office archive 资源边界不变。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。
+- Python 的 `app/mineru_transport.py` 只负责 MinerU JSON 请求、签名上传和有界 ZIP 下载；HTTP 路由、任务状态映射、PDF 检查、ZIP 正文读取与文本清理仍由 `app/main.py` 编排。同步远端 I/O 只在线程池执行，不能阻塞 ASGI 事件循环；签名上传不能附带 JSON API 的 Authorization/Content-Type。既有超时、上限和错误分类保持不变，不引入另一套 OCR 状态机。
 - 暂存附件抽屉通过 Radix Dialog Portal 脱离聊天 composer 的 stacking context；模态层统一拥有 overlay、焦点约束、Escape 关闭和安全区，关闭后焦点返回实际触发入口。上传队列、附件选择与发送协议仍由原有 ChatInput 状态负责。
 - 上传大小、会话文件数、MIME allowlist、附件提取开关、timeout 和输出上限共用 typed policy reader。长期安装缺少较新的配置行时采用公开配置 schema 的权威默认值并建立可信快照；查询失败或非法存储值不会被误判为缺失。已成功读取的严格值在暂时故障中继续生效并标记 `policy_degraded`；冷启动无可信值时上传/处理入口返回稳定 503，不恢复调用方宽默认。空 allowlist 和空元素在管理员写入边界直接拒绝。
 - `attachment_extract_enabled=false` 同时约束新上传、OCR pending 和人工 retry：尚未提交的 pending 不读取原件、不占用 OCR quota、也不调用 inspect/`StartMinerUOCR`，而是保留状态并退避；人工 retry 在改变数据库状态前返回 `attachment_extract_disabled`。已经提交给远端的 task 属于不可撤回边界，仍可 poll 并在可信输出上限下收尾，但不会重新提交。
@@ -272,9 +279,29 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
 
 models.dev 单模型目录查询对空 ID 返回 `models_dev_model_invalid` 400，对缺失 provider 或 model 返回稳定 404 code，均携带 `retryable=false` 且不回显用户输入；目录获取失败继续为带 request ID 的 retryable 502。该公共错误契约不改变缓存、目录导入、能力来源、退役标记或候选日 freshness 门禁，后者仍由模型目录生命周期独立负责。
 
-模型目录的持久事实仍由 PostgreSQL `models` 表拥有；backend 启动会用该表整体替换进程内 registry，空表也不会回退到编译期内置型号。migration `046_model_catalog_lifecycle.sql` 为每条管理员模型记录增加 `catalog_source`、`catalog_checked_at` 和 `lifecycle_status`：既有与普通手工创建记录默认是 `manual` / `unknown`，渠道 `/models` 与 models.dev 只产生默认 disabled 的候选并携带各自来源及核对时间。目录中出现一个 ID 不等于账号可运行，因此除显式 preview/experimental 标记外不从名称猜测 active/deprecated/retired；管理员记录不会因目录消失而被自动删除。**管理员显式 DELETE 是独立的硬删除操作，直接移除 `models` 行；启用/禁用仍由独立的 enabled mutation 负责。硬删除后历史消息仍保留其 model_id 字符串，但新的模型目录和 registry 不得重新显示该数据库记录。** Admin 模型列表和编辑器显示来源、核对时间与 lifecycle；从渠道导入或应用 models.dev 能力时保留对应来源，管理员手工修改 capability/lifecycle 时切换为 `manual` 并清除旧目录核对时间，显示名称、可见组和排序等非能力字段不改变来源。migration `047_model_temperature_profile.sql` 以 `configurable`、`omit`、`fixed` 三种 typed policy 持久化 temperature 请求契约；固定策略要求 0–2 的显式值，其他策略禁止残留值。migration `048_model_openai_request_profile.sql` 进一步为 OpenAI-compatible 模型提供可空且有范围约束的 `top_p`、`n`、`presence_penalty`、`frequency_penalty` 固定值；空值代表完全省略字段，Admin 不接受任意 provider 参数 JSON。统一 ChatModel 构造在 accepted runtime snapshot 中固化这些模型级请求约束：temperature 的 `configurable` 保留会话值，`omit` 传 `nil`，`fixed` 使用管理员值；OpenAI-compatible typed profile 只在对应 adapter 边界映射为 wire 字段。Google native 进一步按已核验的 Gemini generation contract 映射请求：Gemini 2.5 使用 numeric `thinkingBudget`，Gemini 3.0/3.1/3.5/3.6/3.7 使用 typed `thinkingLevel` 并省略已不接受的采样参数；未知未来版本不继承猜测字段。不能关闭 thinking 的 Gemini 3.x utility 请求使用最低合法 level，避免省略配置后回到 provider 默认档位。Anthropic native 对 Claude 4.6+、Claude 5 与 Fable/Mythos 使用 adaptive thinking：用户对话显式请求 `display=summarized`，effort 选项按型号开放 `low/medium/high/xhigh/max`；utility 使用最低合法 effort 且省略 display，避免 reasoning 摘要进入结构化任务输出。DeepSeek V4 的 OpenAI-compatible profile 使用 `thinking.type` 与 `reasoning_effort=low/high/max`；中间档位按官方兼容语义归一到 high，utility 显式关闭 thinking，同一轮工具 continuation 保留 assistant `reasoning_content` 与原 tool call ID。`deepseek-v4-flash-vision-exp` 复用同一 V4 profile 和现有 OpenAI-compatible `image_url` 图片链；其 experimental 身份不扩展为视频、PDF 或稳定可用性承诺。历史 `deepseek-chat` / `deepseek-reasoner` 不再由编译期兜底目录恢复，但数据库既有行仍由管理员拥有。Qwen 3.7/3.8 继续走 OpenAI-compatible `enable_thinking + thinking_budget`：hybrid 型号可显式关闭，thinking-only 型号的 utility 使用最小预算，已核验的 3.6/3.7/3.8 请求发送 `preserve_thinking=true`。`SearchImplParams` 在该 wire 边界映射为 `enable_search=true`，Google native 仍独立映射为 `google_search`。GLM-5.2/5.3（含 `glm-5.3-flash`）在 OpenAI-compatible wire 上使用 `thinking.type` 与 `reasoning_effort=low/high/max`；5.2 可关闭，5.3 固定开启且 stale `none` 或 utility 请求都归一为最低合法 low，旧 GLM-4.5 保持 toggle-only。MiniMax model family 在 adapter 之前解析：M3 在 OpenAI- 和 Anthropic-compatible 通道都使用 `thinking.type=adaptive/disabled` 并复用现有图片输入链；M2.7 与 M2.7 HighSpeed 固定开启且不发送控制字段，二者共享 204800 context / 131072 output 能力边界；两个 adapter 仍各自保留原生 reasoning 内容投影，不自动跨协议 fallback。Kimi 同样由 model family 决定而不是按 `moonshot` provider 猜字段：K3 使用 `reasoning_effort=low/high/max`、`max_completion_tokens` 并省略固定采样参数，K2.7 Code 固定思考且不发送控制字段，K2.6 使用 `thinking.type=enabled/disabled`，开启时带 `keep=all`；utility 分别归一到 low、保持无控制字段或显式 disabled。未知 Moonshot alias 不获得这些推断。xAI standard reasoning 继续走 OpenAI-compatible Chat Completions，但按型号开放 effort：Grok 4.6、4.20 与 4.1 Fast 允许 `xhigh`，旧型号保持 `low/medium/high`；multi-agent 与显式 non-reasoning 型号不套用该 profile。Grok utility 请求使用最低合法 `low`，请求构造会省略该家族不接受的 presence/frequency penalty，而不修改管理员保存的 typed profile。主对话、压缩、记忆维护、网页 refinement 与最小 probe 复用同一解析，不修改会话中保存的用户偏好。发布候选日只在官方目录与受控 models.dev 同时给出一致 ID/capability 时更新编译期保守兜底；该更新仍不 seed 数据库、不自动启用或替换管理员模型。管理员 partial update 在 repository transaction 内先 `SELECT ... FOR UPDATE` 重读 canonical row，再只把请求携带的字段应用到该行并校验跨字段约束；不同字段的并发请求因此可以顺序合成，禁用模型也复用窄 `enabled` patch，不再把 service 层旧快照全字段写回。
+### 模型目录与请求契约
 
-2026-09 模型契约刷新对上述长期边界作如下增量校正：GPT-6 Astra 使用独立 `openai_gpt_6_astra` profile，在 Chat Completions 与 Responses 两条现有 adapter 上支持 `low/medium/high/xhigh/max`，utility 固定为 `low`，并省略官方不接受的 `temperature` 与 `top_p`；不把该规则泛化到未知 `gpt-6*`。Astra 的 catalog capability 仍记录 function calling，但 runtime profile 与 accepted snapshot 只有在 `openai_responses` adapter 才挂载 EffChat Tools，Chat Completions 仅保留无 Tool 的文本/图片请求。Gemini 3.x 的 typed `thinkingLevel` 家族包含已核验的 3.8。Anthropic adaptive thinking 未显式选择或收到不支持档位时跟随 provider 默认 `high`，utility 仍显式使用 `low`；`claude-fable-5-1` 复用该 profile。DeepSeek builtin 使用当前 canonical `deepseek-flash`（V4.1 Flash）；退役的 `deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 只保留兼容 family 识别，不重新 seed 或迁移数据库。xAI 的 `grok-4.3` 使用 `none/low/medium/high/xhigh` 且默认 `low`，`grok-4.6` 与 4.1 Fast 保留已核验的 `xhigh`；`grok-4.20` 未获得标准 effort 字段证据，因此保持 provider 默认，multi-agent 与 non-reasoning 变体继续排除普通 reasoning profile。
+PostgreSQL `models` 表拥有管理员模型配置；启动时整体替换进程内 registry，空表不会回退到编译期候选。migration `046_model_catalog_lifecycle.sql` 引入来源、核对时间与 lifecycle：普通手工记录默认 `manual/unknown`，渠道 `/models` 和 models.dev 仅提供 disabled 候选。目录出现不代表账户可运行，目录消失不删除管理员记录，也不按名称猜测 active/deprecated/retired（显式 preview/experimental 标记除外）。
+
+管理员显式 DELETE 才硬删除模型行；启停是独立的 enabled mutation。历史消息保留 model_id，但已删除记录不能被 registry 恢复。编辑 capability/lifecycle 时切回 manual 并清除旧核对时间；名称、分组和排序等非能力修改保留来源。候选刷新需官方 ID/能力证据，不 seed 数据库或自动替换管理员配置；具体账户权限与额度由部署者确认。
+
+migration `047_model_temperature_profile.sql` 定义 `configurable/omit/fixed`：fixed 要求 0–2 显式值，其他策略不得残留固定值。`048_model_openai_request_profile.sql` 为 OpenAI-compatible 增加可空且有范围约束的 top_p、n、presence/frequency penalty；空值意味着省略，不开放任意 provider JSON。accepted runtime snapshot 固化这些配置，adapter 再应用已核验型号的更严格限制。主对话、压缩、记忆维护、网页 refinement 与 probe 共用解析，不修改会话保存的用户偏好。
+
+| 家族 | 当前请求边界 |
+| --- | --- |
+| OpenAI | Astra/Sol、Terra 和 Luna 的 effort、采样与 Tools endpoint gate 见前文发送消息链路；不能把 catalog function-calling 能力直接等同于任意端点/档位可挂载 Tools。未知 GPT 型号不继承猜测字段。 |
+| Google | Gemini 2.5 使用 numeric thinkingBudget；已核验 3.x（含 3.8）使用 typed thinkingLevel；未知未来型号不自动继承。不可关闭时 utility 显式选择最低合法 level；按型号省略不接受的采样参数。 |
+| Anthropic | Claude 4.6+、Claude 5 和已核验 Fable/Mythos 使用 adaptive thinking；effort 按型号开放，默认 high，utility low。对话请求 display=summarized，utility 省略 display；Fable 5.2 的限制见发送链路。 |
+| DeepSeek | V4 使用 thinking.type 和 low/high/max；中间 effort 归一 high，utility 关闭。单运行工具 continuation 保留 reasoning_content 与原 tool ID。builtin 为 canonical deepseek-flash（V4.1 Flash）；旧 V4 Flash/vision-exp 只做兼容识别，历史 chat/reasoner 不重新 seed；管理员已有配置不迁移。 |
+| Qwen | 3.7/3.8 使用 enable_thinking + thinking_budget；hybrid 可关闭，thinking-only utility 使用最低预算。已核验 3.6/3.7/3.8 发送 preserve_thinking=true。SearchImplParams 在该边界映射 enable_search，Google native 独立映射 google_search。 |
+| GLM | 5.2/5.3（含 Flash）使用 thinking.type 与 low/high/max；5.2 可关闭，5.3 始终开启，旧 none 和 utility 归一 low；4.5 保持 toggle-only。 |
+| MiniMax | 家族解析早于 adapter：M3 的两种兼容协议使用 adaptive/disabled，复用图片输入；M2.7/HighSpeed 固定开启、无控制字段，204800 context / 131072 output。各 adapter 保留原生 reasoning 投影，不自动跨协议 fallback。 |
+| Kimi | K3 使用 low/high/max、max_completion_tokens 并省略固定采样；K2.7 Code 固定思考、不发控制字段；K2.6 使用 enabled/disabled，开启带 keep=all。utility 分别 low、无控制字段、disabled；未知 Moonshot alias 不猜测。 |
+| xAI | 标准 reasoning 按型号解析：4.3 支持 none/low/medium/high/xhigh、默认 low；4.6 与 4.1 Fast 支持 xhigh；4.20 没有标准 effort 字段证据，保留 provider 默认。multi-agent 与 non-reasoning 排除普通 profile。适用 profile 的 utility 使用 low，省略不接受的 presence/frequency penalty，不改管理员保存值。 |
+
+上述是请求构造与单运行行为，不能据此声称所有 provider 的跨运行推理回放或缓存命中率已验证。模型 schema、adapter 与 HTTP fixture 是当前细节依据，历史型号目录不作为自动更新配置的指令。
+
+管理员 partial update 在 repository transaction 内 `SELECT ... FOR UPDATE` 重读 canonical row，只应用请求携带字段并校验跨字段约束。不同字段的并发请求按锁顺序合成；启停复用窄 enabled patch，不把 service 旧快照全字段写回。
 
 Skill 的用户可见列表、会话启用、管理员 CRUD、文件读取、导入预览和 Git/Zip 更新共享领域错误出口：本地输入与 archive/selection 校验为稳定 400/413，Skill 或 Skill file 缺失为 404，无权启用为 403，来源或候选状态冲突为 409；Git 来源执行故障为带 request ID 的 retryable 502，repository、受管包存储和预览重建故障为带 request ID 的 retryable 5xx。服务层的 typed error 只携带刻意公开的文案，Git 输出、URL、数据库、路径和 wrapped cause 只进入内部日志。preview、create/update/delete 和 package owner 切换不得忽略 repository/path 查询失败。
 

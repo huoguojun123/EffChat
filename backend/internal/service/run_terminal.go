@@ -243,6 +243,9 @@ func storedRunMatchesState(record repository.ChatRunRecord, state *runState) boo
 }
 
 func newRunContext(timeout time.Duration) (context.Context, context.CancelCauseFunc, func()) {
+	// The run outlives any one SSE request. A browser disconnect only detaches
+	// its subscription; explicit RunHub cancellation or the first-output budget
+	// stops execution, allowing terminal persistence and later replay to finish.
 	return modelstream.WithDeferredFirstOutputTimeout(
 		context.Background(),
 		timeout,

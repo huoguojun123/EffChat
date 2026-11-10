@@ -68,6 +68,8 @@ For a guided personal setup, the installer asks for the directory, web port, and
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
 ```
 
+**Updating:** back up your database and files, rerun this command, and select the existing installation directory. The installer validates configuration and pulls images before replacing active files. `docker compose pull` alone keeps the version pinned in `.env`; it does not select a newer release.
+
 ### Docker Compose with published images
 
 This is the clearest path for a server or home lab. It uses one EffChat application image for the `web`, `backend`, `py-extractor`, and one-shot `migrate` roles, plus the official PostgreSQL image.
@@ -76,7 +78,7 @@ This is the clearest path for a server or home lab. It uses one EffChat applicat
 git clone https://github.com/huoguojun123/EffChat.git
 cd EffChat
 cp .env.docker.example .env.docker
-# Set at least POSTGRES_PASSWORD and JWT_SECRET.
+# Set POSTGRES_PASSWORD and matching DB_PASSWORD, plus a strong JWT_SECRET.
 docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
@@ -100,7 +102,7 @@ EffChat ships the application and local document pipeline, not model access or c
 
 - **Models:** protocol, Base URL, API key, model identifier, and capabilities.
 - **Web search:** your Tavily, Brave, Exa, or Bocha key, or a self-hosted SearXNG JSON endpoint.
-- **Web extraction:** Firecrawl, Jina Reader, Tavily Extract, Exa Extract, and the credential-free Basic fallback run as separate provider chains.
+- **Web extraction:** enabled Firecrawl, Jina Reader, Tavily Extract and Exa Extract run in the administrator's saved order; the first valid result wins. Credential-free Basic is always the final local fallback.
 - **Documents:** PDF, DOCX, PPTX, XLSX, CSV, Markdown, text, and image workflows are local by default; MinerU OCR is optional.
 - **Controls:** Tools, Skills, quotas, user groups, file limits, memory capacity, fonts, and usage are managed in the admin UI.
 

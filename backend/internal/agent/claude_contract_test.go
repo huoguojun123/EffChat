@@ -15,11 +15,14 @@ import (
 	"github.com/huoguojun123/EffChat/internal/service"
 )
 
-func TestClaude55WireThinkingContract(t *testing.T) {
+func TestClaudeCurrentWireThinkingContract(t *testing.T) {
 	for _, tc := range []struct {
 		id, effort, want string
 		utility          bool
 	}{
+		{id: "claude-fable-5-2", want: "high"},
+		{id: "claude-fable-5-2", effort: "xhigh", want: "xhigh"},
+		{id: "claude-fable-5-2", effort: "max", want: "low", utility: true},
 		{id: "claude-opus-5-5", want: "medium"},
 		{id: "claude-sonnet-5-5", want: "high"},
 		{id: "claude-haiku-5-5", want: "medium"},

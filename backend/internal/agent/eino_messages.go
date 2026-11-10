@@ -61,15 +61,17 @@ func assistantMessageIsEmptyForModel(m *schema.Message) bool {
 
 // normalizeToolReplayHistory 把数据库历史整理成模型 API 可接受的 tool 调用序列。
 //
-// OpenAI 兼容协议要求每条 role=tool 都必须紧跟在包含对应 tool_call_id 的
-// assistant 消息之后。Eino/模型可以在一次 assistant 消息里并发发出多个 tool_calls，
+// tool 结果必须能配对到之前 assistant 的 tool_call_id。
+// Eino/模型可以在一次 assistant 消息里并发发出多个 tool_calls，
 // 但部分网关在历史回放时不接受 "assistant(多个 calls) -> 多条 tool" 的组合，
 // 尤其当旧数据里 tool 结果顺序被打乱时会直接 400。
 //
-// 这里不修改数据库历史，只在喂回模型前做无损重排：
+// 这里不修改数据库历史，只在喂回模型前做兼容投影，并非无损重排：
 // assistant(call_a, call_b) + tool_b + tool_a 会变成
 // assistant(call_a) + tool_a + assistant(call_b) + tool_b。
-// 找不到匹配 assistant 的孤儿 tool 会被丢弃，避免旧脏数据继续污染后续对话。
+// 孤儿 tool 与无结果的 call 被省略；拆分后只有第一对保留 assistant 正文。
+// 这不能证明保留了并行调用的原始分组或 provider 的签名/推理回放契约；
+// 需要完整回放的协议必须沿持久化和 provider 投影链处理，不能仅移除此整理。
 func normalizeToolReplayHistory(messages []*schema.Message) []*schema.Message {
 	if len(messages) == 0 {
 		return messages

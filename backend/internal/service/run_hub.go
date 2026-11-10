@@ -90,6 +90,15 @@ type RunHub struct {
 	store    chatRunStore
 }
 
+// h.mu protects registry membership, lifecycle flags and subscriber membership.
+// Record holds only h.mu.RLock, so eventMu additionally serializes the event
+// buffer, cursor and event-derived snapshot fields. When both are needed the
+// order is h.mu -> eventMu; exclusive h.mu also excludes all event writers.
+//
+// transitionMu serializes one run's durable operations. Look up the state under
+// h.mu, release h.mu, then acquire transitionMu before reacquiring h.mu for short
+// reads/publication. Never wait for transitionMu or perform durable I/O while
+// holding h.mu: one slow run must not block other runs or their replay readers.
 type runState struct {
 	RunSnapshot
 	transitionMu    sync.Mutex
@@ -251,6 +260,7 @@ func (h *RunHub) Record(runID, event string, data interface{}) bool {
 	return true
 }
 
+// Caller holds h.mu (read or write) to keep the state and subscribers stable.
 func (h *RunHub) appendEventLocked(state *runState, event string, data interface{}) RunEvent {
 	state.eventMu.Lock()
 	defer state.eventMu.Unlock()
@@ -267,6 +277,9 @@ func (h *RunHub) appendEventLocked(state *runState, event string, data interface
 	}
 	state.trimLocked(h.maxBytes)
 
+	// A slow SSE consumer must not stall model execution. The handler repairs
+	// cursor gaps (and drains missed terminal events) via EventsSince; if the
+	// retained buffer was trimmed, it emits replay_gap plus a bounded snapshot.
 	for ch := range state.subscribers {
 		select {
 		case ch <- entry:
@@ -419,6 +432,9 @@ func (h *RunHub) Get(runID string, sessionID, userID int64) (*RunSnapshot, bool)
 	return cloneStateSnapshot(state), true
 }
 
+// EventsAfter snapshots replay and registers live delivery under the same lock,
+// preventing a lost-event window between them. Cleanup removes this subscriber
+// only; disconnecting a browser does not cancel the independently owned run.
 func (h *RunHub) EventsAfter(runID string, sessionID, userID, cursor int64) ([]RunEvent, <-chan RunEvent, func(), *RunSnapshot, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -751,6 +767,7 @@ func toMap(value interface{}) map[string]interface{} {
 	return out
 }
 
+// Caller holds h.mu; eventMu also excludes Record's concurrent read-lock path.
 func cloneStateSnapshot(state *runState) *RunSnapshot {
 	if state == nil {
 		return nil

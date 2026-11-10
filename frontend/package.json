@@ -1,7 +1,7 @@
 {
   "name": "effchat-web",
   "private": true,
-  "version": "0.4.1-beta.12",
+  "version": "0.4.1-beta.13",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -61,6 +61,10 @@
     "vitest": "^4.1.12"
   },
   "overrides": {
+    "glob": "14.0.4",
+    "eslint": { "minimatch": "11.0.5" },
+    "@eslint/config-array": { "minimatch": "11.0.5" },
+    "@typescript-eslint/typescript-estree": { "minimatch": "11.0.5" },
     "dompurify": "3.4.17",
     "katex": "$katex",
     "nanoid": "3.3.18"

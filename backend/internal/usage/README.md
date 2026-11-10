@@ -4,7 +4,7 @@
 
 ## What Counts
 
-Events should be created only for calls that pass through an Eino `ChatModel`:
+Events should be created only for calls that pass through an Eino classic `ChatModel` or typed `AgenticModel`:
 
 - normal chat responses
 - retry/regenerate calls
@@ -12,7 +12,7 @@ Events should be created only for calls that pass through an Eino `ChatModel`:
 - conversation compression
 - small model calls inside tool chains, such as extraction or summarization helpers
 
-The wrapper lives at the model boundary (`WrapChatModel`) so callers do not have to remember to write usage events in every handler or service.
+The wrappers live at the model boundary (`WrapChatModel` / `WrapAgenticModel`) so callers do not have to remember to write usage events in every handler or service. Both share the stream observation and event projection implementation; classic compression-instruction inference and typed explicit call metadata remain separate.
 
 ## Tool Usage Stream
 
@@ -46,6 +46,8 @@ Those services are not model API usage. Their current observability lives in `to
 - Negative token or duration values normalize to zero.
 - Failure events keep a short `error_type` and truncated `error_message`, not raw request or response payloads.
 - Recording is best-effort and must never change the user-visible success or failure of the model call.
+- Streams forward chunks unchanged and record once at termination, using the last cumulative usage frame rather than summing frames. A later error retains any observed usage; closing the consumer is classified as cancellation when the next chunk is forwarded. The caller must still cancel the provider context to interrupt a blocked upstream read.
+- Missing usage currently yields zero-valued token fields. This storage contract does not distinguish unreported usage from measured zero, and does not persist cache-write usage; those require a separate adapter/storage change.
 
 ## Future Cost Or Quota Work
 

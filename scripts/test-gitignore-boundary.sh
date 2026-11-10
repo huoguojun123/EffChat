@@ -36,6 +36,7 @@ for path in \
   docs/api_secret_rotation.md \
   frontend/src/keymap.tsx \
   certs/public.crt \
+  py-extractor/app/main.py \
   .env.docker.example \
   backend/.env.example; do
   expect_visible "$path"
@@ -50,6 +51,8 @@ for path in \
   credentials/service.pem \
   data/messages.json \
   backend/storage/document.txt \
+  py-extractor/app/__pycache__/main.cpython-312.pyc \
+  py-extractor/app/main.pyc \
   frontend/node_modules/package/index.js; do
   expect_ignored "$path"
 done

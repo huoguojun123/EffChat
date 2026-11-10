@@ -45,6 +45,10 @@ interface MessageSyncTask {
   promise: Promise<boolean>
 }
 
+// All useSSE callers in this browser tab share the same chat store and one live
+// view transport. Keeping ownership here prevents separate hook instances from
+// opening competing streams. These maps are neither cross-tab coordination nor
+// durable run state; the server owns execution after a client disconnects.
 let activeStream: ClientStream | null = null
 const reconciliationGenerations = new Map<number, number>()
 const reconciliationTasks = new Map<number, ReconciliationTask>()
@@ -71,6 +75,9 @@ function isCurrentClientStream(stream: ClientStream) {
     && state.streaming.requestId === stream.requestId
 }
 
+// Terminal handling may commit a local fallback and reset streaming.requestId
+// before entering syncing. Retain transport/view ownership across that handoff;
+// ordinary deltas must use the stricter isCurrentClientStream request guard.
 function isActiveClientStream(stream: ClientStream) {
   const state = useChatStore.getState()
   return activeStream === stream
@@ -130,6 +137,9 @@ export function useSSE() {
       const promise = (async () => {
         const res = await listMessageWindow(sessionId, { latest: true, turnLimit: 16 })
         const state = useChatStore.getState()
+        // Session identity alone is insufficient after A -> B -> A navigation.
+        // Reject responses from an old visit, history-window jump, or superseded
+        // sync before they can replace the current view with stale DB content.
         if (
           state.activeSessionId !== sessionId
           || state.activeSessionGeneration !== activeSessionGeneration
@@ -156,6 +166,7 @@ export function useSSE() {
       task = { activeSessionGeneration, messageWindowGeneration, promise }
       messageSyncTasks.set(sessionId, task)
       const clearTask = () => {
+        // An older promise may settle after a new task has replaced this slot.
         if (messageSyncTasks.get(sessionId)?.promise === promise) messageSyncTasks.delete(sessionId)
       }
       void promise.then(clearTask, clearTask)

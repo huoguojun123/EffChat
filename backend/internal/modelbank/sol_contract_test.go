@@ -28,7 +28,7 @@ func TestSol61VerifiedReasoningContract(t *testing.T) {
 			t.Fatalf("invalid effort %q became %q", invalid, got)
 		}
 	}
-	if OpenAIOmitsSamplingParameters("gpt-6.1-sol") {
-		t.Fatal("Sol must not inherit an unverified Astra sampling rule")
+	if !OpenAIOmitsSamplingParameters("gpt-6.1-sol") {
+		t.Fatal("Sol's required reasoning rejects sampling parameters")
 	}
 }

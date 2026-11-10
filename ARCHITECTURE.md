@@ -112,9 +112,11 @@ Responses 的本地 Agentic→经典消息转换保留上游已提供的完整 `
 
 Grok 4.7 内置候选使用已核验的 500K 上下文、图片输入和工具能力；输出上限未取得官方数值，不推测填入。其 Chat Completions 复用 xAI reasoning profile，支持 `low/medium/high/xhigh`、默认 `high`、不可关闭推理，并省略 reasoning 模型不支持的 penalty/stop 字段。该兼容路径不承诺 Responses 加密推理的跨轮持久化和重放已完成。
 
-GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。该共享仅限已核验的推理档位与 Responses-only 工具限制，不继承 Astra 的 sampling 省略规则。候选能力与管理员覆盖边界见下方模型契约说明。
+GPT-6.1 Sol 复用现有 `openai_gpt_6_astra` 推理格式（格式 ID 为兼容存量配置而保留），提供 `low/medium/high/xhigh/max`、默认 `medium`；不支持 `none/minimal`，utility 使用 `low`。Sol/Astra 必须省略 temperature/top_p。GPT-6.1 Terra 复用六档 `openai_gpt_5_6` 格式，默认 medium，允许 none；工具只在 Responses 可用。Terra/Luna 仅在实际请求显式发送 none 时保留采样参数，utility 在两个端点均显式发送 none，避免省略字段后继承服务端默认推理。该规则只覆盖已核验型号，不泛化到未知 GPT-6。候选能力与管理员覆盖边界见下方模型契约说明。
 
 GPT-6 Luna 使用 OpenAI GPT-5.6 兼容推理字段，支持 `none/low/medium/high/xhigh/max`，默认 `medium`；详情确认 text/image 输入、1.05M context 和 128K max output。Luna 的 Responses 支持函数调用；Chat Completions 只有 `reasoning_effort=none` 时允许函数调用，因此 runtime profile 保留 Chat 工具能力，实际请求由 reasoning effort 决定，不能把“模型支持工具”简化成所有档位都可用。
+
+Claude Fable 5.2 候选复用 Anthropic adaptive thinking（始终开启）、五档 effort，默认 high，utility 使用 low；保留 1M context / 128K output 和文本/图片输入，不启用托管工具、fast mode 或受限 Mythos。请求省略 sampling 和旧 budget。候选不覆盖数据库；供应商的账号权限和数据保留要求由部署者向供应商确认，HTTP fixture 不代表真实账号可用性。
 
 末轮用户消息在助手零输出或仅有错误提示时可编辑重试。后端不原地更新消息，而是在准入事务中创建新用户消息、复用原附件、软隐藏旧尾部并保留旧运行与用量事实；前端复用现有 SSE 和 `message_start` 完成新 ID 对账。
 

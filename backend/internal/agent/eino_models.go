@@ -58,7 +58,7 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 			temperature = nil
 			openAIProfile = model.OpenAIRequestProfile{}
 		}
-		if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+		if openAIRequestOmitsSampling(req) {
 			temperature = nil
 			openAIProfile.TopP = nil
 		}
@@ -101,7 +101,7 @@ func (a *EinoAgent) buildChatModel(ctx context.Context, req *ChatRequest, search
 		return a.wrapUsageModel(cm, req), nil
 
 	case service.AdapterOpenAIResponses:
-		if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+		if openAIRequestOmitsSampling(req) {
 			temperature = nil
 		}
 		cfg := &openairesponses.Config{
@@ -210,7 +210,7 @@ func (a *EinoAgent) buildResponsesAgenticModel(ctx context.Context, req *ChatReq
 	if err != nil {
 		return nil, fmt.Errorf("invalid model temperature profile: %w", err)
 	}
-	if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+	if openAIRequestOmitsSampling(req) {
 		temperature = nil
 	}
 	cfg := &openairesponses.Config{

@@ -42,7 +42,7 @@ func applyOpenAICompatibleThinking(req *ChatRequest, cfg *openai.ChatModelConfig
 			// Astra reasoning cannot be disabled. Utility calls explicitly request
 			// the lowest supported effort instead of inheriting the model default.
 			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortLow))
-		} else if format == modelbank.ThinkingFormatOpenAIGPT56 && modelbank.IsGPT6LunaModel(req.ModelID) {
+		} else if format == modelbank.ThinkingFormatOpenAIGPT56 && modelbank.OpenAIHasOptionalGPT6Reasoning(req.ModelID) {
 			setOpenAIExtraField(cfg, "reasoning_effort", string(modelbank.ThinkingEffortNone))
 		} else if format == modelbank.ThinkingFormatDashScopeQwen {
 			if modelbank.QwenThinkingCanDisable(req.ModelID) {
@@ -152,6 +152,9 @@ func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
 		return nil
 	}
 	if req.SuppressThinking {
+		if format == modelbank.ThinkingFormatOpenAIGPT56 && modelbank.OpenAIHasOptionalGPT6Reasoning(req.ModelID) {
+			return &responses.ReasoningParam{Effort: shared.ReasoningEffortNone}
+		}
 		if format != modelbank.ThinkingFormatOpenAIGPT6Astra {
 			return nil
 		}
@@ -175,6 +178,19 @@ func openAIResponsesReasoning(req *ChatRequest) *responses.ReasoningParam {
 	default:
 		return nil
 	}
+}
+
+// Use the same resolved effort as the wire request. Omitting reasoning does
+// not disable the provider default; sampling is legal only with explicit none.
+func openAIRequestOmitsSampling(req *ChatRequest) bool {
+	if modelbank.OpenAIOmitsSamplingParameters(req.ModelID) {
+		return true
+	}
+	if !modelbank.OpenAIHasOptionalGPT6Reasoning(req.ModelID) {
+		return false
+	}
+	reasoning := openAIResponsesReasoning(runtimeReqForAdapter(req, "openai"))
+	return reasoning == nil || reasoning.Effort != shared.ReasoningEffortNone
 }
 
 func applyClaudeThinking(req *ChatRequest, cfg *claude.Config) {

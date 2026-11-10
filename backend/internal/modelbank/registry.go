@@ -20,6 +20,13 @@ import (
 func builtinModels() map[string]*ModelInfo {
 	return map[string]*ModelInfo{
 		// ============ OpenAI ============
+		"gpt-6.1-terra": {
+			ID: "gpt-6.1-terra", DisplayName: "GPT-6.1 Terra", Provider: "openai", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplNone,
+				ContextWindow: 1050000, MaxOutput: 128000,
+			},
+		},
 		"gpt-6.1-sol": {
 			ID: "gpt-6.1-sol", DisplayName: "GPT-6.1 Sol", Provider: "openai", Enabled: true,
 			Capabilities: ModelCapabilities{
@@ -125,6 +132,13 @@ func builtinModels() map[string]*ModelInfo {
 		},
 		"claude-haiku-5-5": {
 			ID: "claude-haiku-5-5", DisplayName: "Claude Haiku 5.5", Provider: "anthropic", Enabled: true,
+			Capabilities: ModelCapabilities{
+				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
+				ContextWindow: 1000000, MaxOutput: 128000,
+			},
+		},
+		"claude-fable-5-2": {
+			ID: "claude-fable-5-2", DisplayName: "Claude Fable 5.2", Provider: "anthropic", Enabled: true,
 			Capabilities: ModelCapabilities{
 				Vision: true, ToolUse: true, Reasoning: true, SearchImpl: SearchImplTool,
 				ContextWindow: 1000000, MaxOutput: 128000,

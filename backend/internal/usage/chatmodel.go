@@ -57,49 +57,18 @@ func (m *recordingAgenticModel) Generate(ctx context.Context, input []*schema.Ag
 func (m *recordingAgenticModel) Stream(ctx context.Context, input []*schema.AgenticMessage, opts ...einoModel.Option) (*schema.StreamReader[*schema.AgenticMessage], error) {
 	startedAt := time.Now()
 	reader, err := m.base.Stream(ctx, input, opts...)
+	if err == nil && reader == nil {
+		err = modelstream.ErrNilReader
+	}
 	if err != nil {
 		m.record(ctx, nil, err, time.Since(startedAt))
 		return nil, err
 	}
-	if reader == nil {
-		err = modelstream.ErrNilReader
-		m.record(ctx, nil, err, time.Since(startedAt))
-		return nil, err
-	}
-
-	out, writer := schema.Pipe[*schema.AgenticMessage](1)
-	go func() {
-		defer writer.Close()
-		defer reader.Close()
-		var lastUsageMsg *schema.AgenticMessage
-		var streamErr error
-		success := false
-		for {
-			chunk, recvErr := reader.Recv()
-			if errors.Is(recvErr, io.EOF) {
-				success = true
-				break
-			}
-			if recvErr != nil {
-				streamErr = recvErr
-				writer.Send(nil, recvErr)
-				break
-			}
-			if chunk != nil && chunk.ResponseMeta != nil && chunk.ResponseMeta.TokenUsage != nil {
-				lastUsageMsg = chunk
-			}
-			if closed := writer.Send(chunk, nil); closed {
-				streamErr = context.Canceled
-				break
-			}
-		}
-		if success {
-			m.record(ctx, lastUsageMsg, nil, time.Since(startedAt))
-		} else {
-			m.record(ctx, lastUsageMsg, streamErr, time.Since(startedAt))
-		}
-	}()
-	return out, nil
+	return observeUsageStream(reader, func(chunk *schema.AgenticMessage) bool {
+		return chunk != nil && chunk.ResponseMeta != nil && chunk.ResponseMeta.TokenUsage != nil
+	}, func(last *schema.AgenticMessage, err error) {
+		m.record(ctx, last, err, time.Since(startedAt))
+	}), nil
 }
 
 func (m *recordingAgenticModel) record(ctx context.Context, out *schema.AgenticMessage, err error, duration time.Duration) {
@@ -107,28 +76,11 @@ func (m *recordingAgenticModel) record(ctx context.Context, out *schema.AgenticM
 		return
 	}
 	meta := mergeMeta(m.defaults, MetaFromContext(ctx))
-	kind := meta.Kind
-	if kind == "" {
-		kind = KindChat
+	var usage *schema.TokenUsage
+	if out != nil && out.ResponseMeta != nil {
+		usage = out.ResponseMeta.TokenUsage
 	}
-	event := Event{
-		UserID: meta.UserID, SessionID: meta.SessionID, MessageID: meta.MessageID, RunID: meta.RunID,
-		Kind: kind, Provider: meta.Provider, ModelID: meta.ModelID,
-		Success: err == nil, DurationMs: duration.Milliseconds(),
-	}
-	if out != nil && out.ResponseMeta != nil && out.ResponseMeta.TokenUsage != nil {
-		u := out.ResponseMeta.TokenUsage
-		event.PromptTokens = u.PromptTokens
-		event.CompletionTokens = u.CompletionTokens
-		event.TotalTokens = u.TotalTokens
-		event.CachedTokens = u.PromptTokenDetails.CachedTokens
-		event.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
-	}
-	if err != nil {
-		event.ErrorType = ErrorType(err)
-		event.ErrorMessage = err.Error()
-	}
-	m.recorder.Record(event)
+	m.recorder.Record(modelUsageEvent(meta, meta.Kind, usage, err, duration))
 }
 
 type recordingChatModel struct {
@@ -147,56 +99,18 @@ func (m *recordingChatModel) Generate(ctx context.Context, input []*schema.Messa
 func (m *recordingChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...einoModel.Option) (*schema.StreamReader[*schema.Message], error) {
 	startedAt := time.Now()
 	reader, err := m.base.Stream(ctx, input, opts...)
+	if err == nil && reader == nil {
+		err = modelstream.ErrNilReader
+	}
 	if err != nil {
 		m.record(ctx, input, nil, err, time.Since(startedAt))
 		return nil, err
 	}
-	if reader == nil {
-		err = modelstream.ErrNilReader
-		m.record(ctx, input, nil, err, time.Since(startedAt))
-		return nil, err
-	}
-
-	out, writer := schema.Pipe[*schema.Message](1)
-	go func() {
-		defer writer.Close()
-		defer reader.Close()
-
-		// 流式 usage 通常只出现在最后几个 chunk；这里透传每个 chunk，同时记住
-		// 最后一条带 Usage 的消息。这样既不改变上游流行为，也能在 EOF 后记录
-		// 完整 token 口径。若中途出错，则带上已观察到的 usage 和截断后的错误。
-		var lastUsageMsg *schema.Message
-		var streamErr error
-		success := false
-
-		for {
-			chunk, recvErr := reader.Recv()
-			if errors.Is(recvErr, io.EOF) {
-				success = true
-				break
-			}
-			if recvErr != nil {
-				streamErr = recvErr
-				writer.Send(nil, recvErr)
-				break
-			}
-			if chunk != nil && chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil {
-				lastUsageMsg = chunk
-			}
-			if closed := writer.Send(chunk, nil); closed {
-				streamErr = context.Canceled
-				break
-			}
-		}
-
-		if success {
-			m.record(ctx, input, lastUsageMsg, nil, time.Since(startedAt))
-		} else {
-			m.record(ctx, input, lastUsageMsg, streamErr, time.Since(startedAt))
-		}
-	}()
-
-	return out, nil
+	return observeUsageStream(reader, func(chunk *schema.Message) bool {
+		return chunk != nil && chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil
+	}, func(last *schema.Message, err error) {
+		m.record(ctx, input, last, err, time.Since(startedAt))
+	}), nil
 }
 
 func (m *recordingChatModel) WithTools(tools []*schema.ToolInfo) (einoModel.ToolCallingChatModel, error) {
@@ -212,31 +126,76 @@ func (m *recordingChatModel) record(ctx context.Context, input []*schema.Message
 		return
 	}
 	meta := mergeMeta(m.defaults, MetaFromContext(ctx))
-	kind := inferKind(meta.Kind, input)
-	event := Event{
-		UserID:     meta.UserID,
-		SessionID:  meta.SessionID,
-		MessageID:  meta.MessageID,
-		RunID:      meta.RunID,
-		Kind:       kind,
-		Provider:   meta.Provider,
-		ModelID:    meta.ModelID,
-		Success:    err == nil,
-		DurationMs: duration.Milliseconds(),
+	var usage *schema.TokenUsage
+	if out != nil && out.ResponseMeta != nil {
+		usage = out.ResponseMeta.Usage
 	}
-	if out != nil && out.ResponseMeta != nil && out.ResponseMeta.Usage != nil {
-		u := out.ResponseMeta.Usage
-		event.PromptTokens = u.PromptTokens
-		event.CompletionTokens = u.CompletionTokens
-		event.TotalTokens = u.TotalTokens
-		event.CachedTokens = u.PromptTokenDetails.CachedTokens
-		event.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	// Classic callers retain legacy compression-instruction inference. Typed
+	// callers use their explicit Meta; sharing projection must not change Kind.
+	m.recorder.Record(modelUsageEvent(meta, inferKind(meta.Kind, input), usage, err, duration))
+}
+
+// observeUsageStream owns both stream ends after setup succeeds. It forwards
+// chunks unchanged and records once, before closing the output. Usage frames
+// are cumulative snapshots: retain the last reported one, including on error,
+// rather than summing frames or dropping it when a later frame has no usage.
+// The caller still owns cancellation of a provider blocked inside Recv;
+// closing the returned reader is observed when forwarding its next chunk.
+func observeUsageStream[T any](reader *schema.StreamReader[T], hasUsage func(T) bool, record func(T, error)) *schema.StreamReader[T] {
+	out, writer := schema.Pipe[T](1)
+	go func() {
+		defer writer.Close()
+		defer reader.Close()
+		var last T
+		var streamErr error
+		for {
+			chunk, err := reader.Recv()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				streamErr = err
+				var zero T
+				writer.Send(zero, err)
+				break
+			}
+			if hasUsage(chunk) {
+				last = chunk
+			}
+			if closed := writer.Send(chunk, nil); closed {
+				streamErr = context.Canceled
+				break
+			}
+		}
+		record(last, streamErr)
+	}()
+	return out
+}
+
+// modelUsageEvent projects only the existing product audit fields. A nil usage
+// remains the legacy zero-valued event, not proof of a measured zero; preserving
+// field presence/cache-write requires its own adapter and storage contract.
+func modelUsageEvent(meta Meta, kind string, usage *schema.TokenUsage, err error, duration time.Duration) Event {
+	if kind == "" {
+		kind = KindChat
+	}
+	event := Event{
+		UserID: meta.UserID, SessionID: meta.SessionID, MessageID: meta.MessageID, RunID: meta.RunID,
+		Kind: kind, Provider: meta.Provider, ModelID: meta.ModelID,
+		Success: err == nil, DurationMs: duration.Milliseconds(),
+	}
+	if usage != nil {
+		event.PromptTokens = usage.PromptTokens
+		event.CompletionTokens = usage.CompletionTokens
+		event.TotalTokens = usage.TotalTokens
+		event.CachedTokens = usage.PromptTokenDetails.CachedTokens
+		event.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
 	}
 	if err != nil {
 		event.ErrorType = ErrorType(err)
 		event.ErrorMessage = err.Error()
 	}
-	m.recorder.Record(event)
+	return event
 }
 
 func inferKind(defaultKind string, input []*schema.Message) string {

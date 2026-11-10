@@ -9,7 +9,7 @@ require (
 	github.com/cloudwego/eino v0.9.23
 	github.com/cloudwego/eino-ext/components/model/agenticopenai v0.2.2
 	github.com/cloudwego/eino-ext/components/model/claude v0.1.20
-	github.com/cloudwego/eino-ext/components/model/gemini v0.1.33
+	github.com/cloudwego/eino-ext/components/model/gemini v0.1.37
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/gin-contrib/cors v1.7.7
 	github.com/gin-gonic/gin v1.12.0
@@ -25,7 +25,7 @@ require (
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.45.0
 	golang.org/x/net v0.60.0
-	google.golang.org/genai v1.65.0
+	google.golang.org/genai v1.70.0
 )
 
 // Keep the public Eino Claude adapter API while applying the narrowly scoped

@@ -32,6 +32,8 @@ scripts/docker-build.sh up
 
 根据改动范围执行对应检查：
 
+前端 `package.json` 的 glob/minimatch overrides 用于修复构建工具链的遍历取消与模式放大问题。更新这些依赖时必须同时验证 lint、测试、build 和 PWA precache；不要仅升级 minimatch 而留下不兼容的 glob。父依赖采用修复版本后可移除对应 override，保留锁文件和许可证检查。
+
 ```bash
 cd backend
 go test ./...

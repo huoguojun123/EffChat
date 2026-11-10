@@ -10,12 +10,14 @@ grep -Fq 'read -r -s -u "$tty_fd"' "$SCRIPT"
 grep -Fq 'archive/refs/tags/${VERSION}.tar.gz' "$SCRIPT"
 grep -Fq 'TARGET_ENV="$INSTALL_DIR/.env"' "$SCRIPT"
 grep -Fq 'TARGET_COMPOSE="$INSTALL_DIR/compose.yml"' "$SCRIPT"
-grep -Fq 'docker compose pull' "$SCRIPT"
-grep -Fq 'docker compose up -d --wait' "$SCRIPT"
+grep -Fq '"${staged_compose[@]}" pull' "$SCRIPT"
+grep -Fq 'docker compose --env-file .env -f compose.yml up -d --wait' "$SCRIPT"
 ! grep -Eq 'docker compose .*down -v|rm -rf .*data|rm -rf .*volume' "$SCRIPT"
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/effchat-install-contract.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
+REAL_DOCKER="$(command -v docker)"
+export REAL_DOCKER
 
 fixture="$TMP_DIR/fixture/EffChat-v0.4.1-beta.11"
 mkdir -p "$fixture"
@@ -42,6 +44,16 @@ cat > "$TMP_DIR/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\t%s\n' "$PWD" "$*" >> "$FAKE_DOCKER_LOG"
+if [ -n "${FAKE_FAIL_COMMAND:-}" ] && [[ " $* " == *" $FAKE_FAIL_COMMAND "* ]]; then
+    exit 42
+fi
+if [[ " $* " == *' config --quiet '* ]]; then
+    "$REAL_DOCKER" "$@"
+    # Resolve paths with real Compose, but never contact a daemon or real DB.
+    args=("$@")
+    unset 'args[${#args[@]}-1]'
+    "$REAL_DOCKER" "${args[@]}" --format json > "$FAKE_DOCKER_LOG.config.json"
+fi
 EOF
 chmod +x "$TMP_DIR/bin/curl" "$TMP_DIR/bin/docker"
 
@@ -73,8 +85,18 @@ resolved_password="$(docker compose --env-file "$install_dir/.env" -f "$install_
     | awk -F= '$1 == "POSTGRES_PASSWORD" {sub(/^[^=]*=/, ""); print; exit}')"
 test "$resolved_password" = "fixture-'bundled-\\password-#-\$"
 grep -Eq "^JWT_SECRET='[0-9a-f]{64}'$" "$install_dir/.env"
-grep -Fq $'\tcompose pull' "$TMP_DIR/docker.log"
-grep -Fq $'\tcompose up -d --wait' "$TMP_DIR/docker.log"
+grep -Eq 'compose .*--project-directory .* pull$' "$TMP_DIR/docker.log"
+grep -Fq $'\tcompose --env-file .env -f compose.yml up -d --wait' "$TMP_DIR/docker.log"
+node - "$TMP_DIR/docker.log.config.json" "$install_dir/data" <<'JS'
+const fs = require('fs')
+const path = require('path')
+const [configPath, dataPath] = process.argv.slice(2)
+const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+const expectedData = path.join(fs.realpathSync(path.dirname(dataPath)), path.basename(dataPath))
+const canonicalMount = (source) => path.join(fs.realpathSync(path.dirname(path.dirname(source))), path.basename(path.dirname(source)), path.basename(source))
+if (canonicalMount(config.services.backend.volumes[0].source) !== `${expectedData}/storage`) throw Error('staged storage path drifted')
+if (canonicalMount(config.services.postgres.volumes[0].source) !== `${expectedData}/postgres`) throw Error('staged database path drifted')
+JS
 
 if stat -f '%Lp' "$install_dir/.env" >/dev/null 2>&1; then
     test "$(stat -f '%Lp' "$install_dir/.env")" = "600"
@@ -141,6 +163,57 @@ EOF
 printf 'legacy migration marker\n' > "$update_dir/migrations/production/old-marker.sql"
 printf 'keep data\n' > "$update_dir/data/storage/sentinel.txt"
 : > "$TMP_DIR/docker.log"
+
+# Preflight failures must leave the old deployment byte-for-byte intact.
+cp "$update_dir/.env.docker" "$TMP_DIR/expected.env"
+cp "$update_dir/compose.yml" "$TMP_DIR/expected.compose"
+for failed_command in config pull; do
+    if FAKE_FAIL_COMMAND="$failed_command" EFFCHAT_HOME="$update_dir" EFFCHAT_MODE=update run_installer 2>/dev/null; then
+        echo "installer ignored failed $failed_command" >&2
+        exit 1
+    fi
+    cmp "$TMP_DIR/expected.env" "$update_dir/.env.docker"
+    cmp "$TMP_DIR/expected.compose" "$update_dir/compose.yml"
+    test ! -e "$update_dir/.env"
+    test -f "$update_dir/migrations/production/old-marker.sql"
+    grep -Fxq 'keep data' "$update_dir/data/storage/sentinel.txt"
+    test ! -e "$update_dir/deployment-backups"
+    ! grep -Fq 'up -d' "$TMP_DIR/docker.log"
+done
+
+# Configuration validation cannot rotate secrets or guess a different data root.
+for missing_key in JWT_SECRET POSTGRES_PASSWORD DATA_DIR; do
+    awk -F= -v key="$missing_key" '$1 != key' "$TMP_DIR/expected.env" > "$update_dir/.env.docker"
+    cp "$update_dir/.env.docker" "$TMP_DIR/missing.env"
+    if EFFCHAT_HOME="$update_dir" EFFCHAT_MODE=update run_installer 2>/dev/null; then
+        echo "installer accepted missing $missing_key during update" >&2
+        exit 1
+    fi
+    cmp "$TMP_DIR/missing.env" "$update_dir/.env.docker"
+    cmp "$TMP_DIR/expected.compose" "$update_dir/compose.yml"
+done
+cp "$TMP_DIR/expected.env" "$update_dir/.env.docker"
+
+# After startup begins, keep new config and backup for diagnosis; do not imply
+# that reverting files could undo a migration already committed by PostgreSQL.
+failed_start="$TMP_DIR/failed-start"
+mkdir -p "$failed_start/migrations/production" "$failed_start/data/storage"
+cp "$TMP_DIR/expected.env" "$failed_start/.env.docker"
+cp "$TMP_DIR/expected.compose" "$failed_start/compose.yml"
+printf 'keep data\n' > "$failed_start/data/storage/sentinel.txt"
+printf 'keep migration\n' > "$failed_start/migrations/production/old.sql"
+if FAKE_FAIL_COMMAND=up EFFCHAT_HOME="$failed_start" EFFCHAT_MODE=update run_installer 2>/dev/null; then
+    echo "installer ignored failed startup" >&2
+    exit 1
+fi
+test -f "$failed_start/.env"
+test -f "$failed_start/.env.docker"
+test -f "$failed_start/migrations/production/old.sql"
+grep -Fxq 'keep data' "$failed_start/data/storage/sentinel.txt"
+test ! -e "$failed_start/.effchat-install.lock"
+failed_backup="$(find "$failed_start/deployment-backups" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+cmp "$TMP_DIR/expected.env" "$failed_backup/.env.docker"
+cmp "$TMP_DIR/expected.compose" "$failed_backup/compose.yml"
 
 EFFCHAT_HOME="$update_dir" \
 EFFCHAT_MODE=update \

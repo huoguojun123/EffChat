@@ -208,7 +208,7 @@ func inferThinkingFormatWithContext(provider, adapter, modelID, displayName stri
 	if isGPT6RequiredReasoningModel(id) {
 		return ThinkingFormatOpenAIGPT6Astra
 	}
-	if IsGPT6LunaModel(id) {
+	if OpenAIHasOptionalGPT6Reasoning(id) {
 		return ThinkingFormatOpenAIGPT56
 	}
 	if isGPT56Model(id) {
@@ -406,7 +406,7 @@ func ThinkingEffortOptionsForModel(format ThinkingFormat, modelID string) []mode
 		return []model.ThinkingEffortOption{
 			{Value: string(ThinkingEffortNone), Label: "关闭", Description: "不使用额外推理，优先最低延迟。"},
 			{Value: string(ThinkingEffortLow), Label: "低", Description: "适合快速问答、检索和轻量工具调用。"},
-			{Value: string(ThinkingEffortMedium), Label: "中", Description: "GPT-5.6 默认档位，平衡质量与延迟。"},
+			{Value: string(ThinkingEffortMedium), Label: "中", Description: "默认档位，平衡质量与延迟。"},
 			{Value: string(ThinkingEffortHigh), Label: "高", Description: "适合复杂分析、调试和多步任务。"},
 			{Value: string(ThinkingEffortXHigh), Label: "极高", Description: "适合质量优先的深度研究和长任务。"},
 			{Value: string(ThinkingEffortMax), Label: "最大", Description: "仅用于最困难、可接受高延迟的任务。"},
@@ -553,7 +553,7 @@ func isThinkingFormatApplicableWithContext(provider, adapter, modelID, displayNa
 	case ThinkingFormatOpenAIGPT6Astra:
 		return a != "anthropic" && a != "google" && isGPT6RequiredReasoningModel(id)
 	case ThinkingFormatOpenAIGPT56:
-		return a != "anthropic" && a != "google" && isGPT56Model(id)
+		return a != "anthropic" && a != "google" && (isGPT56Model(id) || OpenAIHasOptionalGPT6Reasoning(id))
 	case ThinkingFormatOpenAIReasoningEffort:
 		return a != "anthropic" && a != "google" && !isGPT56Model(id) && isOpenAIReasoningModel(p, id)
 	case ThinkingFormatDeepSeekV4, ThinkingFormatDeepSeekV4Disabled:
@@ -678,10 +678,16 @@ func IsGPT6LunaModel(id string) bool {
 	return strings.Contains(id, "gpt-6-luna")
 }
 
+// These verified models allow none, but their tool endpoint rules differ.
+func OpenAIHasOptionalGPT6Reasoning(modelID string) bool {
+	id := normalizeModelID(modelID)
+	return IsGPT6LunaModel(id) || strings.Contains(id, "gpt-6.1-terra")
+}
+
 // OpenAIOmitsSamplingParameters reports model families whose official API
 // contract requires service defaults instead of temperature/top_p.
 func OpenAIOmitsSamplingParameters(modelID string) bool {
-	return isGPT6AstraModel(normalizeModelID(modelID))
+	return isGPT6RequiredReasoningModel(normalizeModelID(modelID))
 }
 
 // ModelSupportsToolsForAdapter narrows capabilities that depend on the wire
@@ -695,7 +701,7 @@ func ModelSupportsToolsForAdapter(modelID, adapter string, declared bool) bool {
 	if IsGPT6LunaModel(id) {
 		return true
 	}
-	return !isGPT6RequiredReasoningModel(id) || normalizeAdapter(adapter) == "openai_responses"
+	return !(isGPT6RequiredReasoningModel(id) || strings.Contains(id, "gpt-6.1-terra")) || normalizeAdapter(adapter) == "openai_responses"
 }
 
 // ModelSupportsToolsForRequest applies request-level protocol constraints that

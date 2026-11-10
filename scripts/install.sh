@@ -116,6 +116,15 @@ if [ -z "${EFFCHAT_HOME:-}" ]; then
     TARGET_COMPOSE="$INSTALL_DIR/compose.yml"
 fi
 
+# Validate the prompted path too, before any directory or active-file writes.
+case "$INSTALL_DIR" in
+    ""|/|.|..|*/..|*/.) die "installation requires a dedicated directory" ;;
+esac
+[ ! -L "$INSTALL_DIR" ] || die "installation directory must not be a symlink"
+for target in "$TARGET_ENV" "$TARGET_COMPOSE"; do
+    [ ! -L "$target" ] || die "active deployment files must not be symlinks"
+done
+
 if [ -e "$INSTALL_DIR" ]; then
     [ -d "$INSTALL_DIR" ] || die "$INSTALL_DIR exists and is not a directory"
     if [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -132,6 +141,7 @@ if [ -e "$INSTALL_DIR" ]; then
             fi
         done
         [ -n "$OLD_COMPOSE" ] || die "no supported Compose file found; refusing to update an unknown directory"
+        [ ! -L "$OLD_COMPOSE" ] || die "Compose file must not be a symlink"
         grep -Eq 'effchat-(backend|web|py-extractor)|/effchat:' "$OLD_COMPOSE" \
             || die "Compose file is not a recognized EffChat deployment"
 
@@ -158,9 +168,16 @@ case "$WEB_PORT" in
 esac
 [ "$WEB_PORT" -ge 1 ] && [ "$WEB_PORT" -le 65535 ] || die "Web port must be a number between 1 and 65535"
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/effchat-install.XXXXXX")"
-cleanup() { rm -rf "$tmp_dir"; }
+lock_dir="$INSTALL_DIR/.effchat-install.lock"
+mkdir "$lock_dir" 2>/dev/null || die "another install may be running; inspect $lock_dir before retrying"
+tmp_dir=""
+cleanup() {
+    [ -z "$tmp_dir" ] || rm -rf "$tmp_dir"
+    rmdir "$lock_dir"
+}
 trap cleanup EXIT
+tmp_dir="$(mktemp -d "$INSTALL_DIR/.effchat-install.XXXXXX")"
+tmp_dir="$(cd "$tmp_dir" && pwd -P)"
 
 archive="$tmp_dir/effchat.tar.gz"
 curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
@@ -170,40 +187,26 @@ source_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d -name 'EffChat-*' 
 [ -n "$source_dir" ] || die "release archive did not contain an EffChat source directory"
 [ -f "$source_dir/docker-compose.registry.yml" ] || die "release archive is missing docker-compose.registry.yml"
 
+# Build and validate in private staging. Relative DATA_DIR mounts must continue
+# to resolve against INSTALL_DIR, never against this temporary config directory.
+ACTIVE_ENV="$TARGET_ENV"
+ACTIVE_COMPOSE="$TARGET_COMPOSE"
+TARGET_ENV="$tmp_dir/.env"
+TARGET_COMPOSE="$tmp_dir/compose.yml"
 if [ "$MODE" = "update" ]; then
-    mkdir -p "$INSTALL_DIR/deployment-backups"
-    backup_dir="$(mktemp -d "$INSTALL_DIR/deployment-backups/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
-    cp -p "$OLD_COMPOSE" "$backup_dir/$(basename "$OLD_COMPOSE")"
-    cp -p "$OLD_ENV" "$backup_dir/$(basename "$OLD_ENV")"
-    if [ "$OLD_ENV" != "$TARGET_ENV" ]; then
-        cp -p "$OLD_ENV" "$TARGET_ENV"
-    fi
-    chmod 600 "$TARGET_ENV"
-
-    if [ -d "$INSTALL_DIR/migrations" ] && [ ! -L "$INSTALL_DIR/migrations" ]; then
-        mv "$INSTALL_DIR/migrations" "$backup_dir/migrations"
-    fi
-    if [ -d "$INSTALL_DIR/backend/migrations" ] && [ ! -L "$INSTALL_DIR/backend/migrations" ]; then
-        mv "$INSTALL_DIR/backend/migrations" "$backup_dir/backend-migrations"
-    fi
-    if [ "$OLD_ENV" != "$TARGET_ENV" ] && [ "$(dirname "$OLD_ENV")" = "$INSTALL_DIR" ]; then
-        mv "$OLD_ENV" "$backup_dir/active-$(basename "$OLD_ENV")"
-    fi
-    if [ "$OLD_COMPOSE" != "$TARGET_COMPOSE" ] && [ "$(dirname "$OLD_COMPOSE")" = "$INSTALL_DIR" ]; then
-        mv "$OLD_COMPOSE" "$backup_dir/active-$(basename "$OLD_COMPOSE")"
-    fi
+    cp -p "$OLD_ENV" "$TARGET_ENV"
 else
     : > "$TARGET_ENV"
-    chmod 600 "$TARGET_ENV"
 fi
-
-compose_tmp="$TARGET_COMPOSE.effchat-new"
-cp "$source_dir/docker-compose.registry.yml" "$compose_tmp"
-mv "$compose_tmp" "$TARGET_COMPOSE"
+chmod 600 "$TARGET_ENV"
+cp "$source_dir/docker-compose.registry.yml" "$TARGET_COMPOSE"
 
 compose_project="$(env_value COMPOSE_PROJECT_NAME "$TARGET_ENV" || true)"
 set_env_value "$TARGET_ENV" COMPOSE_PROJECT_NAME "${compose_project:-effchat}"
 data_dir="${EFFCHAT_DATA_DIR:-$(env_value DATA_DIR "$TARGET_ENV" || true)}"
+if [ "$MODE" = update ] && [ -z "$data_dir" ]; then
+    die "existing DATA_DIR is unknown; set its current path in the active environment before updating"
+fi
 set_env_value "$TARGET_ENV" DATA_DIR "${data_dir:-./data}"
 set_env_value "$TARGET_ENV" WEB_PORT "$WEB_PORT"
 set_env_value "$TARGET_ENV" BACKEND_PORT "${EFFCHAT_BACKEND_PORT:-$(env_value BACKEND_PORT "$TARGET_ENV" || true)}"
@@ -236,6 +239,9 @@ if [ "$database_mode" = bundled ]; then
     postgres_db="${EFFCHAT_DB_NAME:-$(env_value POSTGRES_DB "$TARGET_ENV" || true)}"
     postgres_db="${postgres_db:-effchat}"
     postgres_password="${EFFCHAT_DB_PASSWORD:-$(env_value POSTGRES_PASSWORD "$TARGET_ENV" || true)}"
+    if [ "$MODE" = update ] && [ -z "$postgres_password" ]; then
+        die "existing PostgreSQL password is required; refusing to generate a replacement"
+    fi
     postgres_password="${postgres_password:-$(random_hex)}"
 
     set_env_value "$TARGET_ENV" COMPOSE_PROFILES bundled-db
@@ -290,8 +296,28 @@ else
 fi
 
 jwt_secret="${EFFCHAT_JWT_SECRET:-$(env_value JWT_SECRET "$TARGET_ENV" || true)}"
+if [ "$MODE" = update ] && [ -z "$jwt_secret" ]; then
+    die "existing JWT_SECRET is required; refusing to generate a replacement"
+fi
 jwt_secret="${jwt_secret:-$(random_hex)}"
 set_env_value "$TARGET_ENV" JWT_SECRET "$jwt_secret"
+
+staged_compose=(docker compose --project-directory "$INSTALL_DIR" --env-file "$TARGET_ENV" -f "$TARGET_COMPOSE")
+"${staged_compose[@]}" config --quiet
+"${staged_compose[@]}" pull
+
+# Only publish after validation and pulling succeed. Backups are deployment
+# configuration, not database backups. Once up starts, migrations may commit;
+# never pretend that restoring an old .env alone would roll those changes back.
+backup_dir=""
+if [ "$MODE" = update ]; then
+    mkdir -p "$INSTALL_DIR/deployment-backups"
+    backup_dir="$(mktemp -d "$INSTALL_DIR/deployment-backups/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+    cp -p "$OLD_COMPOSE" "$backup_dir/$(basename "$OLD_COMPOSE")"
+    cp -p "$OLD_ENV" "$backup_dir/$(basename "$OLD_ENV")"
+fi
+mv "$TARGET_COMPOSE" "$ACTIVE_COMPOSE"
+mv "$TARGET_ENV" "$ACTIVE_ENV"
 
 if [ "$MODE" = update ]; then
     echo "Updating EffChat to ${VERSION}; existing settings and data are preserved."
@@ -300,11 +326,25 @@ else
 fi
 (
     cd "$INSTALL_DIR"
-    docker compose pull
-    docker compose up -d --wait
-)
+    docker compose --env-file .env -f compose.yml up -d --wait
+) || die "startup failed; inspect Compose logs and deployment-backups before retrying (no automatic database rollback)"
+
+if [ "$MODE" = update ]; then
+    for old in "$OLD_ENV" "$OLD_COMPOSE"; do
+        if [ "$old" != "$ACTIVE_ENV" ] && [ "$old" != "$ACTIVE_COMPOSE" ] && [ "$(dirname "$old")" = "$INSTALL_DIR" ]; then
+            mv "$old" "$backup_dir/active-$(basename "$old")"
+        fi
+    done
+    if [ -d "$INSTALL_DIR/migrations" ] && [ ! -L "$INSTALL_DIR/migrations" ]; then
+        mv "$INSTALL_DIR/migrations" "$backup_dir/migrations"
+    fi
+    if [ -d "$INSTALL_DIR/backend/migrations" ] && [ ! -L "$INSTALL_DIR/backend/migrations" ]; then
+        mv "$INSTALL_DIR/backend/migrations" "$backup_dir/backend-migrations"
+    fi
+fi
 
 echo
 echo "EffChat is ready: http://127.0.0.1:${WEB_PORT}"
 echo "Installation directory: $INSTALL_DIR"
-echo "Daily commands: cd $INSTALL_DIR && docker compose pull && docker compose up -d"
+echo "Daily commands: cd $INSTALL_DIR && docker compose ps && docker compose logs -f"
+echo "To upgrade to a new release, rerun the installer for this directory; compose pull alone keeps the pinned version."

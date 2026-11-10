@@ -68,6 +68,8 @@ EffChat 把 AI 工作台中真正常用的部分放在一起，同时保持个�
 curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/install.sh | bash
 ```
 
+**更新：** 先备份数据库和文件，再运行同一命令，选择原安装目录并确认更新。安装器先校验配置、拉取镜像，再替换活动文件。`.env` 固定了镜像版本，单独执行 `docker compose pull` 不会自动切到新版本。
+
 ### 使用已发布镜像的 Docker Compose
 
 适合服务器或家庭实验室。`web`、`backend`、`py-extractor` 和一次性 `migrate` 共用一个 EffChat 应用镜像，数据库使用官方 PostgreSQL 镜像。
@@ -76,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/huoguojun123/EffChat/main/scripts/i
 git clone https://github.com/huoguojun123/EffChat.git
 cd EffChat
 cp .env.docker.example .env.docker
-# 至少设置 POSTGRES_PASSWORD 和 JWT_SECRET
+# 设置 POSTGRES_PASSWORD、与之相同的 DB_PASSWORD，以及强 JWT_SECRET
 docker compose --env-file .env.docker -f docker-compose.registry.yml pull
 docker compose --env-file .env.docker -f docker-compose.registry.yml up -d
 ```
@@ -100,7 +102,7 @@ EffChat 自带应用和本地文档管线，但不内置模型额度或商业服
 
 - **模型：** 协议、Base URL、API Key、模型标识和能力。
 - **联网搜索：** Tavily、Brave、Exa、博查的自有 Key，或自部署的 SearXNG JSON 地址。
-- **网页提取：** Firecrawl、Jina Reader、Tavily Extract、Exa Extract，以及无需凭据的 Basic 兜底。
+- **网页提取：** 启用的 Firecrawl、Jina Reader、Tavily Extract、Exa Extract 按管理员保存顺序运行，取得首个有效正文即返回；无需凭据的 Basic 始终作为最后本地兜底。
 - **文档：** PDF、DOCX、PPTX、XLSX、CSV、Markdown、文本和图片默认走本地流程；MinerU OCR 可选。
 - **治理：** Tools、Skills、配额、用户组、文件限制、记忆容量、字体和用量。
 

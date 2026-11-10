@@ -29,20 +29,22 @@ effchat/
 
 再次对同一目录运行脚本并确认 `update` 即可升级。脚本识别当前 `.env + compose.yml`，也能把历史 `.env.docker`、三镜像 Compose 和宿主机 migration 布局收敛到同一结构；端口、项目名、未知配置、JWT、数据库凭据、数据路径和所有 data/storage/backups 保持不变。被替换的 Compose、环境入口和旧 migration 会进入带时间戳的 `deployment-backups/`。无法确认属于 EffChat 的目录会直接停止，不覆盖任意自定义部署。
 
-应用 migration 已嵌入统一镜像，部署目录不再需要活动 `migrations/`。更新不会执行 `docker compose down -v`，不会删除 PostgreSQL、storage 或备份。
+更新先在私有临时目录生成配置、校验 Compose 并拉取镜像，成功后才备份和替换活动入口；预检失败时原配置不变。相对数据路径仍以安装目录解析。缺失原 DATA_DIR、JWT 或专用数据库密码时会停止，不猜测路径或生成替代凭据。安装目录锁防止重复执行；异常断电留下锁时，先确认无安装进程再清理 `.effchat-install.lock`。
+
+应用 migration 已嵌入统一镜像，部署目录不再需要活动 `migrations/`。只有启动成功后才归档旧入口与 migration 文件。若启动失败，新配置和备份保留用于排查，不自动降级数据库。`deployment-backups/` 只是配置备份，不是数据库/文件备份；其中含私有环境凭据，不能公开。更新不会执行 `docker compose down -v`，不会删除 PostgreSQL、storage 或备份。
 
 安装完成后，模型渠道、API key、搜索服务和网页提取 provider 在管理员后台配置，不写入安装命令或公开文件。
 
-个人用户日常只需在安装目录执行：
+个人用户日常可在安装目录查看运行状态：
 
 ```bash
 docker compose ps
 docker compose logs -f
-docker compose pull
-docker compose up -d
 ```
 
-升级前请先按“备份与隔离恢复”完成备份；不要用 `docker compose down -v`。
+升级到新测试版时重新运行上方安装脚本，选择原目录并确认 `update`。`.env` 中固定了镜像版本，单独 `docker compose pull` 不会切换版本。需要指定版本时，将 `EFFCHAT_VERSION=vX.Y.Z-beta.N` 传给执行脚本的 `bash`，不要传给 `curl`。
+
+升级前备份数据库和受管文件；不要用 `docker compose down -v`。下文备份脚本适用于源码/受控导出布局，不能在只有 `.env + compose.yml` 的安装目录中直接运行；registry 部署须按自身运维方式保存一致的 PostgreSQL dump、storage 和私有配置。
 
 ## 标准 Docker Compose 部署
 

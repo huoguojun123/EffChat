@@ -66,6 +66,7 @@ gitleaks git .
 - [ ] 目标 tag 对应公开 `main` 上的已合并 commit。
 - [ ] 目标 commit 的 Backend、Frontend、Python extractor、PostgreSQL integration、Compose/container 与 Gitleaks check 均为 completed/success。
 - [ ] 应用版本、Git tag、build ref 和 changelog 一致。
+- [ ] `node scripts/check-release-version.mjs` 通过；安装脚本、registry Compose、提取器和 UI fallback 的版本与应用一致。
 - [ ] tag 尚未存在，不覆盖或移动旧 tag。
 - [ ] migration 已通过空库、升级库和重复执行验证。
 - [ ] 发布说明列出新增、修复、已知问题、迁移和回滚方式。
@@ -84,6 +85,7 @@ npm test
 npm run build
 
 cd ..
+node scripts/check-release-version.mjs
 scripts/test-postgres.sh
 docker compose --env-file .env.docker.example config
 scripts/check-image-licenses.sh effchat:local

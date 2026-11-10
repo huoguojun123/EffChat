@@ -7,6 +7,44 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.13] - 2026-11-10
+
+### Fixed
+
+- Preserve streamed tool metadata with Eino 0.9.23 and propagate Gemini
+  cancellation correctly when a stream ends inside a partial event.
+- Align verified Terra/Fable model candidates, reasoning defaults and sampling
+  restrictions without changing administrator-owned channel configuration.
+- Hand off new-turn reading anchors to stream following without competing
+  scroll controllers on desktop and mobile.
+- Validate installer configuration and pull images before replacing active
+  deployment files. Preserve existing data paths and secrets; keep startup
+  failure evidence instead of attempting an unsafe database rollback.
+- Align application, installer, registry Compose and fallback versions, and
+  check their consistency in CI and before publishing release images.
+
+### Security
+
+- Update Go networking dependencies for reachable HTML parser advisories and
+  patch the affected glob/minimatch build-tool chain.
+
+### Maintenance
+
+- Share classic/typed model usage recording, isolate MinerU HTTP transport,
+  and document lock order, replay ownership and stale-response fencing.
+- Clarify pinned-version upgrades and provider order in both READMEs.
+
+### Compatibility
+
+- No database migration, public API, deployment-topology or stored-data change;
+  the schema remains 054. Back up the database and files before upgrading.
+- Durable Kimi/xAI reasoning replay, usage field-presence/cache-write storage
+  and real-provider cache experiments remain follow-up work.
+- Four low-severity build-only audit findings remain in the unpatched
+  deepmerge dependency chain; production npm dependencies have no known
+  advisories at release review. This does not claim every provider or platform
+  has been tested with real credentials.
+
 ## [0.4.1-beta.12] - 2026-10-25
 
 ### Fixed

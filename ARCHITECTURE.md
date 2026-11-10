@@ -236,6 +236,7 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
   `[no cached value]`，共享公式和数组公式成员继续可搜索且不会与真正空 cell
   混淆。worksheet 结果仍复用共享 GFM serializer，Office archive 资源边界不变。
 - MinerU 由管理员后台配置 Token、Base URL 和并发限制；结果只读取 Markdown 文本。
+- Python 的 `app/mineru_transport.py` 只负责 MinerU JSON 请求、签名上传和有界 ZIP 下载；HTTP 路由、任务状态映射、PDF 检查、ZIP 正文读取与文本清理仍由 `app/main.py` 编排。同步远端 I/O 只在线程池执行，不能阻塞 ASGI 事件循环；签名上传不能附带 JSON API 的 Authorization/Content-Type。既有超时、上限和错误分类保持不变，不引入另一套 OCR 状态机。
 - 暂存附件抽屉通过 Radix Dialog Portal 脱离聊天 composer 的 stacking context；模态层统一拥有 overlay、焦点约束、Escape 关闭和安全区，关闭后焦点返回实际触发入口。上传队列、附件选择与发送协议仍由原有 ChatInput 状态负责。
 - 上传大小、会话文件数、MIME allowlist、附件提取开关、timeout 和输出上限共用 typed policy reader。长期安装缺少较新的配置行时采用公开配置 schema 的权威默认值并建立可信快照；查询失败或非法存储值不会被误判为缺失。已成功读取的严格值在暂时故障中继续生效并标记 `policy_degraded`；冷启动无可信值时上传/处理入口返回稳定 503，不恢复调用方宽默认。空 allowlist 和空元素在管理员写入边界直接拒绝。
 - `attachment_extract_enabled=false` 同时约束新上传、OCR pending 和人工 retry：尚未提交的 pending 不读取原件、不占用 OCR quota、也不调用 inspect/`StartMinerUOCR`，而是保留状态并退避；人工 retry 在改变数据库状态前返回 `attachment_extract_disabled`。已经提交给远端的 task 属于不可撤回边界，仍可 poll 并在可信输出上限下收尾，但不会重新提交。

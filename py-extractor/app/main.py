@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import http.client
 import importlib
 import io
-import json
 import logging
 import os
 import tempfile
@@ -13,15 +11,12 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from urllib import error as urlerror
-from urllib.parse import urlsplit
-from urllib import request as urlrequest
 
 import pdfplumber
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from app import docx_content, markdown_table, pptx_content, resource_limits, xlsx_content
+from app import docx_content, markdown_table, mineru_transport, pptx_content, resource_limits, xlsx_content
 
 
 app = FastAPI(title="EffChat Extractor", version="0.4.1-beta.11")
@@ -31,9 +26,6 @@ MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTOR_MAX_UPLOAD_BYTES", str(25 * 1024 * 1
 MAX_OUTPUT_BYTES = int(os.getenv("EXTRACTOR_MAX_OUTPUT_BYTES", str(5 * 1024 * 1024)))
 MINERU_MAX_BYTES = 200 * 1024 * 1024
 MINERU_MAX_PAGES = 200
-MINERU_MAX_ZIP_BYTES = int(os.getenv("MINERU_MAX_ZIP_BYTES", str(100 * 1024 * 1024)))
-MINERU_UPLOAD_TIMEOUT_SECONDS = int(os.getenv("MINERU_UPLOAD_TIMEOUT_SECONDS", "300"))
-MINERU_DEFAULT_BASE_URL = "https://mineru.net"
 LOCAL_PARSE_CONCURRENCY = 2
 LOCAL_PARSE_QUEUE_TIMEOUT_SECONDS = 5.0
 LOCAL_PARSE_SLOTS = asyncio.Semaphore(LOCAL_PARSE_CONCURRENCY)
@@ -186,7 +178,7 @@ async def run_local_parser(
 async def start_mineru_ocr(
     file: UploadFile = File(...),
     filename: str = Form(default=""),
-    base_url: str = Form(default=MINERU_DEFAULT_BASE_URL),
+    base_url: str = Form(default=mineru_transport.MINERU_DEFAULT_BASE_URL),
     api_key: str = Form(default=""),
 ) -> dict[str, object]:
     started_at = time.perf_counter()
@@ -214,7 +206,7 @@ def start_mineru_ocr_bytes(
         logger.warning("[py-extractor] mineru_rejected filename=%s reason=page_limit pages=%d limit=%d", safe_name, page_count, MINERU_MAX_PAGES)
         raise HTTPException(status_code=400, detail=f"ocr_page_limit_exceeded: max {MINERU_MAX_PAGES} pages")
 
-    root = normalize_mineru_base_url(base_url)
+    root = mineru_transport.normalize_base_url(base_url)
     logger.info("[py-extractor] mineru_submit_request filename=%s pages=%d endpoint=/api/v4/file-urls/batch", safe_name, page_count)
     payload = {
         "files": [{"name": safe_name, "is_ocr": True}],
@@ -223,7 +215,7 @@ def start_mineru_ocr_bytes(
         "enable_table": True,
         "enable_formula": True,
     }
-    submit = mineru_json_request("POST", f"{root}/api/v4/file-urls/batch", payload, token)
+    submit = mineru_transport.json_request("POST", f"{root}/api/v4/file-urls/batch", payload, token)
     body = submit.get("data") if isinstance(submit.get("data"), dict) else {}
     task_id = str(body.get("batch_id") or "").strip()
     file_urls = body.get("file_urls") if isinstance(body.get("file_urls"), list) else []
@@ -232,7 +224,7 @@ def start_mineru_ocr_bytes(
         logger.warning("[py-extractor] mineru_submit_invalid filename=%s pages=%d duration_ms=%d", safe_name, page_count, elapsed_ms(started_at))
         raise HTTPException(status_code=502, detail="mineru returned no task upload url")
     logger.info("[py-extractor] mineru_upload_start filename=%s task=%s bytes=%d", safe_name, task_id, len(data))
-    mineru_put_file(file_url, data)
+    mineru_transport.put_file(file_url, data)
     logger.info("[py-extractor] mineru_start_success filename=%s task=%s pages=%d duration_ms=%d", safe_name, task_id, page_count, elapsed_ms(started_at))
     return {"task_id": task_id, "state": "ocr_running", "page_count": page_count}
 
@@ -240,11 +232,11 @@ def start_mineru_ocr_bytes(
 @app.get("/ocr/mineru/tasks/{task_id}")
 async def get_mineru_ocr_task(
     task_id: str,
-    base_url: str = Query(default=MINERU_DEFAULT_BASE_URL),
+    base_url: str = Query(default=mineru_transport.MINERU_DEFAULT_BASE_URL),
     mineru_token: str = Header(default="", alias="X-MinerU-Token"),
 ) -> dict[str, object]:
     started_at = time.perf_counter()
-    root = normalize_mineru_base_url(base_url)
+    root = mineru_transport.normalize_base_url(base_url)
     token = mineru_token.strip()
     if not token:
         raise HTTPException(status_code=400, detail="mineru_api_key_required")
@@ -258,7 +250,7 @@ def get_mineru_ocr_task_blocking(
     started_at: float,
 ) -> dict[str, object]:
     logger.info("[py-extractor] mineru_poll_request task=%s", task_id)
-    result = mineru_json_request("GET", f"{root}/api/v4/extract-results/batch/{task_id}", None, token)
+    result = mineru_transport.json_request("GET", f"{root}/api/v4/extract-results/batch/{task_id}", None, token)
     body = result.get("data") if isinstance(result.get("data"), dict) else {}
     items = body.get("extract_result") if isinstance(body.get("extract_result"), list) else []
     item = items[0] if items and isinstance(items[0], dict) else {}
@@ -302,11 +294,6 @@ def elapsed_ms(started_at: float) -> int:
     return int((time.perf_counter() - started_at) * 1000)
 
 
-def normalize_mineru_base_url(value: str) -> str:
-    base = (value or MINERU_DEFAULT_BASE_URL).strip().rstrip("/")
-    return base or MINERU_DEFAULT_BASE_URL
-
-
 def count_pdf_pages(data: bytes) -> int:
     try:
         with pdfplumber.open(io.BytesIO(data)) as pdf:
@@ -315,79 +302,9 @@ def count_pdf_pages(data: bytes) -> int:
         raise HTTPException(status_code=422, detail=f"ocr_page_count_failed: {exc}") from exc
 
 
-def mineru_json_request(method: str, url: str, payload: dict[str, object] | None, api_key: str) -> dict[str, object]:
-    started_at = time.perf_counter()
-    body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urlrequest.Request(url, data=body, method=method)
-    req.add_header("Accept", "application/json")
-    req.add_header("Authorization", f"Bearer {api_key.strip()}")
-    if body is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urlrequest.urlopen(req, timeout=30) as resp:
-            raw = resp.read(2 * 1024 * 1024)
-    except urlerror.HTTPError as exc:
-        raw = exc.read(4096).decode("utf-8", errors="ignore")
-        logger.warning("[py-extractor] mineru_http_error method=%s status=%d duration_ms=%d", method, exc.code, elapsed_ms(started_at))
-        raise HTTPException(status_code=exc.code, detail=f"mineru upstream error: {raw}") from exc
-    except urlerror.URLError as exc:
-        logger.warning("[py-extractor] mineru_http_failed method=%s reason=%s duration_ms=%d", method, exc.reason, elapsed_ms(started_at))
-        raise HTTPException(status_code=502, detail=f"mineru request failed: {exc.reason}") from exc
-    try:
-        parsed = json.loads(raw.decode("utf-8"))
-    except Exception as exc:
-        logger.warning("[py-extractor] mineru_invalid_json method=%s duration_ms=%d", method, elapsed_ms(started_at))
-        raise HTTPException(status_code=502, detail="mineru returned invalid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=502, detail="mineru returned invalid response")
-    if parsed.get("code") not in (0, "0"):
-        logger.warning("[py-extractor] mineru_rejected method=%s code=%s duration_ms=%d", method, parsed.get("code"), elapsed_ms(started_at))
-        raise HTTPException(status_code=502, detail=f"mineru rejected request: {parsed.get('msg') or parsed.get('code')}")
-    logger.info("[py-extractor] mineru_http_success method=%s bytes=%d duration_ms=%d", method, len(raw), elapsed_ms(started_at))
-    return parsed
-
-
-def mineru_put_file(file_url: str, data: bytes) -> None:
-    started_at = time.perf_counter()
-    parsed = urlsplit(file_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=502, detail="mineru upload url is invalid")
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-    conn_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    conn = conn_cls(parsed.netloc, timeout=MINERU_UPLOAD_TIMEOUT_SECONDS)
-    try:
-        conn.request("PUT", path, body=data, headers={"Content-Length": str(len(data))})
-        resp = conn.getresponse()
-        raw = resp.read(4096).decode("utf-8", errors="ignore")
-        if resp.status < 200 or resp.status >= 300:
-            logger.warning("[py-extractor] mineru_upload_http_error host=%s status=%d duration_ms=%d", parsed.netloc, resp.status, elapsed_ms(started_at))
-            raise HTTPException(status_code=resp.status, detail=f"mineru upload failed: {raw}")
-    except HTTPException:
-        raise
-    except OSError as exc:
-        logger.warning("[py-extractor] mineru_upload_failed host=%s reason=%s duration_ms=%d", parsed.netloc, exc, elapsed_ms(started_at))
-        raise HTTPException(status_code=502, detail=f"mineru upload failed: {exc}") from exc
-    finally:
-        conn.close()
-    logger.info("[py-extractor] mineru_upload_success bytes=%d duration_ms=%d", len(data), elapsed_ms(started_at))
-
-
 def mineru_download_full_md(full_zip_url: str) -> str:
     started_at = time.perf_counter()
-    try:
-        with urlrequest.urlopen(full_zip_url, timeout=60) as resp:
-            data = resp.read(MINERU_MAX_ZIP_BYTES + 1)
-    except urlerror.HTTPError as exc:
-        logger.warning("[py-extractor] mineru_markdown_http_error status=%d duration_ms=%d", exc.code, elapsed_ms(started_at))
-        raise HTTPException(status_code=exc.code, detail="mineru markdown download failed") from exc
-    except urlerror.URLError as exc:
-        logger.warning("[py-extractor] mineru_markdown_failed reason=%s duration_ms=%d", exc.reason, elapsed_ms(started_at))
-        raise HTTPException(status_code=502, detail=f"mineru markdown download failed: {exc.reason}") from exc
-    if len(data) > MINERU_MAX_ZIP_BYTES:
-        logger.warning("[py-extractor] mineru_zip_too_large bytes=%d limit=%d duration_ms=%d", len(data), MINERU_MAX_ZIP_BYTES, elapsed_ms(started_at))
-        raise HTTPException(status_code=413, detail=f"mineru result zip too large (max {MINERU_MAX_ZIP_BYTES} bytes)")
+    data = mineru_transport.download_result_zip(full_zip_url)
     text = extract_full_md_from_zip(data)
     if not text.strip():
         logger.warning("[py-extractor] mineru_markdown_empty duration_ms=%d", elapsed_ms(started_at))

@@ -21,7 +21,7 @@ require (
 	github.com/openai/openai-go/v3 v3.50.0
 	github.com/townsendmerino/aikit v1.16.0
 	// Pin the upstream security fixes until a tagged release includes them.
-	github.com/xuri/excelize/v2 v2.11.1-0.20261003002531-6258dcebc4e2
+	github.com/xuri/excelize/v2 v2.11.1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.45.0
 	golang.org/x/net v0.62.0
@@ -99,7 +99,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
-	github.com/richardlehane/mscfb v1.0.8 // indirect
+	github.com/richardlehane/mscfb v1.0.9 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/slongfield/pyfmt v0.0.0-20220222012616-ea85ff4c361f // indirect
@@ -111,7 +111,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
-	github.com/xuri/efp v0.0.2 // indirect
+	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	github.com/yargevad/filepathx v1.0.0 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect

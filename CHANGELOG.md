@@ -29,6 +29,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parser tracebacks from file/OCR/extractor operation logs while retaining
   controlled diagnostics and the existing public error protocol.
 
+### Security
+
+- Build with Go 1.26.11 to fix GO-2026-6859 in the HTTP standard library;
+  pin the matching multi-platform builder image by digest.
+
 ### Compatibility
 
 - No database migration, configuration, model protocol or deployment-topology

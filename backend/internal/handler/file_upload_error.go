@@ -27,7 +27,7 @@ func writeUploadSessionLookupError(c *gin.Context, err error) {
 		writePublicError(c, http.StatusNotFound, "session_not_found", "session not found", false)
 		return
 	}
-	writeServerError(c, http.StatusInternalServerError, "session_load_failed", "failed to load session", err)
+	writeFileServerError(c, http.StatusInternalServerError, "session_load_failed", "failed to load session", err)
 }
 
 func writeUploadImageValidationError(c *gin.Context, err error) {
@@ -43,7 +43,7 @@ func writeUploadImageValidationError(c *gin.Context, err error) {
 
 // writeAttachmentExtractionError maps extractor-owned failure classes to the
 // public upload contract. Raw parser, path, network, and upstream response text
-// stays in request-ID logs and is never used as an API message.
+// is excluded from both request-ID logs and API messages.
 func writeAttachmentExtractionError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, extractor.ErrUnsupported):
@@ -55,7 +55,7 @@ func writeAttachmentExtractionError(c *gin.Context, err error) {
 	case errors.Is(err, extractor.ErrUnprocessable):
 		writePublicError(c, http.StatusUnprocessableEntity, "attachment_extract_failed", "文件解析失败，未保存附件，请重试或换一个可提取文字的文件", false)
 	default:
-		writeServerError(c, http.StatusServiceUnavailable, "attachment_extractor_unavailable", "文件解析服务暂不可用，请稍后重试", err)
+		writeFileServerError(c, http.StatusServiceUnavailable, "attachment_extractor_unavailable", "文件解析服务暂不可用，请稍后重试", err)
 	}
 }
 
@@ -66,12 +66,12 @@ func writeOCRQueueError(c *gin.Context, err error) {
 	case errors.Is(err, repository.ErrNotFound):
 		writeUploadSessionLookupError(c, err)
 	case errors.Is(err, errOCRConfigLoad):
-		writeServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
+		writeFileServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
 	case errors.Is(err, errOCRUploadBufferWrite):
-		writeServerError(c, http.StatusInternalServerError, "ocr_upload_buffer_write_failed", "failed to prepare OCR upload", err)
+		writeFileServerError(c, http.StatusInternalServerError, "ocr_upload_buffer_write_failed", "failed to prepare OCR upload", err)
 	case errors.Is(err, errOCRMetadataCreate):
-		writeServerError(c, http.StatusInternalServerError, "ocr_metadata_create_failed", "failed to save OCR file metadata", err)
+		writeFileServerError(c, http.StatusInternalServerError, "ocr_metadata_create_failed", "failed to save OCR file metadata", err)
 	default:
-		writeServerError(c, http.StatusInternalServerError, "ocr_queue_failed", "failed to queue OCR extraction", err)
+		writeFileServerError(c, http.StatusInternalServerError, "ocr_queue_failed", "failed to queue OCR extraction", err)
 	}
 }

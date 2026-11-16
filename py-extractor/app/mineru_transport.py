@@ -47,7 +47,7 @@ def json_request(method: str, url: str, payload: dict[str, object] | None, api_k
         logger.warning("[py-extractor] mineru_http_error method=%s status=%d duration_ms=%d", method, exc.code, elapsed_ms(started_at))
         raise HTTPException(status_code=exc.code, detail=f"mineru upstream error: {raw}") from exc
     except urlerror.URLError as exc:
-        logger.warning("[py-extractor] mineru_http_failed method=%s reason=%s duration_ms=%d", method, exc.reason, elapsed_ms(started_at))
+        logger.warning("[py-extractor] mineru_http_failed method=%s error_type=%s duration_ms=%d", method, type(exc).__name__, elapsed_ms(started_at))
         raise HTTPException(status_code=502, detail=f"mineru request failed: {exc.reason}") from exc
     try:
         parsed = json.loads(raw.decode("utf-8"))
@@ -57,7 +57,7 @@ def json_request(method: str, url: str, payload: dict[str, object] | None, api_k
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=502, detail="mineru returned invalid response")
     if parsed.get("code") not in (0, "0"):
-        logger.warning("[py-extractor] mineru_rejected method=%s code=%s duration_ms=%d", method, parsed.get("code"), elapsed_ms(started_at))
+        logger.warning("[py-extractor] mineru_rejected method=%s duration_ms=%d", method, elapsed_ms(started_at))
         raise HTTPException(status_code=502, detail=f"mineru rejected request: {parsed.get('msg') or parsed.get('code')}")
     logger.info("[py-extractor] mineru_http_success method=%s bytes=%d duration_ms=%d", method, len(raw), elapsed_ms(started_at))
     return parsed
@@ -80,12 +80,12 @@ def put_file(file_url: str, data: bytes) -> None:
         resp = conn.getresponse()
         raw = resp.read(4096).decode("utf-8", errors="ignore")
         if resp.status < 200 or resp.status >= 300:
-            logger.warning("[py-extractor] mineru_upload_http_error host=%s status=%d duration_ms=%d", parsed.netloc, resp.status, elapsed_ms(started_at))
+            logger.warning("[py-extractor] mineru_upload_http_error status=%d duration_ms=%d", resp.status, elapsed_ms(started_at))
             raise HTTPException(status_code=resp.status, detail=f"mineru upload failed: {raw}")
     except HTTPException:
         raise
     except OSError as exc:
-        logger.warning("[py-extractor] mineru_upload_failed host=%s reason=%s duration_ms=%d", parsed.netloc, exc, elapsed_ms(started_at))
+        logger.warning("[py-extractor] mineru_upload_failed error_type=%s duration_ms=%d", type(exc).__name__, elapsed_ms(started_at))
         raise HTTPException(status_code=502, detail=f"mineru upload failed: {exc}") from exc
     finally:
         conn.close()
@@ -101,7 +101,7 @@ def download_result_zip(full_zip_url: str) -> bytes:
         logger.warning("[py-extractor] mineru_markdown_http_error status=%d duration_ms=%d", exc.code, elapsed_ms(started_at))
         raise HTTPException(status_code=exc.code, detail="mineru markdown download failed") from exc
     except urlerror.URLError as exc:
-        logger.warning("[py-extractor] mineru_markdown_failed reason=%s duration_ms=%d", exc.reason, elapsed_ms(started_at))
+        logger.warning("[py-extractor] mineru_markdown_failed error_type=%s duration_ms=%d", type(exc).__name__, elapsed_ms(started_at))
         raise HTTPException(status_code=502, detail=f"mineru markdown download failed: {exc.reason}") from exc
     if len(data) > MINERU_MAX_ZIP_BYTES:
         logger.warning("[py-extractor] mineru_zip_too_large bytes=%d limit=%d duration_ms=%d", len(data), MINERU_MAX_ZIP_BYTES, elapsed_ms(started_at))

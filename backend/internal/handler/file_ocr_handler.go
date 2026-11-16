@@ -48,12 +48,12 @@ func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, op
 		if errors.Is(err, repository.ErrSessionFileLimitReached) || errors.Is(err, repository.ErrNotFound) {
 			return nil, err
 		}
-		log.Printf("[file_ocr] metadata_create_failed user=%d session=%d file=%q err=%v", userID, sessionID, safeName, err)
+		log.Printf("[file_ocr] metadata_create_failed user=%d session=%d error_type=%T", userID, sessionID, err)
 		return nil, fmt.Errorf("%w: %v", errOCRMetadataCreate, err)
 	}
 
 	opts.ocrRecovery.Wake()
-	log.Printf("[file_ocr] queued user=%d session=%d file_id=%d file=%q", userID, sessionID, f.ID, safeName)
+	log.Printf("[file_ocr] queued user=%d session=%d file_id=%d", userID, sessionID, f.ID)
 	return f, nil
 }
 

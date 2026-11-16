@@ -786,7 +786,9 @@ func attachmentIDsFromMessagePayload(data map[string]interface{}) ([]int64, erro
 }
 
 func (s *MessageService) ListForAgentThroughMessageContext(ctx context.Context, sessionID, userID, messageID int64) ([]*model.Message, error) {
-	messages, err := s.ListForAgentContext(ctx, sessionID, userID)
+	// Memory preparation and protected compaction must retain the same user
+	// turn, including when its previous assistant is an ephemeral failure.
+	messages, err := s.listForAgentContext(ctx, sessionID, userID, messageID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -797,7 +799,7 @@ func (s *MessageService) ListForCompactionBeforeMessageContext(ctx context.Conte
 	if preserveMessageID <= 0 {
 		return nil, ErrRetryTargetStale
 	}
-	messages, err := s.ListForAgentContext(ctx, sessionID, userID)
+	messages, err := s.listForAgentContext(ctx, sessionID, userID, preserveMessageID, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -61,6 +61,10 @@ func writeAttachmentExtractionError(c *gin.Context, err error) {
 
 func writeOCRQueueError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, repository.ErrSessionFileLimitReached):
+		writePublicError(c, http.StatusConflict, "session_file_limit_reached", "session has too many active files", false)
+	case errors.Is(err, repository.ErrNotFound):
+		writeUploadSessionLookupError(c, err)
 	case errors.Is(err, errOCRConfigLoad):
 		writeServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
 	case errors.Is(err, errOCRUploadBufferWrite):

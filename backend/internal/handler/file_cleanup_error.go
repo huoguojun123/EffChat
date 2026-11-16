@@ -39,7 +39,7 @@ func parseCleanupBoundedPositiveInt(c *gin.Context, key string, fallback, min, m
 // prevents immediate retry and therefore needs its own observable code.
 func releaseOrCleanupFailure(c *gin.Context, fileRepo *repository.FileRepository, fileID int64, token, fallbackCode, fallbackMessage string) fileCleanupFailure {
 	if err := fileRepo.ReleaseFileStorageCleanupClaim(c.Request.Context(), fileID, token); err != nil {
-		logger.Error("failed to release file cleanup claim: file=%d err=%v", fileID, err)
+		logger.Error("failed to release file cleanup claim: file=%d error_type=%T", fileID, err)
 		return newFileCleanupFailure(fileID, "file_cleanup_claim_release_failed", "failed to release file cleanup claim")
 	}
 	return newFileCleanupFailure(fileID, fallbackCode, fallbackMessage)

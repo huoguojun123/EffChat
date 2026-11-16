@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,11 +102,17 @@ func TestUploadRepositoryFailureUsesRetryableRequestIDContract(t *testing.T) {
 }
 
 func TestUploadMetadataFailureRemovesExtractedSidecar(t *testing.T) {
-	db := setupHandlerTestDB(t)
-	defer db.Close()
-	const userID int64 = 9_999_999_997
-	const sessionID int64 = 9_999_999_998
-	extractedDir := filepath.Join(filepolicy.AttachmentExtractedRoot, "9999999997")
+	env := setupTestEnv(t)
+	db, userID := env.db, env.userID
+	sessionID := createUploadTestSession(t, env)
+	// Fail the actual INSERT after owner/capacity checks, rather than relying
+	// on an invalid session's foreign key to simulate a metadata outage.
+	if _, err := db.Exec(`CREATE FUNCTION reject_file_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'synthetic metadata failure'; END $$;
+		CREATE TRIGGER reject_file_fixture BEFORE INSERT ON files FOR EACH ROW EXECUTE FUNCTION reject_file_fixture()`); err != nil {
+		t.Fatal(err)
+	}
+	extractedDir := filepath.Join(filepolicy.AttachmentExtractedRoot, fmt.Sprint(userID))
 	_ = os.RemoveAll(extractedDir)
 	t.Cleanup(func() { _ = os.RemoveAll(extractedDir) })
 

@@ -95,6 +95,27 @@ test("accepted retry replaces the failed answer in its original turn", async ({ 
   await expect(page.getByText("正在回复")).toHaveCount(0)
 })
 
+test("durable setup failure stays visible after a cold reload", async ({ page }) => {
+  const reason = "本轮消息上下文未完整就绪，请重试"
+  const history = [
+    message(1, "user", "Synthetic accepted input", { run_id: "setup-failure" }),
+    message(2, "assistant", reason, { ephemeral_error: true, error_code: "conversation_context_incomplete", run_id: "setup-failure" }),
+  ]
+  await installRoutes(page, history)
+  await page.goto("/chat/1")
+  await expect(page.getByText(reason, { exact: true })).toBeVisible()
+  await page.reload()
+  await expect(page.getByText(reason, { exact: true })).toBeVisible()
+  await expect(page.getByTestId("message-item")).toHaveCount(2)
+  await expect(page.getByRole("button", { name: "重试", exact: true })).toBeVisible()
+  const otherClient = await page.context().newPage()
+  await installRoutes(otherClient, history)
+  await otherClient.goto("/chat/1")
+  await expect(otherClient.getByText(reason, { exact: true })).toBeVisible()
+  await expect(otherClient.getByTestId("message-item")).toHaveCount(2)
+  await otherClient.close()
+})
+
 test("model retry feedback counts down before the next attempt", async ({ page }) => {
   await installRoutes(page, [])
   await page.addInitScript(() => {

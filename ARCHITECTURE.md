@@ -6,7 +6,7 @@ EffChat 是一个面向 2-5 人自托管的小团队 agent workbench。当前主
 
 ## 技术栈
 
-- Backend：Go 1.26.10、Gin、Eino v0.9.23、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。流式合并保留后到达的工具签名，并容忍 nullable 元数据；`modelstream` 回归覆盖这两个上游补丁。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
+- Backend：Go 1.26.11、Gin、Eino v0.9.23、eino-ext OpenAI Chat/Responses、Claude、Gemini adapters。流式合并保留后到达的工具签名，并容忍 nullable 元数据；`modelstream` 回归覆盖这两个上游补丁。Claude adapter v0.1.20 通过本地 replace 保留受控修正；范围、上游复核与移除条件见 [UPSTREAM.md](backend/third_party/eino-claude/UPSTREAM.md)。
 - Gemini adapter v0.1.37 / Google GenAI v1.70.0 保留半个 SSE 帧中发生的 context cancellation，避免将用户停止误报成 JSON 解析故障；不启用新增的 FileID、Vertex labels 或任意请求字段接口。
 - Frontend：Vite、React 19、TypeScript、Tailwind CSS v4、Shadcn/Radix 基础组件、Zustand。
 - Database：PostgreSQL 17。
@@ -141,6 +141,12 @@ run admission 已发现 durable terminal，或 BeginExecution 已被另一 obser
 
 accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request ID、run ID 和 `retryable=true`，提示稍后恢复；既有 run replay 发生 scope/not-found 时保留同样关联字段并使用 `retryable=false`。内部 RunHub cause 只进入日志，不能进入 SSE；这两条旁路不取消 worker、不重放 provider，也不改变 durable terminal。
 
+准入后的模型上下文由 `MessageService.AcceptedAgentContext` 统一准备：以 admission 绑定的实际用户消息验证持久化原文、角色与附件引用，再进行受控附件清单/图片增强。合法投影不改变数据库原文，也不能绕过完整性保护。编辑重试保留旧目标作为幂等意图，但执行使用 replacement 用户消息 ID；重生成上下文在该用户轮次截止，不包含旧答案。此边界独立于 HTTP/SSE 与 provider 适配。
+
+失败轮次在普通模型历史中仍被过滤；但重试所需的保护压缩与记忆投影必须显式保留同一用户消息。摘要只包含该消息之前的历史，记忆投影包含受保护用户；旧目标仍拒绝，不能因错误过滤而误报当前重试目标失效。
+
+已受理、尚无持久化输出的 chat 若在执行前失败，默认终态存储复用消息终态事务保存 ephemeral 错误助手消息，并把 message ID 写入同一 durable event。刷新与另一客户端由普通历史接口显示同一错误，不依赖进程内 RunHub；重复提交复用终态，不额外生成错误消息。准入前失败、压缩任务和取消不创建这种助手错误，已有输出与回答选择语义保持原样。历史上只有 run 终态的旧失败记录不自动回填。
+
 每个用户 turn 的 answer attempts 都保留独立输出树；不论该 turn 后面是否已经产生新消息，用户都可在仍有可选择输出的 attempts 之间切换。选择只更新该 user message 的 selected attempt 与会话级 `answer_selection_revision`，后续 Agent、压缩和记忆上下文继续只读取 selected 输出，不复制消息或改写其他 turn。删除当前 attempt 会在同一 session row lock 事务中硬删除其 assistant/tool 输出；若删除的是 selected attempt，事务先选择相邻的可用 attempt 并推进 revision，每个 turn 至少保留一个可选择 attempt。无效 ID 为 400，会话或 attempt 缺失为 404，不可选择或只剩最后一个为 409，repository/transaction 故障为带 request ID 的 retryable 5xx；选择或 replacement 成功后复用单会话记忆重整。
 
 会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。
@@ -209,6 +215,8 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
 - 文件元数据在 `files` 表，解析文本保存在受管理的数据目录。
 - 单文件上传采用一个部署级可兑现上限：`PY_EXTRACTOR_MAX_UPLOAD_BYTES` 同时约束 web proxy、backend 和本地 extractor，Nginx 只额外预留 multipart framing。管理员的 `file_upload_max_size_mb` 是该硬顶以内的产品策略；历史过大值运行时收紧但不自动改写。MinerU 的 200 MB/200 页是其异步 OCR 上游约束，不扩大 EffChat 的上传承诺。
 - 受管附件是私有用户内容：`storage/attachments` 及其用户/月目录使用 `0700`，图片原件、解析文本和 OCR staging 文件使用 `0600`。backend 启动入口保留所有受管 storage 的既有 owner 归一化，但只递归收紧 attachments 的 mode，不改变 avatars、fonts 或 skills 的模式语义；API 会话/用户鉴权仍是读取边界，文件 mode 是宿主机防御纵深。
+- 会话文件数量的早期计数只用于快速拒绝；普通上传与 OCR 排队在最终 metadata 准入时共用会话行锁，在短事务内重新统计 staged/formal 并插入，同时确认会话仍有效且属于上传者。解析/物理写入不占数据库长事务；拒绝后清除本轮文件，OCR 仅在准入成功后唤醒，跨标签页或直接 API 并发不能越过剩余额度。
+- 文件上传、读取、清理、OCR recovery 和 Python 提取器日志不保存原始文件名、存储路径、签名 URL、凭据或上游错误正文；只保留稳定操作码、错误类型、受控 parser 标签、资源 ID、计数、状态和耗时。文件专用错误出口复用公共 request-ID 响应协议，但在进入日志前丢弃原始错误文本；正常提取与 OCR 请求仍使用原始业务名称，API 契约不变。Python parser 失败不打印包含异常参数的 traceback。
 - PDF、DOCX、XLSX 与 CSV 的表格共用一个 GFM serializer。cell 先转义用户 HTML，
   再按顺序保留反斜杠、转义 pipe，并把真实 CR/LF/CRLF 编码为安全的 `&#10;`；
   remark-gfm 因而维持原行列，当前 `remark-breaks` 将解码后的换行渲染为 `<br>`。

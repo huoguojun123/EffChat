@@ -150,7 +150,13 @@ func TestOCRRecoveryRunnerStaleGenerationCannotReplaceWinnerSidecar(t *testing.T
 
 func claimOCRRecoveryTestFile(t *testing.T, env *testEnv, fileID int64) *model.File {
 	t.Helper()
-	claimed, err := repository.NewFileRepository(env.db).ClaimRecoverableOCRTasks("mineru", time.Now(), time.Minute, 1)
+	// created_at comes from PostgreSQL. Use that same clock for this immediately
+	// due fixture; VM/host clock skew must not turn a policy test into a race.
+	var now time.Time
+	if err := env.db.QueryRow("SELECT clock_timestamp()").Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.NewFileRepository(env.db).ClaimRecoverableOCRTasks("mineru", now, time.Minute, 1)
 	if err != nil {
 		t.Fatalf("claim OCR recovery test file: %v", err)
 	}

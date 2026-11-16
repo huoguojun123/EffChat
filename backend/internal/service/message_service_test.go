@@ -400,6 +400,38 @@ func TestMessageServiceRetryAndCompactionContextsPreserveRetriedUserTurn(t *test
 	if len(memoryMessages) != 3 || memoryMessages[0].ID != firstUser.ID || memoryMessages[1].ID != firstAssistant.ID || memoryMessages[2].ID != secondUser.ID {
 		t.Fatalf("protected memory context ids = %#v, want earlier turn plus retried user", messageIDs(memoryMessages))
 	}
+
+	// A normal upstream failure is filtered from ordinary history, but its user
+	// turn must survive both inputs of the protected compaction retry path.
+	if _, err := db.Exec(`UPDATE messages SET message_data = '{"role":"assistant","content":"failure","metadata":{"ephemeral_error":true}}'::jsonb WHERE id=$1`, secondAssistant.ID); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("failed_compaction_input", func(t *testing.T) {
+		got, err := svc.ListForCompactionBeforeMessageContext(context.Background(), session.ID, user.ID, secondUser.ID)
+		if err != nil || len(got) != 2 || got[0].ID != firstUser.ID || got[1].ID != firstAssistant.ID {
+			t.Fatalf("failed-turn compaction ids=%v err=%v", messageIDs(got), err)
+		}
+	})
+	t.Run("failed_memory_input", func(t *testing.T) {
+		got, err := svc.ListForAgentThroughMessageContext(context.Background(), session.ID, user.ID, secondUser.ID)
+		if err != nil || len(got) != 3 || got[2].ID != secondUser.ID {
+			t.Fatalf("failed-turn memory ids=%v err=%v", messageIDs(got), err)
+		}
+	})
+	ordinary, err := svc.ListForAgentContext(context.Background(), session.ID, user.ID)
+	if err != nil || len(ordinary) != 2 {
+		t.Fatalf("ordinary history must still omit failed turn: ids=%v err=%v", messageIDs(ordinary), err)
+	}
+	if err := svc.PersistCompressionCheckpoint(session.ID, user.ID, []byte(`{"role":"user","content":"prior history"}`), secondUser.ID, CompactionKindAuto); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := svc.ListForRetryAgentContext(context.Background(), session.ID, user.ID, secondAssistant.ID)
+	if err != nil || len(retried) != 2 || !isCompactionSummaryMessage(retried[0]) || retried[1].ID != secondUser.ID {
+		t.Fatalf("retry after checkpoint ids=%v err=%v", messageIDs(retried), err)
+	}
+	if _, err := svc.ListForCompactionBeforeMessageContext(context.Background(), session.ID, user.ID, firstUser.ID); !errors.Is(err, ErrRetryTargetStale) {
+		t.Fatalf("old protected target error=%v", err)
+	}
 }
 
 func TestProtectedCompactionKeepsSummaryBeforeRetriedTurn(t *testing.T) {

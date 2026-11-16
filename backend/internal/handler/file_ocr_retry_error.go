@@ -16,7 +16,7 @@ func writeOCRRetryMutationError(c *gin.Context, err error) {
 	case errors.Is(err, repository.ErrOCRSourceUnavailable):
 		writeOCRSourceUnavailable(c)
 	default:
-		writeServerError(c, http.StatusInternalServerError, "ocr_retry_failed", "failed to restart OCR", err)
+		writeFileServerError(c, http.StatusInternalServerError, "ocr_retry_failed", "failed to restart OCR", err)
 	}
 }
 

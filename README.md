@@ -29,7 +29,7 @@ EffChat keeps the useful parts of an AI workspace together without turning a per
 ## Highlights
 
 - 💬 **Durable conversations** — streaming runs continue after a browser disconnect and recover after refresh.
-- 🔁 **Answer versions** — compare, select, retry, and remove multiple answers from the same turn.
+- 🔁 **Answer versions** — compare, select, retry, and remove answers, or edit the latest turn while keeping its complete text and attachments together.
 - 🧠 **Scoped memory** — structured memory belongs to a conversation, stays visible, and can be revised or undone.
 - 🗜️ **Context compaction** — reduce what the model sees without deleting the conversation history you can read.
 - 📎 **Document understanding** — extract PDF, Office, Markdown, text, spreadsheets, and images through a managed file flow.
@@ -107,6 +107,12 @@ EffChat ships the application and local document pipeline, not model access or c
 - **Controls:** Tools, Skills, quotas, user groups, file limits, memory capacity, fonts, and usage are managed in the admin UI.
 
 Credentials belong in the admin UI or your private environment file, never in commits, screenshots, issues, or example configuration. See [Administrator configuration](docs/administration.md) for the field-by-field guide.
+
+## Current beta
+
+[v0.4.1-beta.14](https://github.com/huoguojun123/EffChat/releases/tag/v0.4.1-beta.14) fixes attachment sends, edited retries, and context compaction after a failed answer. Newly accepted chats that fail before producing output keep a visible error after refresh. Concurrent uploads respect the session file limit, and file/extractor logs omit document names, storage paths, and raw upstream errors.
+
+There is no database migration or configuration change. Back up before upgrading; this update does not backfill older failed runs or remove existing logs. See the [changelog](CHANGELOG.md) for details.
 
 ## Documentation
 

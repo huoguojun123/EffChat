@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from app import docx_content, markdown_table, mineru_transport, pptx_content, resource_limits, xlsx_content
 
 
-app = FastAPI(title="EffChat Extractor", version="0.4.1-beta.13")
+app = FastAPI(title="EffChat Extractor", version="0.4.1-beta.14")
 logger = logging.getLogger("uvicorn.error")
 
 MAX_UPLOAD_BYTES = int(os.getenv("EXTRACTOR_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
@@ -55,18 +55,14 @@ async def extract(
     started_at = time.perf_counter()
     safe_name = Path(filename or file.filename or "file").name
     declared_type = content_type or file.content_type or ""
-    logger.info(
-        "[py-extractor] extract start filename=%s declared_type=%s upload_type=%s",
-        safe_name,
-        declared_type or "-",
-        file.content_type or "-",
-    )
+    # Names, MIME headers and exception text are user/upstream-controlled.
+    # Operational logs contain only controlled stages, counts and timing.
+    logger.info("[py-extractor] extract start")
 
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         logger.warning(
-            "[py-extractor] extract rejected filename=%s reason=file_too_large bytes=%d limit=%d duration_ms=%d",
-            safe_name,
+            "[py-extractor] extract rejected reason=file_too_large bytes=%d limit=%d duration_ms=%d",
             len(data),
             MAX_UPLOAD_BYTES,
             elapsed_ms(started_at),
@@ -77,9 +73,7 @@ async def extract(
     parser = parser_for(ext, declared_type)
     if parser is None:
         logger.warning(
-            "[py-extractor] extract rejected filename=%s reason=unsupported_type declared_type=%s bytes=%d duration_ms=%d",
-            safe_name,
-            declared_type or "-",
+            "[py-extractor] extract rejected reason=unsupported_type bytes=%d duration_ms=%d",
             len(data),
             elapsed_ms(started_at),
         )
@@ -90,20 +84,19 @@ async def extract(
         doc = await run_local_parser(parser, data, safe_name)
     except HTTPException as exc:
         logger.warning(
-            "[py-extractor] extract rejected filename=%s parser=%s reason=%s status=%d bytes=%d duration_ms=%d",
-            safe_name,
+            "[py-extractor] extract rejected parser=%s reason=parser_rejected status=%d bytes=%d duration_ms=%d",
             parser_name,
-            exc.detail,
             exc.status_code,
             len(data),
             elapsed_ms(started_at),
         )
         raise
     except Exception as exc:
-        logger.exception(
-            "[py-extractor] extract failed filename=%s parser=%s bytes=%d duration_ms=%d",
-            safe_name,
+        # Tracebacks include exception arguments (often paths or document text).
+        logger.error(
+            "[py-extractor] extract failed parser=%s error_type=%s bytes=%d duration_ms=%d",
             parser_name,
+            type(exc).__name__,
             len(data),
             elapsed_ms(started_at),
         )
@@ -112,8 +105,7 @@ async def extract(
     text = normalize_markdown(doc.text)
     if not text.strip():
         logger.warning(
-            "[py-extractor] extract rejected filename=%s parser=%s reason=empty_text bytes=%d duration_ms=%d",
-            safe_name,
+            "[py-extractor] extract rejected parser=%s reason=empty_text bytes=%d duration_ms=%d",
             doc.parser,
             len(data),
             elapsed_ms(started_at),
@@ -123,8 +115,7 @@ async def extract(
     encoded = text.encode("utf-8")
     if len(encoded) > MAX_OUTPUT_BYTES:
         logger.warning(
-            "[py-extractor] extract rejected filename=%s parser=%s reason=output_too_large output_bytes=%d limit=%d duration_ms=%d",
-            safe_name,
+            "[py-extractor] extract rejected parser=%s reason=output_too_large output_bytes=%d limit=%d duration_ms=%d",
             doc.parser,
             len(encoded),
             MAX_OUTPUT_BYTES,
@@ -133,8 +124,7 @@ async def extract(
         raise HTTPException(status_code=413, detail=f"extracted text too large (max {MAX_OUTPUT_BYTES} bytes)")
 
     logger.info(
-        "[py-extractor] extract success filename=%s parser=%s bytes=%d output_bytes=%d pages=%d paragraphs=%d tables=%d warnings=%d duration_ms=%d",
-        safe_name,
+        "[py-extractor] extract success parser=%s bytes=%d output_bytes=%d pages=%d paragraphs=%d tables=%d warnings=%d duration_ms=%d",
         doc.parser,
         len(data),
         len(encoded),
@@ -197,17 +187,17 @@ def start_mineru_ocr_bytes(
     token: str,
     started_at: float,
 ) -> dict[str, object]:
-    logger.info("[py-extractor] mineru_start filename=%s bytes=%d", safe_name, len(data))
+    logger.info("[py-extractor] mineru_start bytes=%d", len(data))
     if len(data) > MINERU_MAX_BYTES:
-        logger.warning("[py-extractor] mineru_rejected filename=%s reason=file_too_large bytes=%d limit=%d", safe_name, len(data), MINERU_MAX_BYTES)
+        logger.warning("[py-extractor] mineru_rejected reason=file_too_large bytes=%d limit=%d", len(data), MINERU_MAX_BYTES)
         raise HTTPException(status_code=413, detail=f"ocr_file_too_large: max {MINERU_MAX_BYTES} bytes")
     page_count = count_pdf_pages(data)
     if page_count > MINERU_MAX_PAGES:
-        logger.warning("[py-extractor] mineru_rejected filename=%s reason=page_limit pages=%d limit=%d", safe_name, page_count, MINERU_MAX_PAGES)
+        logger.warning("[py-extractor] mineru_rejected reason=page_limit pages=%d limit=%d", page_count, MINERU_MAX_PAGES)
         raise HTTPException(status_code=400, detail=f"ocr_page_limit_exceeded: max {MINERU_MAX_PAGES} pages")
 
     root = mineru_transport.normalize_base_url(base_url)
-    logger.info("[py-extractor] mineru_submit_request filename=%s pages=%d endpoint=/api/v4/file-urls/batch", safe_name, page_count)
+    logger.info("[py-extractor] mineru_submit_request pages=%d endpoint=/api/v4/file-urls/batch", page_count)
     payload = {
         "files": [{"name": safe_name, "is_ocr": True}],
         "model_version": "vlm",
@@ -221,11 +211,11 @@ def start_mineru_ocr_bytes(
     file_urls = body.get("file_urls") if isinstance(body.get("file_urls"), list) else []
     file_url = str(file_urls[0] if file_urls else "").strip()
     if not task_id or not file_url:
-        logger.warning("[py-extractor] mineru_submit_invalid filename=%s pages=%d duration_ms=%d", safe_name, page_count, elapsed_ms(started_at))
+        logger.warning("[py-extractor] mineru_submit_invalid pages=%d duration_ms=%d", page_count, elapsed_ms(started_at))
         raise HTTPException(status_code=502, detail="mineru returned no task upload url")
-    logger.info("[py-extractor] mineru_upload_start filename=%s task=%s bytes=%d", safe_name, task_id, len(data))
+    logger.info("[py-extractor] mineru_upload_start bytes=%d", len(data))
     mineru_transport.put_file(file_url, data)
-    logger.info("[py-extractor] mineru_start_success filename=%s task=%s pages=%d duration_ms=%d", safe_name, task_id, page_count, elapsed_ms(started_at))
+    logger.info("[py-extractor] mineru_start_success pages=%d duration_ms=%d", page_count, elapsed_ms(started_at))
     return {"task_id": task_id, "state": "ocr_running", "page_count": page_count}
 
 
@@ -249,7 +239,7 @@ def get_mineru_ocr_task_blocking(
     token: str,
     started_at: float,
 ) -> dict[str, object]:
-    logger.info("[py-extractor] mineru_poll_request task=%s", task_id)
+    logger.info("[py-extractor] mineru_poll_request")
     result = mineru_transport.json_request("GET", f"{root}/api/v4/extract-results/batch/{task_id}", None, token)
     body = result.get("data") if isinstance(result.get("data"), dict) else {}
     items = body.get("extract_result") if isinstance(body.get("extract_result"), list) else []
@@ -258,18 +248,18 @@ def get_mineru_ocr_task_blocking(
     if state == "done":
         full_zip_url = str(item.get("full_zip_url") or "").strip()
         if not full_zip_url:
-            logger.warning("[py-extractor] mineru_poll_invalid task=%s reason=missing_full_zip_url duration_ms=%d", task_id, elapsed_ms(started_at))
+            logger.warning("[py-extractor] mineru_poll_invalid reason=missing_full_zip_url duration_ms=%d", elapsed_ms(started_at))
             raise HTTPException(status_code=502, detail="mineru finished without full_zip_url")
-        logger.info("[py-extractor] mineru_markdown_download_start task=%s", task_id)
+        logger.info("[py-extractor] mineru_markdown_download_start")
         markdown = mineru_download_full_md(full_zip_url)
-        logger.info("[py-extractor] mineru_poll_ready task=%s chars=%d duration_ms=%d", task_id, len(markdown), elapsed_ms(started_at))
+        logger.info("[py-extractor] mineru_poll_ready chars=%d duration_ms=%d", len(markdown), elapsed_ms(started_at))
         return {"state": "ready", "markdown": markdown, "token_estimate": estimate_tokens(markdown)}
     if state == "failed":
         err_msg = str(item.get("err_msg") or result.get("msg") or "MinerU OCR failed")
         err_code = str(item.get("err_code") or "mineru_failed")
-        logger.warning("[py-extractor] mineru_poll_failed task=%s error_type=%s duration_ms=%d", task_id, err_code, elapsed_ms(started_at))
+        logger.warning("[py-extractor] mineru_poll_failed duration_ms=%d", elapsed_ms(started_at))
         return {"state": "failed", "error": err_msg, "error_type": err_code}
-    logger.info("[py-extractor] mineru_poll_running task=%s state=%s duration_ms=%d", task_id, state or "-", elapsed_ms(started_at))
+    logger.info("[py-extractor] mineru_poll_running duration_ms=%d", elapsed_ms(started_at))
     return {"state": "ocr_running" if state in {"waiting-file", "pending", "running", "converting"} else "ocr_pending", "mineru_state": state}
 
 
@@ -281,12 +271,12 @@ async def inspect_pdf_for_ocr(
     started_at = time.perf_counter()
     safe_name = Path(filename or file.filename or "document.pdf").name
     data = await file.read(MINERU_MAX_BYTES + 1)
-    logger.info("[py-extractor] mineru_pdf_info_start filename=%s bytes=%d", safe_name, len(data))
+    logger.info("[py-extractor] mineru_pdf_info_start bytes=%d", len(data))
     if len(data) > MINERU_MAX_BYTES:
-        logger.warning("[py-extractor] mineru_pdf_info_rejected filename=%s reason=file_too_large bytes=%d limit=%d", safe_name, len(data), MINERU_MAX_BYTES)
+        logger.warning("[py-extractor] mineru_pdf_info_rejected reason=file_too_large bytes=%d limit=%d", len(data), MINERU_MAX_BYTES)
         raise HTTPException(status_code=413, detail=f"ocr_file_too_large: max {MINERU_MAX_BYTES} bytes")
     page_count = await run_in_threadpool(count_pdf_pages, data)
-    logger.info("[py-extractor] mineru_pdf_info_success filename=%s pages=%d duration_ms=%d", safe_name, page_count, elapsed_ms(started_at))
+    logger.info("[py-extractor] mineru_pdf_info_success pages=%d duration_ms=%d", page_count, elapsed_ms(started_at))
     return {"filename": safe_name, "page_count": page_count, "max_pages": MINERU_MAX_PAGES, "max_bytes": MINERU_MAX_BYTES}
 
 

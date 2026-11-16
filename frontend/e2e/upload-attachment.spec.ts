@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { test, expect, newChat } from "./helpers"
 
 // 守护 P0-2 / P1-1：上传一个声称支持的文件（docx）→ 应上传成功并出现在输入区附件列表，
-// 然后发送 → 消息进入会话。docx 在全新库统一白名单后应被后端接受。
+// 然后发送 → 助手完成回答；仅出现用户气泡不能证明上下文准备成功。
 test("upload a supported docx then send", async ({ authed: page }) => {
   await newChat(page)
 
@@ -41,10 +41,15 @@ test("upload a supported docx then send", async ({ authed: page }) => {
 
   // 附带文字并发送。
   await page.getByTestId("chat-input").fill("请概述这个附件的内容。")
+  const answerResponse = page.waitForResponse((response) => response.url().endsWith("/messages/stream") && response.request().method() === "POST")
   await page.getByTestId("send-button").click()
 
   // 用户消息进入会话。
   await expect(
     page.locator('[data-testid="message-item"][data-role="user"]').last(),
   ).toBeVisible({ timeout: 20_000 })
+  const answerStream = await (await answerResponse).text()
+  expect(answerStream).toContain("event: message_complete")
+  expect(answerStream).not.toContain("event: error")
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]').last()).toBeVisible({ timeout: 30_000 })
 })

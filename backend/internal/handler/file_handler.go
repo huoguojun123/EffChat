@@ -92,7 +92,7 @@ func UploadLimitsHandler(configRepo *repository.ConfigRepository, deploymentMaxB
 	return func(c *gin.Context) {
 		limits, err := resolveUploadLimits(c.Request.Context(), configRepo, deploymentMaxBytes)
 		if err != nil {
-			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
+			writeFileServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
 			return
 		}
 		if limits.PolicyDegraded {
@@ -120,7 +120,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 
 		limits, err := resolveUploadLimits(requestCtx, configRepo, opts.maxUploadBytes)
 		if err != nil {
-			writeServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
+			writeFileServerError(c, http.StatusServiceUnavailable, "file_policy_unavailable", "文件上传策略暂不可用，请稍后重试", err)
 			return
 		}
 		if limits.PolicyDegraded {
@@ -128,7 +128,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		}
 		extractPolicy, err := resolveAttachmentProcessingPolicy(requestCtx, configRepo)
 		if err != nil {
-			writeServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
+			writeFileServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
 			return
 		}
 		if extractPolicy.Degraded {
@@ -178,7 +178,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		// multipart 头声明的 Content-Type，否则伪装成 text/plain 的二进制即可绕过。
 		content, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_read_failed", "failed to read file", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_read_failed", "failed to read file", err)
 			return
 		}
 		if int64(len(content)) > maxUploadSize {
@@ -214,12 +214,12 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			c.JSON(http.StatusOK, existing)
 			return
 		} else if !errors.Is(err, repository.ErrNotFound) {
-			writeServerError(c, http.StatusInternalServerError, "file_duplicate_check_failed", "failed to check duplicate file", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_duplicate_check_failed", "failed to check duplicate file", err)
 			return
 		}
 
 		if count, err := fileRepo.CountActiveBySessionContext(requestCtx, userID, sessionID); err != nil {
-			writeServerError(c, http.StatusInternalServerError, "session_file_count_failed", "failed to check session file count", err)
+			writeFileServerError(c, http.StatusInternalServerError, "session_file_count_failed", "failed to check session file count", err)
 			return
 		} else if count >= limits.MaxSessionFiles {
 			writePublicError(c, http.StatusConflict, "session_file_limit_reached", fmt.Sprintf("session has too many active files (max %d)", limits.MaxSessionFiles), false)
@@ -229,7 +229,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		// 生成存储路径名。文档类解析成功后只保留解析文本；图片类才保留原始文件。
 		userDir := uploadUserMonthDir(userID, time.Now())
 		if err := os.MkdirAll(userDir, 0700); err != nil {
-			writeServerError(c, http.StatusInternalServerError, "upload_directory_create_failed", "failed to create upload directory", err)
+			writeFileServerError(c, http.StatusInternalServerError, "upload_directory_create_failed", "failed to create upload directory", err)
 			return
 		}
 
@@ -253,7 +253,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 		if isImage {
 			storedPath := filepath.Join(userDir, storedName)
 			if err := filepolicy.WriteFile(storedPath, content, 0o600); err != nil {
-				writeServerError(c, http.StatusInternalServerError, "file_write_failed", "failed to save file", err)
+				writeFileServerError(c, http.StatusInternalServerError, "file_write_failed", "failed to save file", err)
 				return
 			}
 			f.FilePath = storedPath
@@ -271,8 +271,8 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				return
 			}
 			if isPDFUpload(contentType, safeName) {
-				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d file=%q bytes=%d strategy=mineru_async_first", userID, sessionID, safeName, len(content))
-				if queuedFile, queueErr := queueMinerUOCR(requestCtx, fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
+				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d bytes=%d strategy=mineru_async_first", userID, sessionID, len(content))
+				if queuedFile, queueErr := queueMinerUOCR(requestCtx, fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), limits.MaxSessionFiles); queuedFile != nil {
 					persistedFile = queuedFile
 					c.JSON(http.StatusAccepted, queuedFile)
 					return
@@ -280,7 +280,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 					writeOCRQueueError(c, queueErr)
 					return
 				}
-				log.Printf("[file_ocr] local_fallback_start user=%d session=%d file=%q", userID, sessionID, safeName)
+				log.Printf("[file_ocr] local_fallback_start user=%d session=%d", userID, sessionID)
 			}
 
 			extractCtx, cancel := context.WithTimeout(requestCtx, time.Duration(extractPolicy.TimeoutSeconds)*time.Second)
@@ -288,11 +288,11 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			res, err := extractor.ExtractWithSidecar(extractCtx, content, contentType, safeName, opts.extractorClient)
 			if err != nil {
 				if isPDFUpload(contentType, safeName) && shouldOfferMinerUOCR(err) {
-					log.Printf("[file_ocr] local_fallback_empty user=%d session=%d file=%q err=%v", userID, sessionID, safeName, err)
+					log.Printf("[file_ocr] local_fallback_empty user=%d session=%d error_type=%T", userID, sessionID, err)
 					writePDFExtractionFailure(c)
 					return
 				}
-				log.Printf("[file_upload] extract_failed user=%d session=%d file=%q content_type=%s err=%v", userID, sessionID, safeName, contentType, err)
+				log.Printf("[file_upload] extract_failed user=%d session=%d bytes=%d error_type=%T", userID, sessionID, len(content), err)
 				writeAttachmentExtractionError(c, err)
 				return
 			} else {
@@ -305,7 +305,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				}
 				if strings.TrimSpace(res.Text) == "" {
 					if isPDFUpload(contentType, safeName) {
-						log.Printf("[file_ocr] local_fallback_empty user=%d session=%d file=%q reason=empty_text", userID, sessionID, safeName)
+						log.Printf("[file_ocr] local_fallback_empty user=%d session=%d reason=empty_text", userID, sessionID)
 						writePDFExtractionFailure(c)
 						return
 					}
@@ -314,7 +314,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				}
 				extractedPath, err := writeExtractedTextSidecar(userID, storedName, res.Text)
 				if err != nil {
-					writeServerError(c, http.StatusInternalServerError, "extracted_text_write_failed", "failed to save extracted text", err)
+					writeFileServerError(c, http.StatusInternalServerError, "extracted_text_write_failed", "failed to save extracted text", err)
 					return
 				}
 				f.FilePath = extractedPath
@@ -322,17 +322,17 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 				f.TokenEstimate = res.TokenEstimate
 				f.ExtractStatus = "ready"
 				if res.Parser != "" {
-					logger.Info("file extracted: user=%d session=%d file=%q parser=%s tokens=%d pages=%d tables=%d warnings=%d",
-						userID, sessionID, safeName, res.Parser, res.TokenEstimate, res.PageCount, res.TableCount, len(res.Warnings))
+					logger.Info("file extracted: user=%d session=%d parser=%s tokens=%d pages=%d tables=%d warnings=%d",
+						userID, sessionID, fileLogParser(res.Parser), res.TokenEstimate, res.PageCount, res.TableCount, len(res.Warnings))
 					if isPDFUpload(contentType, safeName) {
-						log.Printf("[file_ocr] local_fallback_success user=%d session=%d file=%q parser=%s tokens=%d pages=%d warnings=%d", userID, sessionID, safeName, res.Parser, res.TokenEstimate, res.PageCount, len(res.Warnings))
+						log.Printf("[file_ocr] local_fallback_success user=%d session=%d parser=%s tokens=%d pages=%d warnings=%d", userID, sessionID, fileLogParser(res.Parser), res.TokenEstimate, res.PageCount, len(res.Warnings))
 					}
 				}
 			}
 		}
 
 		if strings.TrimSpace(f.FilePath) == "" {
-			writeServerError(c, http.StatusInternalServerError, "file_storage_incomplete", "文件未能保存，请重试", errors.New("upload completed without a managed file path"))
+			writeFileServerError(c, http.StatusInternalServerError, "file_storage_incomplete", "文件未能保存，请重试", errors.New("upload completed without a managed file path"))
 			return
 		}
 
@@ -340,12 +340,20 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
 			return
 		}
-		if err := fileRepo.CreateContext(requestCtx, f); err != nil {
+		if err := fileRepo.CreateWithinSessionLimitContext(requestCtx, f, limits.MaxSessionFiles); err != nil {
 			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
 			if requestCtx.Err() != nil {
 				return
 			}
-			writeServerError(c, http.StatusInternalServerError, "file_metadata_create_failed", "failed to save file metadata", err)
+			if errors.Is(err, repository.ErrSessionFileLimitReached) {
+				writePublicError(c, http.StatusConflict, "session_file_limit_reached", "session has too many active files", false)
+				return
+			}
+			if errors.Is(err, repository.ErrNotFound) {
+				writeUploadSessionLookupError(c, err)
+				return
+			}
+			writeFileServerError(c, http.StatusInternalServerError, "file_metadata_create_failed", "failed to save file metadata", err)
 			return
 		}
 		persistedFile = f
@@ -366,7 +374,7 @@ func cleanupCancelledUpload(requestCtx context.Context, fileRepo *repository.Fil
 	defer cancel()
 	now := time.Now()
 	if err := fileRepo.RequestDeletion(cleanupCtx, file.ID, userID, now, now); err != nil && !errors.Is(err, repository.ErrNotFound) {
-		logger.Error("cancelled upload cleanup failed: user=%d file_id=%d err=%v", userID, file.ID, err)
+		logger.Error("cancelled upload cleanup failed: user=%d file_id=%d error_type=%T", userID, file.ID, err)
 	}
 }
 
@@ -554,7 +562,7 @@ func DownloadFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 		}
 		path, err = filepolicy.ExistingPath(path)
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_download_unavailable", "file storage is unavailable", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_download_unavailable", "file storage is unavailable", err)
 			return
 		}
 		// The download can be an extracted text sidecar rather than the original
@@ -592,7 +600,7 @@ func ListFilesHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			files, err = fileRepo.ListByUser(userID, limit+1, offset)
 		}
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_list_failed", "failed to list files", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_list_failed", "failed to list files", err)
 			return
 		}
 		if files == nil {
@@ -643,7 +651,7 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 		}
 		path, pathErr := filepolicy.ExistingPath(*f.ExtractedTextPath)
 		if pathErr != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", pathErr)
+			writeFileServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", pathErr)
 			return
 		}
 		chunk, err := service.ReadFilePreviewChunk(path, cursor, maxChars)
@@ -652,7 +660,7 @@ func PreviewFileHandler(fileRepo *repository.FileRepository, _ *service.ChannelS
 			return
 		}
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_preview_failed", "failed to read extracted text", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -693,7 +701,7 @@ func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *reposi
 		}
 		policy, err := resolveAttachmentProcessingPolicy(c.Request.Context(), configRepo)
 		if err != nil {
-			writeServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
+			writeFileServerError(c, http.StatusServiceUnavailable, "attachment_policy_unavailable", "附件处理策略暂不可用，请稍后重试", err)
 			return
 		}
 		if !policy.Enabled {
@@ -704,12 +712,12 @@ func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *reposi
 			log.Printf("[file_ocr] retry policy degraded; using last-known-good controls file_id=%d", id)
 		}
 		if channelService == nil || extractorClient == nil || !extractorClient.Enabled() || runner == nil {
-			writeServerError(c, http.StatusServiceUnavailable, "ocr_runtime_unavailable", "OCR runtime is temporarily unavailable", errors.New("OCR retry runtime dependency is unavailable"))
+			writeFileServerError(c, http.StatusServiceUnavailable, "ocr_runtime_unavailable", "OCR runtime is temporarily unavailable", errors.New("OCR retry runtime dependency is unavailable"))
 			return
 		}
 		ocrConfig, err := channelService.ResolveMinerUOCRConfigContext(c.Request.Context())
 		if err != nil {
-			writeServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
+			writeFileServerError(c, http.StatusServiceUnavailable, "ocr_config_unavailable", "OCR configuration is temporarily unavailable", err)
 			return
 		}
 		if !ocrConfig.Enabled {
@@ -724,7 +732,7 @@ func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *reposi
 		if file.OCRSourcePath == nil || strings.TrimSpace(*file.OCRSourcePath) == "" {
 			cause := errors.New("OCR source path is missing after restart")
 			if err := markOCRSourceUnavailable(fileRepo, file.ID, userID, cause); err != nil {
-				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
+				writeFileServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
 				return
 			}
 			writeOCRSourceUnavailable(c)
@@ -733,19 +741,19 @@ func RetryOCRFileHandler(fileRepo *repository.FileRepository, configRepo *reposi
 		sourcePath, pathErr := managedUploadPath(*file.OCRSourcePath)
 		if pathErr != nil {
 			if err := markOCRSourceUnavailable(fileRepo, file.ID, userID, pathErr); err != nil {
-				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
+				writeFileServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", err)
 				return
 			}
-			writeServerError(c, http.StatusInternalServerError, "ocr_source_path_invalid", "OCR source path is invalid", pathErr)
+			writeFileServerError(c, http.StatusInternalServerError, "ocr_source_path_invalid", "OCR source path is invalid", pathErr)
 			return
 		}
 		if _, err := os.Stat(sourcePath); err != nil {
 			if !os.IsNotExist(err) {
-				writeServerError(c, http.StatusInternalServerError, "ocr_source_check_failed", "failed to verify OCR source", err)
+				writeFileServerError(c, http.StatusInternalServerError, "ocr_source_check_failed", "failed to verify OCR source", err)
 				return
 			}
 			if reconcileErr := markOCRSourceUnavailable(fileRepo, file.ID, userID, err); reconcileErr != nil {
-				writeServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", reconcileErr)
+				writeFileServerError(c, http.StatusInternalServerError, "ocr_source_state_update_failed", "failed to reconcile OCR source state", reconcileErr)
 				return
 			}
 			writeOCRSourceUnavailable(c)
@@ -783,27 +791,27 @@ func DeleteFileHandler(fileRepo *repository.FileRepository) gin.HandlerFunc {
 			return
 		}
 		if _, err := managedUploadPath(f.FilePath); err != nil {
-			logger.Error("refuse deleting file with unsafe path: user=%d file=%d path=%q err=%v", userID, id, f.FilePath, err)
-			writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
+			logger.Error("refuse deleting file with unsafe path: user=%d file=%d error_type=%T", userID, id, err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 			return
 		}
 		if f.ExtractedTextPath != nil && strings.TrimSpace(*f.ExtractedTextPath) != "" {
 			if _, err := managedUploadPath(*f.ExtractedTextPath); err != nil {
-				logger.Error("refuse deleting file with unsafe extracted path: user=%d file=%d path=%q err=%v", userID, id, *f.ExtractedTextPath, err)
-				writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
+				logger.Error("refuse deleting file with unsafe extracted path: user=%d file=%d error_type=%T", userID, id, err)
+				writeFileServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 				return
 			}
 		}
 		if f.OCRSourcePath != nil && strings.TrimSpace(*f.OCRSourcePath) != "" {
 			if _, err := managedUploadPath(*f.OCRSourcePath); err != nil {
-				logger.Error("refuse deleting file with unsafe OCR source path: user=%d file=%d path=%q err=%v", userID, id, *f.OCRSourcePath, err)
-				writeServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
+				logger.Error("refuse deleting file with unsafe OCR source path: user=%d file=%d error_type=%T", userID, id, err)
+				writeFileServerError(c, http.StatusInternalServerError, "file_path_invalid", "file path is outside managed storage", err)
 				return
 			}
 		}
 		now := time.Now()
 		if err := fileRepo.RequestDeletion(c.Request.Context(), id, userID, now, now.Add(ocrSourceRetention)); err != nil {
-			logger.Error("failed to request file deletion: user=%d file=%d err=%v", userID, id, err)
+			logger.Error("failed to request file deletion: user=%d file=%d error_type=%T", userID, id, err)
 			writeFileDeletionError(c, err)
 			return
 		}
@@ -833,17 +841,17 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 		now := time.Now()
 		referenced, err := fileRepo.CountStaleReferencedFiles(cutoff)
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_cleanup_reference_count_failed", "failed to count referenced files", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_cleanup_reference_count_failed", "failed to count referenced files", err)
 			return
 		}
 		expiredOCR, err := fileRepo.ExpireStaleOCROriginalsContext(c.Request.Context(), cutoff, now, limit)
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "ocr_source_expire_failed", "failed to expire OCR source files", err)
+			writeFileServerError(c, http.StatusInternalServerError, "ocr_source_expire_failed", "failed to expire OCR source files", err)
 			return
 		}
 		claims, err := fileRepo.ClaimFilesForStorageCleanup(c.Request.Context(), cutoff, now, 2*time.Minute, limit)
 		if err != nil {
-			writeServerError(c, http.StatusInternalServerError, "file_cleanup_claim_failed", "failed to claim files for cleanup", err)
+			writeFileServerError(c, http.StatusInternalServerError, "file_cleanup_claim_failed", "failed to claim files for cleanup", err)
 			return
 		}
 
@@ -853,12 +861,12 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 		for _, claim := range claims {
 			f := claim.File
 			if err := removeManagedFilePaths(f.FilePath, f.ExtractedTextPath, f.OCRSourcePath); err != nil {
-				logger.Error("failed to remove orphan file paths: file=%d path=%q err=%v", f.ID, f.FilePath, err)
+				logger.Error("failed to remove orphan file paths: file=%d error_type=%T", f.ID, err)
 				failures = append(failures, releaseOrCleanupFailure(c, fileRepo, f.ID, claim.Token, "file_cleanup_remove_failed", "failed to remove file paths"))
 				continue
 			}
 			if err := fileRepo.FinalizeFileStorageRemoval(c.Request.Context(), f.ID, claim.Token); err != nil {
-				logger.Error("failed to finalize orphan file cleanup: file=%d err=%v", f.ID, err)
+				logger.Error("failed to finalize orphan file cleanup: file=%d error_type=%T", f.ID, err)
 				failures = append(failures, releaseOrCleanupFailure(c, fileRepo, f.ID, claim.Token, "file_cleanup_finalize_failed", "failed to finalize file cleanup"))
 				continue
 			}
@@ -872,12 +880,12 @@ func CleanupOrphanFilesHandler(fileRepo *repository.FileRepository) gin.HandlerF
 				continue
 			}
 			if err := removeManagedFilePaths("", nil, f.OCRSourcePath); err != nil {
-				logger.Error("failed to remove expired OCR source: file=%d err=%v", f.ID, err)
+				logger.Error("failed to remove expired OCR source: file=%d error_type=%T", f.ID, err)
 				failures = append(failures, newFileCleanupFailure(f.ID, "ocr_source_remove_failed", "failed to remove OCR source"))
 				continue
 			}
 			if err := fileRepo.ClearOCRSourcePath(f.ID, f.UserID, valueOrEmpty(f.OCRSourcePath)); err != nil {
-				logger.Error("failed to clear expired OCR source path: file=%d err=%v", f.ID, err)
+				logger.Error("failed to clear expired OCR source path: file=%d error_type=%T", f.ID, err)
 				failures = append(failures, newFileCleanupFailure(f.ID, "ocr_source_finalize_failed", "failed to finalize OCR source cleanup"))
 				continue
 			}

@@ -707,7 +707,7 @@ func TestRunSetupInterruptionPreservesParentCancellationCause(t *testing.T) {
 	}
 }
 
-func TestLoadRunConversationMessagesUsesOriginalRetryTarget(t *testing.T) {
+func TestAcceptedRetryContextStopsAtBoundUser(t *testing.T) {
 	env := setupTestEnv(t)
 	session := createResumeTestSession(t, env)
 	userMessage, err := env.messageService.CreateUserMessage(session.ID, env.userID, &service.SendMessageRequest{
@@ -717,20 +717,19 @@ func TestLoadRunConversationMessagesUsesOriginalRetryTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user message: %v", err)
 	}
-	assistantMessage, err := env.messageService.CreateAssistantMessage(session.ID, env.userID, map[string]interface{}{
+	_, err = env.messageService.CreateAssistantMessage(session.ID, env.userID, map[string]interface{}{
 		"role": "assistant", "content": "replace this answer",
 	}, "v1")
 	if err != nil {
 		t.Fatalf("create assistant message: %v", err)
 	}
 
-	messages, err := loadRunConversationMessages(
+	messages, err := env.messageService.AcceptedAgentContext(
 		context.Background(),
-		env.messageService,
 		session.ID,
 		env.userID,
-		&service.RunSnapshot{RetryTargetMessageID: assistantMessage.ID},
-		modelusage.KindRetry,
+		userMessage,
+		true,
 	)
 	if err != nil {
 		t.Fatalf("load retry conversation: %v", err)
@@ -738,35 +737,6 @@ func TestLoadRunConversationMessagesUsesOriginalRetryTarget(t *testing.T) {
 	if len(messages) != 1 || messages[0].ID != userMessage.ID {
 		t.Fatalf("retry context = %+v, want only user message %d", messages, userMessage.ID)
 	}
-}
-
-func TestValidateAcceptedUserMessageContextRequiresExactContent(t *testing.T) {
-	accepted := &model.Message{
-		ID:          41,
-		MessageData: []byte(`{"role":"user","content":"完整的首轮消息\nwith unicode ✓"}`),
-	}
-
-	t.Run("accepts exact reloaded message", func(t *testing.T) {
-		if err := validateAcceptedUserMessageContext([]*model.Message{{
-			ID:          41,
-			MessageData: []byte(`{"role":"user","content":"完整的首轮消息\nwith unicode ✓"}`),
-		}}, accepted); err != nil {
-			t.Fatalf("validate exact context: %v", err)
-		}
-	})
-	t.Run("rejects truncated content", func(t *testing.T) {
-		if err := validateAcceptedUserMessageContext([]*model.Message{{
-			ID:          41,
-			MessageData: []byte(`{"role":"user","content":"完整的首轮消息"}`),
-		}}, accepted); err == nil {
-			t.Fatal("truncated context unexpectedly accepted")
-		}
-	})
-	t.Run("rejects absent message", func(t *testing.T) {
-		if err := validateAcceptedUserMessageContext(nil, accepted); err == nil {
-			t.Fatal("absent context unexpectedly accepted")
-		}
-	})
 }
 
 func TestLoadPostRunMemorySessionUsesDetachedContext(t *testing.T) {

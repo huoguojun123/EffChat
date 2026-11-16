@@ -630,6 +630,17 @@ func (s *MessageService) ListForAgentContext(ctx context.Context, sessionID, use
 }
 
 func (s *MessageService) listForAgentContext(ctx context.Context, sessionID, userID, preserveUserMessageID int64, replacement *model.Message) ([]*model.Message, error) {
+	messages, err := s.listAgentMessages(ctx, sessionID, userID, preserveUserMessageID, replacement)
+	if err != nil {
+		return nil, err
+	}
+	s.prepareAttachmentsForAgent(ctx, userID, sessionID, messages)
+	return messages, nil
+}
+
+// listAgentMessages returns unprojected durable messages (or an explicit preflight
+// replacement). Accepted-content checks must run before attachment enrichment.
+func (s *MessageService) listAgentMessages(ctx context.Context, sessionID, userID, preserveUserMessageID int64, replacement *model.Message) ([]*model.Message, error) {
 	_, err := s.sessionRepo.GetByIDContext(ctx, sessionID, userID)
 	if err != nil {
 		return nil, sessionLookupError(err)
@@ -656,10 +667,6 @@ func (s *MessageService) listForAgentContext(ctx context.Context, sessionID, use
 		}
 		filtered = append(filtered, msg)
 	}
-
-	// 准备附件上下文：文本附件只追加短清单，引导模型在需要时调用 file_read；
-	// 图片附件仍写入 _image_parts，供 agent 层按 vision 能力转成多模态输入。
-	s.prepareAttachmentsForAgent(ctx, userID, sessionID, filtered)
 
 	return filtered, nil
 }

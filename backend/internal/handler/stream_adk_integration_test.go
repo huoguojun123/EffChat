@@ -179,6 +179,8 @@ func newADKRunRegressionHarnessForProvider(t *testing.T, env *testEnv, cfg adkPr
 		0,
 		cfg.FirstOutputTimeout,
 	))
+	auth.POST("/sessions/:id/messages/:message_id/retry", RetryMessageStreamHandler(env.messageService, env.sessionService, env.authService, service.NewSkillService(nil, nil, nil), einoAgent, nil, runHub, quotaService, nil, 0, cfg.FirstOutputTimeout))
+	auth.POST("/sessions/:id/messages/:message_id/edit", EditRetryMessageStreamHandler(env.messageService, env.sessionService, env.authService, service.NewSkillService(nil, nil, nil), einoAgent, nil, runHub, quotaService, nil, 0, cfg.FirstOutputTimeout))
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -211,12 +213,17 @@ func (h *adkRunRegressionHarness) send(t *testing.T, sessionID int64, runID, con
 	if h.thinkingEffort != "" {
 		payload["thinking_effort"] = h.thinkingEffort
 	}
+	return h.request(t, fmt.Sprintf("/api/v1/sessions/%d/messages/stream", sessionID), payload)
+}
+
+func (h *adkRunRegressionHarness) request(t *testing.T, path string, payload map[string]interface{}) *httptest.ResponseRecorder {
+	t.Helper()
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/sessions/%d/messages/stream", sessionID), bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.env.token)
 	h.router.ServeHTTP(recorder, req)

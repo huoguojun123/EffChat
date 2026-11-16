@@ -19,7 +19,7 @@ import (
 	"github.com/huoguojun123/EffChat/internal/repository"
 )
 
-func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, _ int, _ int64) (*model.File, error) {
+func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, opts uploadFileHandlerOptions, f *model.File, userID, sessionID int64, content []byte, _ string, safeName, storedName, sourceDir string, maxSessionFiles int) (*model.File, error) {
 	if opts.channelService == nil || opts.extractorClient == nil || !opts.extractorClient.Enabled() || opts.ocrRecovery == nil {
 		return nil, nil
 	}
@@ -43,8 +43,11 @@ func queueMinerUOCR(ctx context.Context, fileRepo *repository.FileRepository, op
 	f.OCRSourcePath = &sourcePath
 	now := time.Now()
 	f.OCRNextRetryAt = &now
-	if err := fileRepo.CreateContext(ctx, f); err != nil {
+	if err := fileRepo.CreateWithinSessionLimitContext(ctx, f, maxSessionFiles); err != nil {
 		_ = filepolicy.Remove(sourcePath)
+		if errors.Is(err, repository.ErrSessionFileLimitReached) || errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
 		log.Printf("[file_ocr] metadata_create_failed user=%d session=%d file=%q err=%v", userID, sessionID, safeName, err)
 		return nil, fmt.Errorf("%w: %v", errOCRMetadataCreate, err)
 	}

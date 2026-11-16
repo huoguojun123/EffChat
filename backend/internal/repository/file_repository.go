@@ -27,10 +27,11 @@ const (
 )
 
 var (
-	ErrOCRSourceUnavailable  = errors.New("ocr source is unavailable")
-	ErrOCRLeaseLost          = errors.New("ocr lease is no longer owned")
-	ErrAttachmentUnavailable = errors.New("attachment is unavailable")
-	cleanupClaimSequence     atomic.Uint64
+	ErrOCRSourceUnavailable    = errors.New("ocr source is unavailable")
+	ErrOCRLeaseLost            = errors.New("ocr lease is no longer owned")
+	ErrAttachmentUnavailable   = errors.New("attachment is unavailable")
+	ErrSessionFileLimitReached = errors.New("session file limit reached")
+	cleanupClaimSequence       atomic.Uint64
 )
 
 type FileCleanupClaim struct {
@@ -238,6 +239,38 @@ func (r *FileRepository) Create(f *model.File) error {
 }
 
 func (r *FileRepository) CreateContext(ctx context.Context, f *model.File) error {
+	return createFile(ctx, r.db, f)
+}
+
+// CreateWithinSessionLimitContext serializes final upload admission with other
+// admissions and session deletion. Parsing and physical writes happen before
+// this short transaction; callers own cleanup when admission fails.
+func (r *FileRepository) CreateWithinSessionLimitContext(ctx context.Context, f *model.File, maxFiles int) error {
+	if f == nil || f.SessionID == nil || maxFiles <= 0 {
+		return errors.New("session-bound file and positive capacity required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockActiveSession(ctx, tx, *f.SessionID, f.UserID); err != nil {
+		return err
+	}
+	count, err := countActiveSessionFiles(ctx, tx, f.UserID, *f.SessionID)
+	if err != nil {
+		return err
+	}
+	if count >= maxFiles {
+		return ErrSessionFileLimitReached
+	}
+	if err := createFile(ctx, tx, f); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func createFile(ctx context.Context, db dbExecutor, f *model.File) error {
 	query := `
 		INSERT INTO files (
 			user_id, session_id, file_name, file_path, file_type, file_size, file_hash,
@@ -250,7 +283,7 @@ func (r *FileRepository) CreateContext(ctx context.Context, f *model.File) error
 	if f.ExtractStatus == "" {
 		f.ExtractStatus = "pending"
 	}
-	err := r.db.QueryRowContext(
+	err := db.QueryRowContext(
 		ctx,
 		query, f.UserID, f.SessionID, f.FileName, f.FilePath, f.FileType, f.FileSize, f.FileHash,
 		f.ExtractedTextPath, f.ExtractStatus, f.ExtractError, f.TokenEstimate,
@@ -389,8 +422,12 @@ func (r *FileRepository) CountActiveBySession(userID, sessionID int64) (int, err
 }
 
 func (r *FileRepository) CountActiveBySessionContext(ctx context.Context, userID, sessionID int64) (int, error) {
+	return countActiveSessionFiles(ctx, r.db, userID, sessionID)
+}
+
+func countActiveSessionFiles(ctx context.Context, db dbExecutor, userID, sessionID int64) (int, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx,
+	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM files WHERE user_id = $1 AND session_id = $2 AND status IN ('staged', 'formal')`,
 		userID, sessionID,
 	).Scan(&count)

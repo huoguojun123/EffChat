@@ -272,7 +272,7 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			}
 			if isPDFUpload(contentType, safeName) {
 				log.Printf("[file_ocr] pdf_upload_start user=%d session=%d file=%q bytes=%d strategy=mineru_async_first", userID, sessionID, safeName, len(content))
-				if queuedFile, queueErr := queueMinerUOCR(requestCtx, fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), extractPolicy.TimeoutSeconds, maxOutputBytes); queuedFile != nil {
+				if queuedFile, queueErr := queueMinerUOCR(requestCtx, fileRepo, opts, f, userID, sessionID, content, contentType, safeName, storedName, ocrStagingUserMonthDir(userID, time.Now()), limits.MaxSessionFiles); queuedFile != nil {
 					persistedFile = queuedFile
 					c.JSON(http.StatusAccepted, queuedFile)
 					return
@@ -340,9 +340,17 @@ func UploadFileHandler(fileRepo *repository.FileRepository, configRepo *reposito
 			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
 			return
 		}
-		if err := fileRepo.CreateContext(requestCtx, f); err != nil {
+		if err := fileRepo.CreateWithinSessionLimitContext(requestCtx, f, limits.MaxSessionFiles); err != nil {
 			removeSavedFilePaths(f.FilePath, f.ExtractedTextPath)
 			if requestCtx.Err() != nil {
+				return
+			}
+			if errors.Is(err, repository.ErrSessionFileLimitReached) {
+				writePublicError(c, http.StatusConflict, "session_file_limit_reached", "session has too many active files", false)
+				return
+			}
+			if errors.Is(err, repository.ErrNotFound) {
+				writeUploadSessionLookupError(c, err)
 				return
 			}
 			writeServerError(c, http.StatusInternalServerError, "file_metadata_create_failed", "failed to save file metadata", err)

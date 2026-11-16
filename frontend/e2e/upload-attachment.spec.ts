@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { test, expect, newChat } from "./helpers"
+import type { DurableRunStatus, Message } from "../src/types"
 
 // 守护 P0-2 / P1-1：上传一个声称支持的文件（docx）→ 应上传成功并出现在输入区附件列表，
 // 然后发送 → 助手完成回答；仅出现用户气泡不能证明上下文准备成功。
@@ -48,8 +49,26 @@ test("upload a supported docx then send", async ({ authed: page }) => {
   await expect(
     page.locator('[data-testid="message-item"][data-role="user"]').last(),
   ).toBeVisible({ timeout: 20_000 })
-  const answerStream = await (await answerResponse).text()
-  expect(answerStream).toContain("event: message_complete")
-  expect(answerStream).not.toContain("event: error")
+  const response = await answerResponse
+  expect(response.ok()).toBeTruthy()
+  // A consumed/aborted browser SSE response may have no CDP body even after a
+  // successful answer. Verify the durable terminal and its persisted message,
+  // rather than coupling product acceptance to Chromium's response-body cache.
+  const sessionPath = new URL(response.url()).pathname.replace(/\/messages\/stream$/, "")
+  const headers = { Authorization: `Bearer ${token}` }
+  await expect.poll(async () => {
+    const history = await page.request.get(`${sessionPath}/messages`, { headers })
+    expect(history.ok()).toBeTruthy()
+    const { messages } = await history.json() as { messages: Message[] }
+    const answer = messages.findLast((message) => message.message_data.role === "assistant")
+    const runId = answer?.message_data.metadata?.run_id
+    if (!answer || typeof runId !== "string") return null
+    const result = await page.request.get(`${sessionPath}/runs/${encodeURIComponent(runId)}`, { headers })
+    expect(result.ok()).toBeTruthy()
+    const { run } = await result.json() as { run: DurableRunStatus }
+    return { status: run.status, messageMatches: run.terminal_message_id === answer.id, error: run.error_code || "" }
+  }, { timeout: 30_000 }).toEqual({ status: "completed", messageMatches: true, error: "" })
   await expect(page.locator('[data-testid="message-item"][data-role="assistant"]').last()).toBeVisible({ timeout: 30_000 })
+  await page.reload()
+  await expect(page.locator('[data-testid="message-item"][data-role="assistant"]').last()).toBeVisible({ timeout: 20_000 })
 })

@@ -145,6 +145,8 @@ accepted worker 建立后首次 RunHub 订阅失败的 SSE error 保留 request 
 
 失败轮次在普通模型历史中仍被过滤；但重试所需的保护压缩与记忆投影必须显式保留同一用户消息。摘要只包含该消息之前的历史，记忆投影包含受保护用户；旧目标仍拒绝，不能因错误过滤而误报当前重试目标失效。
 
+已受理、尚无持久化输出的 chat 若在执行前失败，默认终态存储复用消息终态事务保存 ephemeral 错误助手消息，并把 message ID 写入同一 durable event。刷新与另一客户端由普通历史接口显示同一错误，不依赖进程内 RunHub；重复提交复用终态，不额外生成错误消息。准入前失败、压缩任务和取消不创建这种助手错误，已有输出与回答选择语义保持原样。历史上只有 run 终态的旧失败记录不自动回填。
+
 每个用户 turn 的 answer attempts 都保留独立输出树；不论该 turn 后面是否已经产生新消息，用户都可在仍有可选择输出的 attempts 之间切换。选择只更新该 user message 的 selected attempt 与会话级 `answer_selection_revision`，后续 Agent、压缩和记忆上下文继续只读取 selected 输出，不复制消息或改写其他 turn。删除当前 attempt 会在同一 session row lock 事务中硬删除其 assistant/tool 输出；若删除的是 selected attempt，事务先选择相邻的可用 attempt 并推进 revision，每个 turn 至少保留一个可选择 attempt。无效 ID 为 400，会话或 attempt 缺失为 404，不可选择或只剩最后一个为 409，repository/transaction 故障为带 request ID 的 retryable 5xx；选择或 replacement 成功后复用单会话记忆重整。
 
 会话 create/update/delete mutation 复用同一边界：受控字段、folder 和生成参数校验返回 `session_invalid` 400；初始归属查询与 update/delete 的 `RowsAffected == 0` 都把缺失或竞态删除收敛为 `session_not_found` 404。模型、渠道、默认模型和用户组读取必须区分“确实不存在/不可用”与 repository 故障；前者使用稳定模型业务码，运行依赖暂不可用为 retryable 503，数据库、扫描和事务故障为带 request ID 的 retryable 5xx，任何分支都不得把 wrapped error 原文写入 JSON。

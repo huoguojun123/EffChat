@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/huoguojun123/EffChat/internal/model"
 	"github.com/huoguojun123/EffChat/internal/repository"
@@ -124,5 +126,64 @@ func TestADKEditedRetryUsesBoundReplacement(t *testing.T) {
 	replay := h.request(t, path, map[string]interface{}{"content": edited, "client_run_id": "edit-bound"})
 	if !strings.Contains(replay.Body.String(), "event: "+streaming.EventMessageComplete) || provider.calls.Load() != 1 {
 		t.Fatalf("edit replay failed: %s", replay.Body.String())
+	}
+}
+
+func TestAcceptedWorkerSetupFailureSurvivesColdHistory(t *testing.T) {
+	env := setupTestEnv(t)
+	session := createResumeTestSession(t, env)
+	request := &service.SendMessageRequest{Content: "complete accepted fixture", SchemaVersion: "v1"}
+	intent := service.BuildSendRunIntent(&session, request)
+	hub := service.NewRunHub(time.Minute, 1<<20)
+	quota := repository.NewQuotaRepository(env.db)
+	hub.SetStore(quota)
+	run, err := hub.StartWithIntent(session.ID, env.userID, 0, "worker-setup-failure", service.RunKindChat, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := env.messageService.BuildUserMessagePreviewContext(context.Background(), session.ID, env.userID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accepted *model.Message
+	run, err = hub.PersistAdmission(context.Background(), run.RunID, func(ctx context.Context) (repository.ChatRunRecord, error) {
+		admission, err := quota.AdmitChatMessage(ctx, repository.ChatRunReservationInput{
+			RunID: run.RunID, UserID: env.userID, AuthVersion: 1, SessionID: session.ID, Kind: service.RunKindChat,
+			Operation: intent.Operation, IntentVersion: intent.Version, IntentHash: intent.Hash, ReserveMessage: true, AcceptedAt: run.AcceptedAt, ExpiresAt: run.ExpiresAt,
+		}, original)
+		accepted = admission.Message
+		return admission.Record, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inject an admission-to-worker mismatch in memory only. The original row
+	// stays intact; the real worker must fail before reaching any provider.
+	corrupt := *accepted
+	corrupt.MessageData = []byte(`{"role":"user","content":"truncated"}`)
+	executeAgentRun(agentRunExecution{
+		messageService: env.messageService, sessionService: env.sessionService, authService: env.authService,
+		skillService: service.NewSkillService(nil, nil, nil), runHub: hub, sessionID: session.ID, userID: env.userID,
+		userMessage: &corrupt, runSnapshot: run, requestID: "fixture-setup",
+	})
+	snapshot, ok := hub.Get(run.RunID, session.ID, env.userID)
+	if !ok || snapshot.ErrorCode != "conversation_context_incomplete" || snapshot.TerminalMessageID <= 0 {
+		t.Fatalf("terminal=%+v", snapshot)
+	}
+	// This is the authenticated HTTP history path used after refresh or by a
+	// different client, with no local pending message or live RunHub state.
+	for i := 0; i < 2; i++ {
+		cold := env.doRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%d/messages", session.ID), nil)
+		var history struct{ Messages []service.MessageResponse }
+		if err := json.Unmarshal(cold.Body.Bytes(), &history); err != nil {
+			t.Fatal(err)
+		}
+		if cold.Code != http.StatusOK || len(history.Messages) != 2 || history.Messages[1].ID != snapshot.TerminalMessageID || history.Messages[1].MessageData["content"] != "本轮消息上下文未完整就绪，请重试" {
+			t.Fatalf("cold history: %s", cold.Body.String())
+		}
+	}
+	events := runEventsForRegression(t, hub, run.RunID, session.ID, env.userID)
+	if countRunEvents(events, streaming.EventError) != 1 {
+		t.Fatalf("terminal events=%+v", events)
 	}
 }

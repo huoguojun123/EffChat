@@ -7,6 +7,36 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1-beta.14] - 2026-11-16
+
+### Fixed
+
+- Validate accepted message text and attachment identity before building the
+  model projection, so legitimate attachment enrichment no longer rejects a send.
+- Execute edited retries from the replacement message bound at admission,
+  preserving the original retry intent for idempotent replay.
+- Preserve the retried user turn through context compaction and memory projection
+  after an ephemeral assistant failure.
+- Persist new accepted, zero-output chat failures with their terminal state so
+  the same error remains visible after refresh; repeated terminal commits do not
+  create duplicate messages.
+- Enforce session file capacity atomically for ordinary uploads and queued OCR.
+  Concurrent excess uploads return 409 and remove their newly written files.
+
+### Privacy
+
+- Exclude document names, storage paths, signed URLs, raw upstream errors and
+  parser tracebacks from file/OCR/extractor operation logs while retaining
+  controlled diagnostics and the existing public error protocol.
+
+### Compatibility
+
+- No database migration, configuration, model protocol or deployment-topology
+  change; schema remains 054. The installer and registry Compose default to this
+  beta. Back up the database and files before upgrading.
+- Earlier run-only failures are not backfilled, and existing logs are not removed.
+  Real-provider reasoning/cache follow-ups remain outside this repair release.
+
 ## [0.4.1-beta.13] - 2026-11-10
 
 ### Fixed

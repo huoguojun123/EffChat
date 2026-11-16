@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/huoguojun123/EffChat/internal/model"
 )
 
 type ChatRunRecord struct {
@@ -89,6 +91,47 @@ func (r *QuotaRepository) BindChatRunUserMessage(ctx context.Context, runID stri
 }
 
 func (r *QuotaRepository) TransitionChatRun(ctx context.Context, input ChatRunTransitionInput) (ChatRunRecord, bool, error) {
+	// A failed accepted chat with no output needs a durable error message too:
+	// RunHub-only errors disappear on cold history loads. Reuse the existing
+	// session -> run transaction so message, attempt, quota and terminal event
+	// commit together; a racing/repeated terminal returns the canonical record.
+	if input.Status == "failed" && input.TerminalMessageID == 0 && input.PublicErrorMessage != "" {
+		run, err := r.GetChatRun(ctx, input.RunID)
+		if err != nil {
+			return ChatRunRecord{}, false, err
+		}
+		if run.Status == "running" && run.Kind == "chat" && run.UserMessageID > 0 {
+			var schema string
+			err := r.db.QueryRowContext(ctx, `
+				SELECT m.schema_version FROM messages m
+				JOIN sessions s ON s.id=m.session_id
+				WHERE m.id=$1 AND m.session_id=$2 AND s.user_id=$3
+				  AND m.deleted_at IS NULL AND s.deleted_at IS NULL
+				  AND NOT EXISTS (
+				    SELECT 1 FROM messages output
+				    WHERE output.session_id=$2 AND output.role<>'user'
+				      AND output.message_data->'metadata'->>'run_id'=$4
+				  )
+			`, run.UserMessageID, run.SessionID, run.UserID, run.RunID).Scan(&schema)
+			if err != nil && err != sql.ErrNoRows {
+				return ChatRunRecord{}, false, fmt.Errorf("load failed chat original: %w", err)
+			}
+			if err == nil {
+				data, err := json.Marshal(map[string]interface{}{
+					"role": "assistant", "content": input.PublicErrorMessage,
+					"metadata": map[string]interface{}{
+						"ephemeral_error": true, "error_code": input.PublicErrorCode,
+						"run_id": run.RunID, "run_sequence": 0, "produced_role": "assistant",
+					},
+				})
+				if err != nil {
+					return ChatRunRecord{}, false, err
+				}
+				failure := &model.Message{SessionID: run.SessionID, SchemaVersion: schema, MessageData: data}
+				return NewMessageRepository(r.db).CreateBatchAndTransitionActiveRun(ctx, run.SessionID, run.UserID, run.RunID, []*model.Message{failure}, input)
+			}
+		}
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ChatRunRecord{}, false, fmt.Errorf("begin chat run transition: %w", err)

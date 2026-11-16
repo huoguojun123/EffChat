@@ -121,7 +121,7 @@ func (r *OCRRecoveryRunner) loop(ctx context.Context) {
 func (r *OCRRecoveryRunner) recoverOnce(ctx context.Context) {
 	now := time.Now()
 	if _, err := r.fileRepo.FailStaleOCRSubmissions(now); err != nil {
-		log.Printf("[file_ocr] stale_submission_reconcile_failed err=%v", err)
+		log.Printf("[file_ocr] stale_submission_reconcile_failed error_type=%T", err)
 	}
 	if r.channelService == nil || r.extractorClient == nil || !r.extractorClient.Enabled() {
 		return
@@ -132,13 +132,13 @@ func (r *OCRRecoveryRunner) recoverOnce(ctx context.Context) {
 	}
 	policy, policyErr := resolveAttachmentProcessingPolicy(ctx, r.configRepo)
 	if policyErr != nil {
-		log.Printf("[file_ocr] attachment_policy_unavailable err=%v", policyErr)
+		log.Printf("[file_ocr] attachment_policy_unavailable error_type=%T", policyErr)
 	} else if policy.Degraded {
 		log.Printf("[file_ocr] attachment policy degraded; using last-known-good controls")
 	}
 	files, err := r.fileRepo.ClaimRecoverableOCRTasks("mineru", now, r.taskLease(policy), cfg.MaxConcurrency)
 	if err != nil {
-		log.Printf("[file_ocr] recovery_claim_failed err=%v", err)
+		log.Printf("[file_ocr] recovery_claim_failed error_type=%T", err)
 		return
 	}
 	for _, file := range files {
@@ -184,7 +184,7 @@ func (r *OCRRecoveryRunner) process(ctx context.Context, cfg service.MinerUOCRCo
 			// pending and back off instead of inspecting or submitting content;
 			// a later loop automatically resumes after policy recovery/re-enable.
 			if err := r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrPolicyRetryDelay)); err != nil && !errors.Is(err, repository.ErrOCRLeaseLost) {
-				log.Printf("[file_ocr] policy_block_release_failed file_id=%d err=%v", file.ID, err)
+				log.Printf("[file_ocr] policy_block_release_failed file_id=%d error_type=%T", file.ID, err)
 			}
 			return
 		}
@@ -200,7 +200,7 @@ func (r *OCRRecoveryRunner) process(ctx context.Context, cfg service.MinerUOCRCo
 func (r *OCRRecoveryRunner) submit(ctx context.Context, cfg service.MinerUOCRConfig, policy attachmentProcessingPolicy, file *model.File) {
 	attempts, err := r.fileRepo.RecordOCRAttempt(file.ID, file.UserID, file.OCRLeaseGeneration)
 	if err != nil {
-		log.Printf("[file_ocr] attempt_record_failed file_id=%d err=%v", file.ID, err)
+		log.Printf("[file_ocr] attempt_record_failed file_id=%d error_type=%T", file.ID, err)
 		return
 	}
 	sourcePath, err := filepolicy.ExistingPath(valueOrEmpty(file.OCRSourcePath))
@@ -244,7 +244,7 @@ func (r *OCRRecoveryRunner) submit(ctx context.Context, cfg service.MinerUOCRCon
 			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_quota_exceeded", "OCR 配额已用完，请稍后再试")
 			return
 		}
-		log.Printf("[file_ocr] submission_reservation_failed file_id=%d err=%v", file.ID, err)
+		log.Printf("[file_ocr] submission_reservation_failed file_id=%d error_type=%T", file.ID, err)
 		return
 	}
 	if !reserved {
@@ -271,7 +271,7 @@ func (r *OCRRecoveryRunner) submit(ctx context.Context, cfg service.MinerUOCRCon
 		if errors.Is(err, repository.ErrOCRLeaseLost) {
 			return
 		}
-		log.Printf("[file_ocr] submit_state_failed file_id=%d err=%v", file.ID, err)
+		log.Printf("[file_ocr] submit_state_failed file_id=%d error_type=%T", file.ID, err)
 		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_submission_state_unknown", "OCR 任务已提交但本地确认失败，请确认服务恢复后手动重试")
 		return
 	}
@@ -288,12 +288,12 @@ func (r *OCRRecoveryRunner) poll(ctx context.Context, cfg service.MinerUOCRConfi
 		if isTransientOCRPollError(err) {
 			attempts, attemptErr := r.fileRepo.RecordOCRAttempt(file.ID, file.UserID, file.OCRLeaseGeneration)
 			if attemptErr != nil {
-				log.Printf("[file_ocr] poll_attempt_record_failed file_id=%d err=%v", file.ID, attemptErr)
+				log.Printf("[file_ocr] poll_attempt_record_failed file_id=%d error_type=%T", file.ID, attemptErr)
 				return
 			}
 			if attempts >= ocrMaxAttempts {
 				_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_retry_exhausted", "OCR 服务多次重试后仍未成功，请联系管理员或删除文件后重新上传")
-				log.Printf("[file_ocr] poll_retry_exhausted file_id=%d attempts=%d cause=%v", file.ID, attempts, err)
+				log.Printf("[file_ocr] poll_retry_exhausted file_id=%d attempts=%d error_type=%T", file.ID, attempts, err)
 				return
 			}
 			_ = r.fileRepo.UpdateOCRRunning(file.ID, file.UserID, file.OCRLeaseGeneration, file.OCRProgressPages)
@@ -363,16 +363,16 @@ func (r *OCRRecoveryRunner) complete(ctx context.Context, file *model.File, resu
 		if promotionErr != nil {
 			_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_write_failed", "OCR 结果保存失败，请重试")
 		}
-		log.Printf("[file_ocr] complete_state_failed file_id=%d err=%v", file.ID, err)
+		log.Printf("[file_ocr] complete_state_failed file_id=%d error_type=%T", file.ID, err)
 		return
 	}
 	if sourcePath := valueOrEmpty(file.OCRSourcePath); sourcePath != "" {
 		if err := removeManagedFilePaths("", nil, file.OCRSourcePath); err != nil {
-			log.Printf("[file_ocr] source_cleanup_failed file_id=%d err=%v", file.ID, err)
+			log.Printf("[file_ocr] source_cleanup_failed file_id=%d error_type=%T", file.ID, err)
 			return
 		}
 		if err := r.fileRepo.ClearOCRSourcePathClaim(file.ID, file.UserID, file.OCRLeaseGeneration, sourcePath); err != nil && !errors.Is(err, repository.ErrOCRLeaseLost) {
-			log.Printf("[file_ocr] source_state_cleanup_failed file_id=%d err=%v", file.ID, err)
+			log.Printf("[file_ocr] source_state_cleanup_failed file_id=%d error_type=%T", file.ID, err)
 		}
 	}
 }
@@ -380,14 +380,14 @@ func (r *OCRRecoveryRunner) complete(ctx context.Context, file *model.File, resu
 func (r *OCRRecoveryRunner) scheduleOCRRetry(file *model.File, attempts int, stage string, err error) {
 	if attempts >= ocrMaxAttempts {
 		_ = r.fileRepo.FailOCRClaim(file.ID, file.UserID, file.OCRLeaseGeneration, "ocr_retry_exhausted", "OCR 服务多次重试后仍未成功，请联系管理员或删除文件后重新上传")
-		log.Printf("[file_ocr] retry_exhausted file_id=%d stage=%s attempts=%d cause=%v", file.ID, stage, attempts, err)
+		log.Printf("[file_ocr] retry_exhausted file_id=%d stage=%s attempts=%d error_type=%T", file.ID, stage, attempts, err)
 		return
 	}
 	if releaseErr := r.fileRepo.ReleaseOCRLease(file.ID, file.UserID, file.OCRLeaseGeneration, time.Now().Add(ocrRetryDelayFor(attempts))); releaseErr != nil {
-		log.Printf("[file_ocr] retry_schedule_failed file_id=%d stage=%s err=%v", file.ID, stage, releaseErr)
+		log.Printf("[file_ocr] retry_schedule_failed file_id=%d stage=%s error_type=%T", file.ID, stage, releaseErr)
 		return
 	}
-	log.Printf("[file_ocr] retry_scheduled file_id=%d stage=%s attempts=%d cause=%v", file.ID, stage, attempts, err)
+	log.Printf("[file_ocr] retry_scheduled file_id=%d stage=%s attempts=%d error_type=%T", file.ID, stage, attempts, err)
 }
 
 func ocrSidecarTempPath(finalPath string, generation int64) string {

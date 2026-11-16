@@ -209,6 +209,7 @@ Google native 的已核验 level-thinking 契约包含精确 `gemini-4-argon` �
 - 文件元数据在 `files` 表，解析文本保存在受管理的数据目录。
 - 单文件上传采用一个部署级可兑现上限：`PY_EXTRACTOR_MAX_UPLOAD_BYTES` 同时约束 web proxy、backend 和本地 extractor，Nginx 只额外预留 multipart framing。管理员的 `file_upload_max_size_mb` 是该硬顶以内的产品策略；历史过大值运行时收紧但不自动改写。MinerU 的 200 MB/200 页是其异步 OCR 上游约束，不扩大 EffChat 的上传承诺。
 - 受管附件是私有用户内容：`storage/attachments` 及其用户/月目录使用 `0700`，图片原件、解析文本和 OCR staging 文件使用 `0600`。backend 启动入口保留所有受管 storage 的既有 owner 归一化，但只递归收紧 attachments 的 mode，不改变 avatars、fonts 或 skills 的模式语义；API 会话/用户鉴权仍是读取边界，文件 mode 是宿主机防御纵深。
+- 文件上传、读取、清理、OCR recovery 和 Python 提取器日志不保存原始文件名、存储路径、签名 URL、凭据或上游错误正文；只保留稳定操作码、错误类型、受控 parser 标签、资源 ID、计数、状态和耗时。文件专用错误出口复用公共 request-ID 响应协议，但在进入日志前丢弃原始错误文本；正常提取与 OCR 请求仍使用原始业务名称，API 契约不变。Python parser 失败不打印包含异常参数的 traceback。
 - PDF、DOCX、XLSX 与 CSV 的表格共用一个 GFM serializer。cell 先转义用户 HTML，
   再按顺序保留反斜杠、转义 pipe，并把真实 CR/LF/CRLF 编码为安全的 `&#10;`；
   remark-gfm 因而维持原行列，当前 `remark-breaks` 将解码后的换行渲染为 `<br>`。

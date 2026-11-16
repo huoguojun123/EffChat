@@ -17,5 +17,5 @@ func writeFileLookupError(c *gin.Context, err error) {
 		writePublicError(c, http.StatusNotFound, "file_not_found", "file not found", false)
 		return
 	}
-	writeServerError(c, http.StatusInternalServerError, "file_load_failed", "failed to load file", err)
+	writeFileServerError(c, http.StatusInternalServerError, "file_load_failed", "failed to load file", err)
 }

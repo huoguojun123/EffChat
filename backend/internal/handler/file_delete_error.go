@@ -15,6 +15,6 @@ func writeFileDeletionError(c *gin.Context, err error) {
 	case errors.Is(err, repository.ErrAttachmentUnavailable):
 		writePublicError(c, http.StatusConflict, "file_unavailable", "file is unavailable", false)
 	default:
-		writeServerError(c, http.StatusInternalServerError, "file_delete_failed", "failed to delete file", err)
+		writeFileServerError(c, http.StatusInternalServerError, "file_delete_failed", "failed to delete file", err)
 	}
 }
